@@ -1,0 +1,10 @@
+{
+  "extends": "@transportadoras/config-typescript/react-native.json",
+  "compilerOptions": {
+    "baseUrl": "./",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "App.tsx"]
+}

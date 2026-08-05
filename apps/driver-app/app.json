@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Transportadoras Driver App",
+    "slug": "transportadoras-driver-app",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.transportadoras.driverapp"
+    },
+    "android": {
+      "package": "com.transportadoras.driverapp"
+    }
+  }
+}

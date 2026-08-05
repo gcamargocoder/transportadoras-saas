@@ -1,0 +1,34 @@
+# dependências
+node_modules
+.pnpm-store
+
+# builds
+dist
+build
+.next
+.turbo
+.expo
+.expo-shared
+
+# ambiente
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor / SO
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+*.iml
+
+# testes / coverage
+coverage
+
+# prisma
+packages/database/prisma/migrations/dev.db
