@@ -1,0 +1,1008 @@
+// ============================================================================
+// Transportadoras SaaS — Modelagem fisica do banco de dados
+// ============================================================================
+// Este arquivo contem APENAS a modelagem de dados (schema Prisma).
+// Nenhuma logica de negocio, API ou validacao de aplicacao esta implementada
+// aqui -- isso pertence a camada de servico (apps/api), nao ao schema.
+//
+// Convencoes adotadas:
+// - snake_case no banco (via @@map/@map), camelCase no client Prisma
+// - toda tabela operacional carrega tenant_id para isolamento multi-tenant
+//   (reforcado por Row-Level Security no Postgres, fora do escopo do Prisma)
+// - TollPlaza, TollRate e TagProvider sao dados de referencia GLOBAIS
+//   (nao carregam tenant_id): sao compartilhados entre todas as transportadoras
+// - Document e Attachment sao polimorficos por design (owner_type/entity_name
+//   + id) para nao exigir nova tabela a cada novo tipo de arquivo
+// - Colunas geoespaciais (geometry/geography) usam Unsupported(), porque o
+//   Prisma nao tem tipo nativo para PostGIS -- a extensao ja esta habilitada
+//   no datasource abaixo
+// ============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  DISPATCHER
+
+  @@map("user_role")
+}
+
+enum FleetType {
+  OWN
+  AGGREGATED
+  OUTSOURCED
+
+  @@map("fleet_type")
+}
+
+enum TrailerType {
+  SIMPLE
+  BITREM
+  RODOTREM
+  VANDERLEIA
+  OTHER
+
+  @@map("trailer_type")
+}
+
+enum TripStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+
+  @@map("trip_status")
+}
+
+enum RouteVersionReason {
+  INITIAL
+  DEVIATION
+  ACCIDENT
+  ROADWORK
+  INTERDICTION
+  DESTINATION_CHANGE
+
+  @@map("route_version_reason")
+}
+
+enum RouteEventType {
+  DEVIATION
+  ACCIDENT
+  ROADWORK
+  INTERDICTION
+  DESTINATION_CHANGE
+
+  @@map("route_event_type")
+}
+
+enum AlertType {
+  ROUTE_DEVIATION
+  TOLL_DISCREPANCY
+  DELAY
+  ROUTE_EVENT
+  DOCUMENT_EXPIRING
+  OTHER
+
+  @@map("alert_type")
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+
+  @@map("alert_severity")
+}
+
+enum NotificationChannel {
+  PUSH
+  EMAIL
+  WHATSAPP
+  SMS
+
+  @@map("notification_channel")
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+
+  @@map("notification_status")
+}
+
+enum TollTransactionSource {
+  INTEGRATION
+  MANUAL
+
+  @@map("toll_transaction_source")
+}
+
+enum TollAuditStatus {
+  OK
+  DISCREPANCY
+  PENDING
+
+  @@map("toll_audit_status")
+}
+
+enum ExpenseCategory {
+  TOLL
+  FUEL
+  MAINTENANCE
+  MEALS
+  PARKING
+  LODGING
+  PER_DIEM
+  OTHER
+
+  @@map("expense_category")
+}
+
+enum LocationType {
+  FACTORY
+  DISTRIBUTION_CENTER
+  PORT
+  TERMINAL
+  CUSTOMER_SITE
+  BRANCH
+  OTHER
+
+  @@map("location_type")
+}
+
+enum DocumentType {
+  CRLV
+  ANTT
+  CNH
+  LICENSING
+  INSURANCE
+  OTHER
+
+  @@map("document_type")
+}
+
+enum DocumentOwnerType {
+  VEHICLE
+  TRAILER
+  DRIVER
+  TENANT
+
+  @@map("document_owner_type")
+}
+
+enum AttachmentType {
+  PHOTO_VEHICLE
+  PHOTO_CARGO
+  PHOTO_INVOICE
+  PHOTO_TOLL
+  RECEIPT
+  OTHER
+
+  @@map("attachment_type")
+}
+
+enum ExternalSystem {
+  TMS
+  ERP
+  TELEMETRY_PROVIDER
+  TOLL_OPERATOR
+
+  @@map("external_system")
+}
+
+// ============================================================================
+// PLATAFORMA — tenant, usuarios, configuracoes, auditoria geral
+// ============================================================================
+
+/// Transportadora — raiz do isolamento multi-tenant. Toda tabela operacional
+/// referencia Tenant direta ou indiretamente.
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  document  String   @unique @map("document") @db.VarChar(20) // CNPJ
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  settings                TenantSettings?
+  users                   UserAccount[]
+  fleets                  Fleet[]
+  vehicles                Vehicle[]
+  trailers                Trailer[]
+  drivers                 Driver[]
+  customers               Customer[]
+  locations               Location[]
+  trips                   Trip[]
+  vehicleTags             VehicleTag[]
+  documents               Document[]
+  attachments             Attachment[]
+  externalReferences      ExternalReference[]
+  auditLogs               AuditLog[]
+  tripCompositions        TripComposition[]
+  tripCompositionTrailers TripCompositionTrailer[]
+  axleConfigurations      AxleConfiguration[]
+  routeVersions           RouteVersion[]
+  routeEvents             RouteEvent[]
+  trackingPoints          TrackingPoint[]
+  alerts                  Alert[]
+  notifications           Notification[]
+  telemetry               Telemetry[]
+  tripExpenses            TripExpense[]
+  tripMetrics             TripMetrics[]
+  driverShifts            DriverShift[]
+  tollTransactions        TollTransaction[]
+  tollAudits              TollAudit[]
+
+  @@map("tenants")
+}
+
+/// Configuracoes operacionais da transportadora. 1:1 com Tenant, separado
+/// para nao poluir a tabela principal com colunas de configuracao.
+model TenantSettings {
+  id                     String   @id @default(uuid()) @db.Uuid
+  tenantId               String   @unique @map("tenant_id") @db.Uuid
+  maxDeviationMeters     Int      @default(500) @map("max_deviation_meters")
+  gpsPingIntervalSeconds Int      @default(30) @map("gps_ping_interval_seconds")
+  alertDelayThresholdMin Int      @default(15) @map("alert_delay_threshold_min")
+  timezone               String   @default("America/Sao_Paulo")
+  currency               String   @default("BRL") @db.VarChar(3)
+  preferences            Json?    @default("{}")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_settings")
+}
+
+/// Conta de usuario da plataforma (admin, operador/despachante). Motoristas
+/// podem opcionalmente ter uma UserAccount vinculada para login no app --
+/// ver Driver.userAccountId.
+model UserAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  name         String
+  email        String
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(OPERATOR)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driverProfile      Driver?
+  auditLogs          AuditLog[]
+  acknowledgedAlerts Alert[]        @relation("AlertAcknowledgedBy")
+  notifications      Notification[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("user_accounts")
+}
+
+/// Trilha de auditoria geral da plataforma (nao apenas pedagio). Registrada
+/// para qualquer alteracao sensivel em qualquer entidade.
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  userId        String?  @map("user_id") @db.Uuid
+  action        String // ex: "trip.status_changed", "toll_rate.updated"
+  entityName    String   @map("entity_name")
+  entityId      String   @map("entity_id") @db.Uuid
+  previousValue Json?    @map("previous_value")
+  newValue      Json?    @map("new_value")
+  ipAddress     String?  @map("ip_address") @db.VarChar(45)
+  deviceInfo    String?  @map("device_info")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   UserAccount? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, entityName, entityId])
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// FROTA — frota, veiculos, implementos, tags de pedagio
+// ============================================================================
+
+/// Agrupamento organizacional de veiculos (ex: Matriz, Filial SP, Frota
+/// propria, Frota agregada). Opcional em Vehicle.
+model Fleet {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  name       String
+  type       FleetType @default(OWN)
+  locationId String?   @map("location_id") @db.Uuid // base/filial, opcional
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  vehicles Vehicle[]
+
+  @@index([tenantId])
+  @@map("fleets")
+}
+
+/// Unidade tratora (cavalo mecanico). NAO carrega mais eixos/categoria fixos
+/// -- isso e derivado de AxleConfiguration por composicao de viagem, porque
+/// o mesmo cavalo pode puxar implementos diferentes em viagens diferentes.
+model Vehicle {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  fleetId   String?  @map("fleet_id") @db.Uuid
+  plate     String   @db.VarChar(10)
+  model     String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleet            Fleet?            @relation(fields: [fleetId], references: [id], onDelete: SetNull)
+  tripCompositions TripComposition[]
+  tags             VehicleTag[]
+  telemetry        Telemetry[]
+
+  @@unique([tenantId, plate])
+  @@index([tenantId])
+  @@map("vehicles")
+}
+
+/// Implemento (carreta simples, bitrem, rodotrem, vanderleia). Combinado ao
+/// Vehicle via TripComposition/TripCompositionTrailer em cada viagem.
+model Trailer {
+  id        String      @id @default(uuid()) @db.Uuid
+  tenantId  String      @map("tenant_id") @db.Uuid
+  plate     String      @db.VarChar(10)
+  type      TrailerType @default(SIMPLE)
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tripCompositionTrailers TripCompositionTrailer[]
+
+  @@unique([tenantId, plate])
+  @@index([tenantId])
+  @@map("trailers")
+}
+
+/// Operadora de tag de pedagio (Sem Parar, ConectCar, Veloe, Move Mais).
+/// Dado de referencia GLOBAL -- nao pertence a um tenant especifico.
+model TagProvider {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  vehicleTags VehicleTag[]
+
+  @@map("tag_providers")
+}
+
+/// Vinculo entre o veiculo do tenant e sua tag de pedagio, preparando a
+/// importacao futura de extratos por operadora.
+model VehicleTag {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  vehicleId     String   @map("vehicle_id") @db.Uuid
+  tagProviderId String   @map("tag_provider_id") @db.Uuid
+  tagNumber     String   @map("tag_number")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle     Vehicle     @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tagProvider TagProvider @relation(fields: [tagProviderId], references: [id], onDelete: Restrict)
+
+  @@unique([tagProviderId, tagNumber])
+  @@index([tenantId])
+  @@index([vehicleId])
+  @@map("vehicle_tags")
+}
+
+// ============================================================================
+// MOTORISTAS — perfil, jornada
+// ============================================================================
+
+/// Perfil operacional do motorista. userAccountId e opcional -- so existe
+/// quando o motorista tem login no app (Driver App).
+model Driver {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  userAccountId String?  @unique @map("user_account_id") @db.Uuid
+  name          String
+  cnhNumber     String   @map("cnh_number") @db.VarChar(20)
+  cnhCategory   String   @map("cnh_category") @db.VarChar(5)
+  phone         String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userAccount UserAccount?  @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
+  trips       Trip[]
+  shifts      DriverShift[]
+
+  @@unique([tenantId, cnhNumber])
+  @@index([tenantId])
+  @@map("drivers")
+}
+
+/// Jornada de trabalho do motorista. trip_id e opcional -- a jornada pode
+/// existir fora de uma viagem especifica (parado, manutencao, descanso).
+model DriverShift {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  driverId  String    @map("driver_id") @db.Uuid
+  tripId    String?   @map("trip_id") @db.Uuid
+  startedAt DateTime  @map("started_at")
+  endedAt   DateTime? @map("ended_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driver Driver       @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  trip   Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  breaks ShiftBreak[]
+
+  @@index([tenantId])
+  @@index([driverId])
+  @@index([tripId])
+  @@map("driver_shifts")
+}
+
+/// Pausa dentro de uma jornada de motorista.
+model ShiftBreak {
+  id            String    @id @default(uuid()) @db.Uuid
+  driverShiftId String    @map("driver_shift_id") @db.Uuid
+  startedAt     DateTime  @map("started_at")
+  endedAt       DateTime? @map("ended_at")
+  reason        String?
+
+  driverShift DriverShift @relation(fields: [driverShiftId], references: [id], onDelete: Cascade)
+
+  @@index([driverShiftId])
+  @@map("shift_breaks")
+}
+
+// ============================================================================
+// CLIENTES E LOCAIS
+// ============================================================================
+
+/// Embarcador -- dono da carga transportada.
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  document  String?  @db.VarChar(20) // CNPJ/CPF
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trips  Trip[]
+
+  @@index([tenantId])
+  @@map("customers")
+}
+
+/// Local de carga/descarga -- fabrica, CD, porto, terminal, cliente, filial.
+/// Reutilizavel entre viagens (a mesma fabrica e cadastrada uma vez).
+model Location {
+  id        String                                @id @default(uuid()) @db.Uuid
+  tenantId  String                                @map("tenant_id") @db.Uuid
+  name      String
+  type      LocationType                          @default(OTHER)
+  address   String?
+  /// Ponto geografico (PostGIS). Tipo nao suportado nativamente pelo Prisma.
+  geoPoint  Unsupported("geometry(Point, 4326)")? @map("geo_point")
+  createdAt DateTime                              @default(now()) @map("created_at")
+  updatedAt DateTime                              @updatedAt @map("updated_at")
+
+  tenant             Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleets             Fleet[]
+  tripsAsOrigin      Trip[]  @relation("TripOrigin")
+  tripsAsDestination Trip[]  @relation("TripDestination")
+
+  @@index([tenantId])
+  @@map("locations")
+}
+
+// ============================================================================
+// COMPOSICAO DE VEICULO — cavalo + implementos + eixos
+// ============================================================================
+
+/// Composicao efetivamente usada em uma viagem: qual cavalo mecanico.
+/// 1:1 com Trip.
+model TripComposition {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  tripId    String   @unique @map("trip_id") @db.Uuid
+  vehicleId String   @map("vehicle_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant            Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip              Trip                     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicle           Vehicle                  @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  trailers          TripCompositionTrailer[]
+  axleConfiguration AxleConfiguration?
+
+  @@index([tenantId])
+  @@index([vehicleId])
+  @@map("trip_compositions")
+}
+
+/// Implemento(s) daquela composicao, com posicao (1a carreta, 2a carreta --
+/// cobre bitrem/rodotrem com multiplos implementos).
+model TripCompositionTrailer {
+  id                String @id @default(uuid()) @db.Uuid
+  tenantId          String @map("tenant_id") @db.Uuid
+  tripCompositionId String @map("trip_composition_id") @db.Uuid
+  trailerId         String @map("trailer_id") @db.Uuid
+  positionOrder     Int    @map("position_order")
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tripComposition TripComposition @relation(fields: [tripCompositionId], references: [id], onDelete: Cascade)
+  trailer         Trailer         @relation(fields: [trailerId], references: [id], onDelete: Restrict)
+
+  @@unique([tripCompositionId, positionOrder])
+  @@index([tenantId])
+  @@index([trailerId])
+  @@map("trip_composition_trailers")
+}
+
+/// Snapshot da configuracao de eixos para a composicao daquela viagem --
+/// eixo levantado normalmente NAO e cobrado, entao essa configuracao
+/// determina a categoria de cobranca em TollRate/TollPrediction/TollTransaction.
+model AxleConfiguration {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  tripCompositionId String   @unique @map("trip_composition_id") @db.Uuid
+  totalAxles        Int      @map("total_axles")
+  raisedAxles       Int      @default(0) @map("raised_axles")
+  loweredAxles      Int      @default(0) @map("lowered_axles")
+  suspendedAxles    Int      @default(0) @map("suspended_axles")
+  steeringAxles     Int      @default(0) @map("steering_axles")
+  tractionAxles     Int      @default(0) @map("traction_axles")
+  /// Categoria calculada (padrao usado pelas concessionarias, ex: "2 eixos"),
+  /// derivada dos campos acima -- usada para casar com TollRate.axleCategory.
+  billableCategory  String   @map("billable_category")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tripComposition TripComposition @relation(fields: [tripCompositionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("axle_configurations")
+}
+
+// ============================================================================
+// VIAGEM — ciclo de vida, rota, eventos, rastreamento, alertas
+// ============================================================================
+
+/// Viagem. Estados: PLANNED -> IN_PROGRESS -> COMPLETED | CANCELLED.
+/// Replanejamento e um evento dentro de IN_PROGRESS, nao um status proprio.
+model Trip {
+  id                    String     @id @default(uuid()) @db.Uuid
+  tenantId              String     @map("tenant_id") @db.Uuid
+  customerId            String?    @map("customer_id") @db.Uuid
+  driverId              String?    @map("driver_id") @db.Uuid
+  originLocationId      String     @map("origin_location_id") @db.Uuid
+  destinationLocationId String     @map("destination_location_id") @db.Uuid
+  status                TripStatus @default(PLANNED)
+  plannedDeparture      DateTime?  @map("planned_departure")
+  actualDeparture       DateTime?  @map("actual_departure")
+  actualArrival         DateTime?  @map("actual_arrival")
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
+
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  driver      Driver?   @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  origin      Location  @relation("TripOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
+  destination Location  @relation("TripDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+
+  composition      TripComposition?
+  routeVersions    RouteVersion[]
+  routeEvents      RouteEvent[]
+  trackingPoints   TrackingPoint[]
+  alerts           Alert[]
+  tollTransactions TollTransaction[]
+  expenses         TripExpense[]
+  metrics          TripMetrics?
+  driverShifts     DriverShift[]
+  telemetry        Telemetry[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("trips")
+}
+
+/// Versao imutavel da rota de uma viagem. Cada replanejamento cria uma nova
+/// versao -- nunca se edita uma versao existente.
+model RouteVersion {
+  id            String                                     @id @default(uuid()) @db.Uuid
+  tenantId      String                                     @map("tenant_id") @db.Uuid
+  tripId        String                                     @map("trip_id") @db.Uuid
+  versionNumber Int                                        @map("version_number")
+  reason        RouteVersionReason                         @default(INITIAL)
+  /// Geometria da rota (PostGIS linestring). Nao suportado nativamente.
+  geometry      Unsupported("geometry(LineString, 4326)")?
+  createdAt     DateTime                                   @default(now()) @map("created_at")
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip            Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tollPredictions TollPrediction[]
+  triggeringEvent RouteEvent?      @relation("RouteEventResult")
+
+  @@unique([tripId, versionNumber])
+  @@index([tenantId])
+  @@map("route_versions")
+}
+
+/// Evento que motiva alerta e, quando exige desvio de fato, uma nova
+/// RouteVersion. Nem todo evento gera replanejamento.
+model RouteEvent {
+  id                      String         @id @default(uuid()) @db.Uuid
+  tenantId                String         @map("tenant_id") @db.Uuid
+  tripId                  String         @map("trip_id") @db.Uuid
+  type                    RouteEventType
+  detectedAt              DateTime       @default(now()) @map("detected_at")
+  resolvedAt              DateTime?      @map("resolved_at")
+  resultingRouteVersionId String?        @unique @map("resulting_route_version_id") @db.Uuid
+
+  tenant                Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip                  Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  resultingRouteVersion RouteVersion? @relation("RouteEventResult", fields: [resultingRouteVersionId], references: [id], onDelete: SetNull)
+  alerts                Alert[]
+
+  @@index([tenantId])
+  @@index([tripId])
+  @@map("route_events")
+}
+
+/// Ponto de GPS -- alto volume, granularidade de segundos. Fonte tanto do
+/// rastreamento ao vivo (via WebSocket) quanto do replay de viagem.
+/// Recomenda-se particionamento por tempo (ex: mensal) em producao.
+model TrackingPoint {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  tripId     String   @map("trip_id") @db.Uuid
+  latitude   Decimal  @db.Decimal(9, 6)
+  longitude  Decimal  @db.Decimal(9, 6)
+  speedKmh   Decimal? @map("speed_kmh") @db.Decimal(5, 2)
+  headingDeg Decimal? @map("heading_deg") @db.Decimal(5, 2)
+  recordedAt DateTime @map("recorded_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tripId, recordedAt])
+  @@map("tracking_points")
+}
+
+/// Evento de sistema (desvio, discrepancia de pedagio, atraso, documento
+/// vencendo). Representa O QUE aconteceu -- a entrega ao usuario e Notification.
+model Alert {
+  id               String        @id @default(uuid()) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  tripId           String?       @map("trip_id") @db.Uuid
+  routeEventId     String?       @map("route_event_id") @db.Uuid
+  type             AlertType
+  severity         AlertSeverity @default(MEDIUM)
+  message          String
+  acknowledgedAt   DateTime?     @map("acknowledged_at")
+  acknowledgedById String?       @map("acknowledged_by_id") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip           Trip?          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  routeEvent     RouteEvent?    @relation(fields: [routeEventId], references: [id], onDelete: SetNull)
+  acknowledgedBy UserAccount?   @relation("AlertAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  notifications  Notification[]
+
+  @@index([tenantId])
+  @@index([tripId])
+  @@map("alerts")
+}
+
+/// Entrega de um Alert a um usuario por um canal especifico. Um Alert pode
+/// gerar varias Notifications (push + email, por exemplo).
+model Notification {
+  id          String              @id @default(uuid()) @db.Uuid
+  tenantId    String              @map("tenant_id") @db.Uuid
+  alertId     String              @map("alert_id") @db.Uuid
+  recipientId String              @map("recipient_id") @db.Uuid
+  channel     NotificationChannel
+  status      NotificationStatus  @default(PENDING)
+  sentAt      DateTime?           @map("sent_at")
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  alert     Alert       @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  recipient UserAccount @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([alertId])
+  @@index([recipientId, status])
+  @@map("notifications")
+}
+
+/// Dados de telemetria do veiculo (ignicao, bateria, combustivel,
+/// temperatura, RPM, odometro, velocidade CAN) -- separado de TrackingPoint
+/// porque e mais pesado e mais esparso que a posicao GPS.
+model Telemetry {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  tripId       String?  @map("trip_id") @db.Uuid
+  vehicleId    String   @map("vehicle_id") @db.Uuid
+  ignitionOn   Boolean? @map("ignition_on")
+  batteryLevel Decimal? @map("battery_level") @db.Decimal(5, 2)
+  fuelLevel    Decimal? @map("fuel_level") @db.Decimal(5, 2)
+  temperatureC Decimal? @map("temperature_c") @db.Decimal(5, 2)
+  rpm          Int?
+  odometerKm   Decimal? @map("odometer_km") @db.Decimal(10, 2)
+  canSpeedKmh  Decimal? @map("can_speed_kmh") @db.Decimal(5, 2)
+  recordedAt   DateTime @map("recorded_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip    Trip?   @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([vehicleId, recordedAt])
+  @@index([tripId])
+  @@map("telemetry")
+}
+
+// ============================================================================
+// PEDAGIO — praca, tarifa, previsao, cobranca real, auditoria
+// ============================================================================
+
+/// Praca de pedagio. Dado de referencia GLOBAL -- nao pertence a um tenant.
+model TollPlaza {
+  id        String                                @id @default(uuid()) @db.Uuid
+  name      String
+  operator  String // concessionaria
+  highway   String?
+  /// Ponto geografico (PostGIS).
+  geoPoint  Unsupported("geometry(Point, 4326)")? @map("geo_point")
+  createdAt DateTime                              @default(now()) @map("created_at")
+
+  rates        TollRate[]
+  predictions  TollPrediction[]
+  transactions TollTransaction[]
+
+  @@map("toll_plazas")
+}
+
+/// Tarifa por praca e categoria de eixos, versionada no tempo (effectiveFrom)
+/// -- preserva o valor correto historico mesmo que a tarifa mude depois.
+/// Dado de referencia GLOBAL.
+model TollRate {
+  id            String   @id @default(uuid()) @db.Uuid
+  tollPlazaId   String   @map("toll_plaza_id") @db.Uuid
+  axleCategory  String   @map("axle_category") // ex: "2 eixos", "9 eixos"
+  price         Decimal  @db.Decimal(10, 2)
+  effectiveFrom DateTime @map("effective_from")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tollPlaza TollPlaza @relation(fields: [tollPlazaId], references: [id], onDelete: Cascade)
+
+  @@unique([tollPlazaId, axleCategory, effectiveFrom])
+  @@index([tollPlazaId])
+  @@map("toll_rates")
+}
+
+/// Custo de pedagio previsto por praca, calculado para uma versao de rota
+/// especifica. Recalculado a cada replanejamento (nova RouteVersion).
+model TollPrediction {
+  id              String   @id @default(uuid()) @db.Uuid
+  routeVersionId  String   @map("route_version_id") @db.Uuid
+  tollPlazaId     String   @map("toll_plaza_id") @db.Uuid
+  predictedAmount Decimal  @map("predicted_amount") @db.Decimal(10, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  routeVersion RouteVersion @relation(fields: [routeVersionId], references: [id], onDelete: Cascade)
+  tollPlaza    TollPlaza    @relation(fields: [tollPlazaId], references: [id], onDelete: Restrict)
+  audits       TollAudit[]
+
+  @@index([routeVersionId])
+  @@index([tollPlazaId])
+  @@map("toll_predictions")
+}
+
+/// Cobranca real ocorrida em uma praca. Vincula-se a Trip e a TollPlaza --
+/// NUNCA diretamente a uma RouteVersion; e a TollAudit quem cruza os dois.
+model TollTransaction {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @map("tenant_id") @db.Uuid
+  tripId        String                @map("trip_id") @db.Uuid
+  tollPlazaId   String                @map("toll_plaza_id") @db.Uuid
+  chargedAmount Decimal               @map("charged_amount") @db.Decimal(10, 2)
+  chargedAt     DateTime              @map("charged_at")
+  source        TollTransactionSource @default(INTEGRATION)
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tollPlaza TollPlaza  @relation(fields: [tollPlazaId], references: [id], onDelete: Restrict)
+  audit     TollAudit?
+
+  @@index([tenantId])
+  @@index([tripId])
+  @@index([tollPlazaId, chargedAt])
+  @@map("toll_transactions")
+}
+
+/// Conciliacao entre valor previsto e valor cobrado. SEMPRE derivada/
+/// calculada -- nunca editada manualmente.
+model TollAudit {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @map("tenant_id") @db.Uuid
+  tollTransactionId String          @unique @map("toll_transaction_id") @db.Uuid
+  tollPredictionId  String?         @map("toll_prediction_id") @db.Uuid
+  discrepancyAmount Decimal?        @map("discrepancy_amount") @db.Decimal(10, 2)
+  status            TollAuditStatus @default(PENDING)
+  calculatedAt      DateTime        @default(now()) @map("calculated_at")
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tollTransaction TollTransaction @relation(fields: [tollTransactionId], references: [id], onDelete: Cascade)
+  tollPrediction  TollPrediction? @relation(fields: [tollPredictionId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@map("toll_audits")
+}
+
+// ============================================================================
+// FINANCEIRO — despesas e comparativo planejado x executado
+// ============================================================================
+
+/// Despesa da viagem por categoria. Categoria TOLL e um espelho agregado
+/// (a fonte de verdade do pedagio e TollTransaction); as demais categorias
+/// sao lancadas diretamente aqui.
+model TripExpense {
+  id            String          @id @default(uuid()) @db.Uuid
+  tenantId      String          @map("tenant_id") @db.Uuid
+  tripId        String          @map("trip_id") @db.Uuid
+  category      ExpenseCategory
+  description   String?
+  plannedAmount Decimal?        @map("planned_amount") @db.Decimal(10, 2)
+  actualAmount  Decimal?        @map("actual_amount") @db.Decimal(10, 2)
+  occurredAt    DateTime?       @map("occurred_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tripId, category])
+  @@map("trip_expenses")
+}
+
+/// Comparativo planejado x executado -- o maior diferencial do sistema.
+/// 1:1 com Trip, concentra as metricas de planejamento e de execucao real
+/// num so lugar para consultas de inteligencia operacional.
+model TripMetrics {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  tripId   String @unique @map("trip_id") @db.Uuid
+
+  plannedDistanceKm  Decimal? @map("planned_distance_km") @db.Decimal(10, 2)
+  plannedDurationMin Int?     @map("planned_duration_min")
+  plannedFuelLiters  Decimal? @map("planned_fuel_liters") @db.Decimal(10, 2)
+  plannedTollAmount  Decimal? @map("planned_toll_amount") @db.Decimal(10, 2)
+  plannedTotalCost   Decimal? @map("planned_total_cost") @db.Decimal(10, 2)
+
+  actualDistanceKm  Decimal? @map("actual_distance_km") @db.Decimal(10, 2)
+  actualDurationMin Int?     @map("actual_duration_min")
+  actualFuelLiters  Decimal? @map("actual_fuel_liters") @db.Decimal(10, 2)
+  actualTollAmount  Decimal? @map("actual_toll_amount") @db.Decimal(10, 2)
+  actualTotalCost   Decimal? @map("actual_total_cost") @db.Decimal(10, 2)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("trip_metrics")
+}
+
+// ============================================================================
+// DOCUMENTOS E ANEXOS — genericos, polimorficos
+// ============================================================================
+
+/// Documento formal (CRLV, ANTT, CNH, licenciamento, seguro). Dono
+/// polimorfico -- pode pertencer a um veiculo, trailer, motorista ou tenant.
+model Document {
+  id        String            @id @default(uuid()) @db.Uuid
+  tenantId  String            @map("tenant_id") @db.Uuid
+  type      DocumentType
+  ownerType DocumentOwnerType @map("owner_type")
+  ownerId   String            @map("owner_id") @db.Uuid
+  number    String?
+  issuedAt  DateTime?         @map("issued_at")
+  expiresAt DateTime?         @map("expires_at")
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  attachments Attachment[]
+
+  @@index([tenantId, ownerType, ownerId])
+  @@index([expiresAt])
+  @@map("documents")
+}
+
+/// Arquivo anexavel a qualquer entidade (foto do caminhao, da carga, da
+/// nota, do pedagio, comprovante). entityName + entityId sao polimorficos,
+/// mesmo padrao do ExternalReference. documentId e opcional -- usado quando
+/// o anexo e o arquivo de um Document.
+model Attachment {
+  id           String         @id @default(uuid()) @db.Uuid
+  tenantId     String         @map("tenant_id") @db.Uuid
+  documentId   String?        @map("document_id") @db.Uuid
+  entityName   String         @map("entity_name") // ex: "Trip", "TollTransaction"
+  entityId     String         @map("entity_id") @db.Uuid
+  type         AttachmentType @default(OTHER)
+  storageKey   String         @map("storage_key")
+  uploadedById String?        @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, entityName, entityId])
+  @@map("attachments")
+}
+
+// ============================================================================
+// INTEGRACOES FUTURAS — mapeamento generico, sem acoplar a nenhum sistema
+// ============================================================================
+
+/// Mapeamento generico entre uma entidade interna e sua referencia num
+/// sistema externo (TMS, ERP, telemetria, concessionaria de pedagio). Evita
+/// criar uma tabela de integracao especifica a cada novo sistema.
+model ExternalReference {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  entityName     String         @map("entity_name")
+  entityId       String         @map("entity_id") @db.Uuid
+  externalSystem ExternalSystem @map("external_system")
+  externalId     String         @map("external_id")
+  lastSyncedAt   DateTime?      @map("last_synced_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([externalSystem, externalId])
+  @@index([tenantId, entityName, entityId])
+  @@map("external_references")
+}
+
+// ============================================================================
+// ROADMAP FUTURO (nao modelado nesta etapa)
+// ============================================================================
+// Motor de simulacao de rotas: dado origem, destino, veiculo e carga,
+// comparar rotas alternativas por custo, tempo, pedagios e combustivel.
+// Depende de RouteVersion, TollPrediction e TripMetrics, ja modelados aqui
+// -- sera implementado como servico de calculo sobre esses dados, nao como
+// novas tabelas. Ver docs/architecture.md.
+// ============================================================================
