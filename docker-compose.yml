@@ -1,0 +1,43 @@
+# Infraestrutura de banco de dados para desenvolvimento local.
+# Sobe apenas o PostgreSQL com a extensao PostGIS habilitada -- suficiente
+# para o Prisma (ver packages/database/prisma/schema.prisma) rodar
+# `migrate dev` na proxima etapa. Nenhum outro servico (Redis, MinIO, etc.)
+# e provisionado aqui de proposito.
+#
+# As credenciais abaixo tem como padrao os mesmos valores de
+# packages/database/.env.example / packages/database/.env. Para
+# sobrescrever sem editar este arquivo, exporte as variaveis no shell ou
+# crie um `.env` na raiz do projeto (POSTGRES_USER, POSTGRES_PASSWORD,
+# POSTGRES_DB, POSTGRES_PORT) -- o Docker Compose carrega esse arquivo
+# automaticamente.
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: transportadoras-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-transportadoras_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - transportadoras_postgres_data:/var/lib/postgresql/data
+    networks:
+      - transportadoras_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-transportadoras_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  transportadoras_dev:
+    name: transportadoras-dev-network
+    driver: bridge
+
+volumes:
+  transportadoras_postgres_data:
+    name: transportadoras-postgres-data-dev
