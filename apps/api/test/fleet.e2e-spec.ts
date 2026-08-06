@@ -72,6 +72,19 @@ describe('Fleet (e2e)', () => {
     return `${letters}${digits}`;
   }
 
+  // brand/model sao obrigatorios (Fase 10) -- helper centraliza o payload
+  // minimo valido para nao repetir esses dois campos em todo teste que so
+  // precisa de "um veiculo qualquer" como pre-requisito.
+  function buildVehiclePayload(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      plate: randomPlate(),
+      brand: 'Volvo',
+      model: 'FH 540',
+      type: 'TRACTOR_UNIT',
+      ...overrides,
+    };
+  }
+
   // ==========================================================================
   // FLEETS
   // ==========================================================================
@@ -168,7 +181,38 @@ describe('Fleet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', `Bearer ${adminAccessToken}`)
-        .send({ plate: randomPlate(), type: 'TRACTOR_UNIT', manufactureYear: 1800 })
+        .send(buildVehiclePayload({ manufactureYear: 1800 }))
+        .expect(400);
+    });
+
+    it('rejeita marca ausente com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehBrandMissing');
+      const payload = buildVehiclePayload();
+      delete (payload as Record<string, unknown>).brand;
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(payload)
+        .expect(400);
+    });
+
+    it('rejeita modelo ausente com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehModelMissing');
+      const payload = buildVehiclePayload();
+      delete (payload as Record<string, unknown>).model;
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(payload)
+        .expect(400);
+    });
+
+    it('rejeita RENAVAM invalido com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehRenavamInvalid');
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(buildVehiclePayload({ renavam: '123' }))
         .expect(400);
     });
 
@@ -179,13 +223,13 @@ describe('Fleet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate: 'ABC1234', type: 'TRUCK' })
+        .send(buildVehiclePayload({ plate: 'ABC1234', type: 'TRUCK' }))
         .expect(201);
 
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate: 'ABC1D23', type: 'TRUCK' })
+        .send(buildVehiclePayload({ plate: 'ABC1D23', type: 'TRUCK' }))
         .expect(201);
     });
 
@@ -225,14 +269,21 @@ describe('Fleet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate, type: 'TRUCK' })
+        .send(buildVehiclePayload({ plate, type: 'TRUCK' }))
         .expect(409);
 
       // Renavam duplicado -> 409.
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate: randomPlate(), renavam: '00123456789', type: 'TRUCK' })
+        .send(buildVehiclePayload({ renavam: '00123456789', type: 'TRUCK' }))
+        .expect(409);
+
+      // Chassi duplicado -> 409.
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ chassisNumber: '9BWZZZ377VT004251', type: 'TRUCK' }))
         .expect(409);
 
       // fleetId de outro tenant -> 404.
@@ -240,7 +291,7 @@ describe('Fleet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate: randomPlate(), fleetId: otherTenant.tenantId, type: 'TRUCK' })
+        .send(buildVehiclePayload({ fleetId: otherTenant.tenantId, type: 'TRUCK' }))
         .expect(404);
 
       const updateRes = await request(app.getHttpServer())
@@ -274,7 +325,7 @@ describe('Fleet (e2e)', () => {
       const createInB = await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', `Bearer ${tenantB.adminAccessToken}`)
-        .send({ plate: randomPlate(), type: 'TRUCK' })
+        .send(buildVehiclePayload({ type: 'TRUCK' }))
         .expect(201);
       const vehicleBId = createInB.body.data.id;
 
@@ -288,6 +339,173 @@ describe('Fleet (e2e)', () => {
         .set('Authorization', `Bearer ${tenantA.adminAccessToken}`)
         .send({ color: 'Sequestrado' })
         .expect(404);
+    });
+
+    it('veiculo inexistente retorna 404 em GET, PATCH e DELETE', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehMissing');
+      const auth = `Bearer ${adminAccessToken}`;
+      const missingId = randomUUID();
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/vehicles/${missingId}`)
+        .set('Authorization', auth)
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${missingId}`)
+        .set('Authorization', auth)
+        .send({ color: 'Azul' })
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/vehicles/${missingId}`)
+        .set('Authorization', auth)
+        .expect(404);
+    });
+
+    it('filtra por placa, marca, modelo, status e frota, com paginacao/ordenacao', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehFilters');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const fleetRes = await request(app.getHttpServer())
+        .post('/api/v1/fleets')
+        .set('Authorization', auth)
+        .send({ name: 'Frota Filtro', type: 'OWN' })
+        .expect(201);
+      const fleetId = fleetRes.body.data.id;
+
+      const alvo = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ brand: 'Scania', model: 'R450', fleetId }))
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ brand: 'Mercedes-Benz', model: 'Actros' }))
+        .expect(201);
+
+      const inactive = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ brand: 'Volkswagen', model: 'Constellation' }))
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${inactive.body.data.id}/status`)
+        .set('Authorization', auth)
+        .send({ isActive: false })
+        .expect(200);
+
+      const byPlate = await request(app.getHttpServer())
+        .get(`/api/v1/vehicles?plate=${alvo.body.data.plate}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byPlate.body.data.items).toHaveLength(1);
+      expect(byPlate.body.data.items[0].id).toBe(alvo.body.data.id);
+
+      const byBrand = await request(app.getHttpServer())
+        .get('/api/v1/vehicles?brand=Scania')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byBrand.body.data.items).toHaveLength(1);
+      expect(byBrand.body.data.items[0].brand).toBe('Scania');
+
+      const byModel = await request(app.getHttpServer())
+        .get('/api/v1/vehicles?model=Actros')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byModel.body.data.items).toHaveLength(1);
+      expect(byModel.body.data.items[0].model).toBe('Actros');
+
+      const byStatus = await request(app.getHttpServer())
+        .get('/api/v1/vehicles?isActive=false')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byStatus.body.data.items).toHaveLength(1);
+      expect(byStatus.body.data.items[0].brand).toBe('Volkswagen');
+
+      const byFleet = await request(app.getHttpServer())
+        .get(`/api/v1/vehicles?fleetId=${fleetId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byFleet.body.data.items).toHaveLength(1);
+      expect(byFleet.body.data.items[0].id).toBe(alvo.body.data.id);
+
+      const paginated = await request(app.getHttpServer())
+        .get('/api/v1/vehicles?isActive=true&page=1&pageSize=1&sortBy=brand&sortOrder=asc')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(paginated.body.data.items).toHaveLength(1);
+      expect(paginated.body.data.meta).toMatchObject({ total: 2, page: 1, pageSize: 1 });
+      expect(paginated.body.data.items[0].brand).toBe('Mercedes-Benz');
+    });
+
+    it('bloqueia exclusao quando ha composicao vinculada a viagem em andamento', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('VehDeleteGuard');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const vehicleRes = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload())
+        .expect(201);
+      const vehicleId = vehicleRes.body.data.id;
+
+      // Composicao sem viagem ainda -- ja e o suficiente para bloquear
+      // (composicao "ativa": ainda nao concluida/cancelada).
+      const compositionRes = await request(app.getHttpServer())
+        .post('/api/v1/trip-compositions')
+        .set('Authorization', auth)
+        .send({ vehicleId, trailers: [] })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', auth)
+        .expect(409);
+
+      // Remove a composicao -- exclusao passa a ser permitida.
+      await request(app.getHttpServer())
+        .delete(`/api/v1/trip-compositions/${compositionRes.body.data.id}`)
+        .set('Authorization', auth)
+        .expect(204);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', auth)
+        .expect(204);
+
+      // Segundo veiculo: bloqueado por viagem IN_PROGRESS vinculada via composicao.
+      const vehicle2Res = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload())
+        .expect(201);
+      const vehicle2Id = vehicle2Res.body.data.id;
+
+      const origin = await prisma.location.create({
+        data: { tenantId, name: 'Origem Frota', type: 'OTHER' },
+      });
+      const destination = await prisma.location.create({
+        data: { tenantId, name: 'Destino Frota', type: 'OTHER' },
+      });
+      const trip = await prisma.trip.create({
+        data: {
+          tenantId,
+          originLocationId: origin.id,
+          destinationLocationId: destination.id,
+          status: 'IN_PROGRESS',
+        },
+      });
+      await prisma.tripComposition.create({
+        data: { tenantId, vehicleId: vehicle2Id, tripId: trip.id },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/vehicles/${vehicle2Id}`)
+        .set('Authorization', auth)
+        .expect(409);
     });
   });
 
@@ -375,7 +593,7 @@ describe('Fleet (e2e)', () => {
       const vehicleRes = await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate: randomPlate(), type: 'TRACTOR_UNIT' })
+        .send(buildVehiclePayload())
         .expect(201);
       const vehicleId = vehicleRes.body.data.id;
 
@@ -441,7 +659,7 @@ describe('Fleet (e2e)', () => {
       const vehicleRes = await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send({ plate: randomPlate(), type: 'TRACTOR_UNIT' })
+        .send(buildVehiclePayload())
         .expect(201);
 
       const trailer1 = await request(app.getHttpServer())

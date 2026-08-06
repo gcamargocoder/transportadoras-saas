@@ -18,7 +18,7 @@ export class FindVehiclesQueryDto extends PaginationQueryDto {
   @MaxLength(100)
   search?: string;
 
-  @ApiPropertyOptional({ format: 'uuid' })
+  @ApiPropertyOptional({ format: 'uuid', description: 'Filtra por frota.' })
   @IsOptional()
   @IsUUID('4', { message: 'fleetId deve ser um UUID valido.' })
   fleetId?: string;
@@ -33,6 +33,24 @@ export class FindVehiclesQueryDto extends PaginationQueryDto {
   @ParseBooleanQuery()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ description: 'Filtra por placa (parcial, com ou sem formatacao).' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  plate?: string;
+
+  @ApiPropertyOptional({ description: 'Filtra por marca (parcial).' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  brand?: string;
+
+  @ApiPropertyOptional({ description: 'Filtra por modelo (parcial).' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  model?: string;
 
   @ApiPropertyOptional({ enum: VehicleSortField, default: VehicleSortField.PLATE })
   @IsOptional()

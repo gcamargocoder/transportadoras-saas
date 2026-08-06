@@ -423,8 +423,8 @@ model Vehicle {
   plate           String      @db.VarChar(10)
   renavam         String?     @db.VarChar(20)
   chassisNumber   String?     @map("chassis_number") @db.VarChar(30)
-  brand           String?
-  model           String?
+  brand           String
+  model           String
   manufactureYear Int?        @map("manufacture_year")
   modelYear       Int?        @map("model_year")
   color           String?

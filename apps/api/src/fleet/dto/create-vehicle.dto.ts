@@ -1,6 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { VehicleType } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
+import { IsRenavam } from '../validators/is-renavam.validator';
 import { IsVehiclePlate } from '../validators/is-vehicle-plate.validator';
 
 const MIN_VEHICLE_YEAR = 1950;
@@ -16,10 +27,9 @@ export class CreateVehicleDto {
   @IsUUID('4', { message: 'fleetId deve ser um UUID valido.' })
   fleetId?: string;
 
-  @ApiPropertyOptional({ example: '00123456789' })
+  @ApiPropertyOptional({ example: '00123456789', description: 'RENAVAM (9 a 11 digitos).' })
   @IsOptional()
-  @IsString()
-  @MaxLength(20)
+  @IsRenavam()
   renavam?: string;
 
   @ApiPropertyOptional({ example: '9BWZZZ377VT004251' })
@@ -28,17 +38,17 @@ export class CreateVehicleDto {
   @MaxLength(30)
   chassisNumber?: string;
 
-  @ApiPropertyOptional({ example: 'Volvo' })
-  @IsOptional()
+  @ApiProperty({ example: 'Volvo' })
   @IsString()
+  @MinLength(2, { message: 'brand deve ter no minimo 2 caracteres.' })
   @MaxLength(50)
-  brand?: string;
+  brand!: string;
 
-  @ApiPropertyOptional({ example: 'FH 540' })
-  @IsOptional()
+  @ApiProperty({ example: 'FH 540' })
   @IsString()
+  @MinLength(1, { message: 'model deve ter no minimo 1 caractere.' })
   @MaxLength(50)
-  model?: string;
+  model!: string;
 
   @ApiPropertyOptional({ example: 2023 })
   @IsOptional()

@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, Vehicle } from '@prisma/client';
+import { Prisma, TripStatus, Vehicle } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
@@ -13,6 +13,7 @@ import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto';
 import { PaginatedVehiclesEntity } from '../entities/paginated-vehicles.entity';
 import { VehicleEntity } from '../entities/vehicle.entity';
+import { hasActiveRelationship } from '../interfaces/vehicle-relationship-counts.interface';
 import { toVehicleEntity } from '../mappers/vehicle.mapper';
 import { normalizePlate } from '../utils/normalize-plate.util';
 
@@ -30,6 +31,15 @@ export class VehiclesService {
       ...(query.fleetId ? { fleetId: query.fleetId } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.plate
+        ? { plate: { contains: normalizePlate(query.plate), mode: Prisma.QueryMode.insensitive } }
+        : {}),
+      ...(query.brand
+        ? { brand: { contains: query.brand, mode: Prisma.QueryMode.insensitive } }
+        : {}),
+      ...(query.model
+        ? { model: { contains: query.model, mode: Prisma.QueryMode.insensitive } }
+        : {}),
       ...(query.search
         ? {
             OR: [
@@ -88,13 +98,13 @@ export class VehiclesService {
         tenantId,
         plate,
         type: dto.type,
+        brand: dto.brand,
+        model: dto.model,
         isActive: true,
         ...compact({
           fleetId: dto.fleetId,
           renavam: dto.renavam,
           chassisNumber: dto.chassisNumber,
-          brand: dto.brand,
-          model: dto.model,
           manufactureYear: dto.manufactureYear,
           modelYear: dto.modelYear,
           color: dto.color,
@@ -211,6 +221,35 @@ export class VehiclesService {
     metadata: RequestMetadata,
   ): Promise<void> {
     const before = await this.findActiveOrThrow(tenantId, id);
+
+    // "viagem em andamento" = composicao deste veiculo ligada a um Trip
+    // IN_PROGRESS. "composicao ativa" = composicao deste veiculo ainda nao
+    // concluida/cancelada (sem trip ainda, ou trip PLANNED/IN_PROGRESS) --
+    // os dois contadores podem se sobrepor, o que e aceitavel para a
+    // mensagem de erro (mesmo padrao usado no bloqueio de exclusao de
+    // Tenant/Driver: contadores informativos, nao mutuamente exclusivos).
+    const [activeTrips, activeCompositions] = await Promise.all([
+      this.prisma.tripComposition.count({
+        where: { tenantId, vehicleId: id, trip: { status: TripStatus.IN_PROGRESS } },
+      }),
+      this.prisma.tripComposition.count({
+        where: {
+          tenantId,
+          vehicleId: id,
+          OR: [
+            { tripId: null },
+            { trip: { status: { in: [TripStatus.PLANNED, TripStatus.IN_PROGRESS] } } },
+          ],
+        },
+      }),
+    ]);
+    if (hasActiveRelationship({ activeTrips, activeCompositions })) {
+      throw new ConflictException(
+        'Nao e possivel excluir este veiculo: existem viagens em andamento ' +
+          `(${activeTrips}) ou composicoes ativas (${activeCompositions}) vinculadas. ` +
+          'Finalize as viagens e remova as composicoes antes de excluir o veiculo.',
+      );
+    }
 
     await this.prisma.vehicle.update({
       where: { id },

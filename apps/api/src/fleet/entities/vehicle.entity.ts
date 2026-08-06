@@ -20,11 +20,11 @@ export class VehicleEntity {
   @ApiProperty({ nullable: true })
   chassisNumber!: string | null;
 
-  @ApiProperty({ nullable: true })
-  brand!: string | null;
+  @ApiProperty()
+  brand!: string;
 
-  @ApiProperty({ nullable: true })
-  model!: string | null;
+  @ApiProperty()
+  model!: string;
 
   @ApiProperty({ nullable: true })
   manufactureYear!: number | null;
