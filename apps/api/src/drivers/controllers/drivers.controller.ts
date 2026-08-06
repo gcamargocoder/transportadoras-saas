@@ -21,7 +21,9 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { DRIVER_READ_ROLES, DRIVER_WRITE_ROLES } from '../constants/driver-roles.constants';
 import { CreateDriverDocumentDto } from '../dto/create-driver-document.dto';
@@ -125,6 +127,7 @@ export class DriversController {
 
   @Delete(':id')
   @Roles(...DRIVER_WRITE_ROLES)
+  @Throttle(CRITICAL_THROTTLE)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Exclui logicamente um motorista.' })
   @ApiNoContentResponse({ description: 'Motorista excluido.' })

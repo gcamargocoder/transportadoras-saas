@@ -79,5 +79,16 @@ export function validate(config: Record<string, unknown>): EnvironmentVariables 
     );
   }
 
+  // CORS_ORIGIN e uma lista separada por virgula de origens explicitas --
+  // "*" (qualquer origem) nunca e aceitavel, em nenhum ambiente, quando
+  // combinado com credentials:true (app.enableCors em main.ts), sob risco
+  // de permitir qualquer site ler respostas autenticadas via credenciais.
+  const corsOrigins = validatedConfig.CORS_ORIGIN.split(',').map((origin) => origin.trim());
+  if (corsOrigins.includes('*')) {
+    throw new Error(
+      'CORS_ORIGIN invalido: "*" nao e permitido. Informe uma lista explicita de origens (ex: "https://app.exemplo.com,https://admin.exemplo.com").',
+    );
+  }
+
   return validatedConfig;
 }

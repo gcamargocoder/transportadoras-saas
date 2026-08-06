@@ -8,7 +8,13 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
+import {
+  AUTH_LOGIN_THROTTLE,
+  AUTH_LOGOUT_THROTTLE,
+  AUTH_REFRESH_THROTTLE,
+} from '../../common/constants/throttle.constants';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { Public } from '../decorators/public.decorator';
 import { AuthTokensDto } from '../dto/auth-tokens.dto';
@@ -25,6 +31,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @Throttle(AUTH_LOGIN_THROTTLE)
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Autentica com e-mail/senha e retorna access token + refresh token.' })
@@ -36,6 +43,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(AUTH_REFRESH_THROTTLE)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -48,6 +56,7 @@ export class AuthController {
     return this.authService.refreshTokens(dto.refreshToken);
   }
 
+  @Throttle(AUTH_LOGOUT_THROTTLE)
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()

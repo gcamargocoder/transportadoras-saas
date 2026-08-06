@@ -22,12 +22,14 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Tenant, UserRole } from '@prisma/client';
 import { Request } from 'express';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Public } from '../../auth/decorators/public.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { extractRequestMetadata } from '../../auth/utils/request-metadata.util';
+import { ADMIN_THROTTLE, CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../context/tenant-context';
 import { CurrentTenant } from '../decorators/current-tenant.decorator';
 import { CreateTenantDto } from '../dto/create-tenant.dto';
@@ -112,6 +114,7 @@ export class TenantsController {
 
   @Get()
   @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: '[Super Admin] Lista todas as transportadoras da plataforma.' })
   @ApiOkResponse({ type: PaginatedTenantsEntity })
@@ -121,6 +124,7 @@ export class TenantsController {
 
   @Get(':id')
   @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({ summary: '[Super Admin] Consulta qualquer transportadora por id.' })
   @ApiOkResponse({ type: TenantEntity })
@@ -131,6 +135,7 @@ export class TenantsController {
 
   @Patch(':id')
   @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
   @ApiBearerAuth()
   @ApiOperation({
     summary: '[Super Admin] Edita qualquer transportadora (inclusive CNPJ/slug/status).',
@@ -149,6 +154,7 @@ export class TenantsController {
 
   @Delete(':id')
   @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(CRITICAL_THROTTLE)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()
   @ApiOperation({

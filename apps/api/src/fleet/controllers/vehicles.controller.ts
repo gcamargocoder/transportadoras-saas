@@ -21,7 +21,9 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../constants/fleet-roles.constants';
 import { CreateVehicleTagDto } from '../dto/create-vehicle-tag.dto';
@@ -123,6 +125,7 @@ export class VehiclesController {
 
   @Delete(':id')
   @Roles(...FLEET_WRITE_ROLES)
+  @Throttle(CRITICAL_THROTTLE)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Exclui logicamente um veiculo.' })
   @ApiNoContentResponse({ description: 'Veiculo excluido.' })
