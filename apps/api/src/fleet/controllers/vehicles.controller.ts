@@ -34,9 +34,11 @@ import { FindVehiclesQueryDto } from '../dto/find-vehicles-query.dto';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto';
 import { UpdateVehicleTagStatusDto } from '../dto/update-vehicle-tag-status.dto';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto';
+import { PaginatedMaintenancesEntity } from '../entities/paginated-maintenances.entity';
 import { PaginatedVehiclesEntity } from '../entities/paginated-vehicles.entity';
 import { VehicleTagEntity } from '../entities/vehicle-tag.entity';
 import { VehicleEntity } from '../entities/vehicle.entity';
+import { MaintenancesService } from '../services/maintenances.service';
 import { VehicleTagsService } from '../services/vehicle-tags.service';
 import { VehiclesService } from '../services/vehicles.service';
 
@@ -47,6 +49,7 @@ export class VehiclesController {
   constructor(
     private readonly vehiclesService: VehiclesService,
     private readonly vehicleTagsService: VehicleTagsService,
+    private readonly maintenancesService: MaintenancesService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -160,6 +163,22 @@ export class VehiclesController {
       id,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/maintenances')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({ summary: 'Lista as manutencoes de um veiculo (paginado).' })
+  @ApiOkResponse({ type: PaginatedMaintenancesEntity })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  findMaintenances(
+    @Param('id', ParseUUIDPipe) vehicleId: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<PaginatedMaintenancesEntity> {
+    return this.maintenancesService.findAllForVehicle(
+      this.tenantContext.requireTenantId(),
+      vehicleId,
+      query,
     );
   }
 

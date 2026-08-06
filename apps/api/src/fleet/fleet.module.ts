@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { FleetsController } from './controllers/fleets.controller';
+import { MaintenancesController } from './controllers/maintenances.controller';
 import { TagProvidersController } from './controllers/tag-providers.controller';
 import { TrailersController } from './controllers/trailers.controller';
 import { TripCompositionsController } from './controllers/trip-compositions.controller';
 import { VehiclesController } from './controllers/vehicles.controller';
 import { FleetsService } from './services/fleets.service';
+import { MaintenancesService } from './services/maintenances.service';
 import { TagProvidersService } from './services/tag-providers.service';
 import { TrailersService } from './services/trailers.service';
 import { TripCompositionsService } from './services/trip-compositions.service';
@@ -18,6 +20,7 @@ import { VehiclesService } from './services/vehicles.service';
     TrailersController,
     TagProvidersController,
     TripCompositionsController,
+    MaintenancesController,
   ],
   providers: [
     FleetsService,
@@ -26,6 +29,7 @@ import { VehiclesService } from './services/vehicles.service';
     TrailersService,
     TagProvidersService,
     TripCompositionsService,
+    MaintenancesService,
   ],
 })
 export class FleetModule {}

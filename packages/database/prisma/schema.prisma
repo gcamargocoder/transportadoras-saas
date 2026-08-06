@@ -91,10 +91,31 @@ enum VehicleFuelType {
 
 enum VehicleMaintenanceStatus {
   OPEN
+  IN_PROGRESS
+  WAITING_PARTS
   COMPLETED
   CANCELLED
 
   @@map("vehicle_maintenance_status")
+}
+
+enum VehicleMaintenanceType {
+  PREVENTIVE
+  CORRECTIVE
+  INSPECTION
+  EMERGENCY
+  OTHER
+
+  @@map("vehicle_maintenance_type")
+}
+
+enum VehicleMaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+
+  @@map("vehicle_maintenance_priority")
 }
 
 enum TrailerType {
@@ -362,12 +383,13 @@ model UserAccount {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  driverProfile      Driver?
-  auditLogs          AuditLog[]
-  acknowledgedAlerts Alert[]        @relation("AlertAcknowledgedBy")
-  notifications      Notification[]
-  refreshTokens      RefreshToken[]
+  tenant                         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driverProfile                  Driver?
+  auditLogs                      AuditLog[]
+  acknowledgedAlerts             Alert[]              @relation("AlertAcknowledgedBy")
+  notifications                  Notification[]
+  refreshTokens                  RefreshToken[]
+  vehicleMaintenancesResponsible VehicleMaintenance[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -505,20 +527,45 @@ model Vehicle {
 /// suficiente para o relacionamento Vehicle->Manutencoes e para a regra de
 /// exclusao ("nao excluir veiculo com manutencao aberta").
 model VehicleMaintenance {
-  id          String                   @id @default(uuid()) @db.Uuid
-  tenantId    String                   @map("tenant_id") @db.Uuid
-  vehicleId   String                   @map("vehicle_id") @db.Uuid
-  status      VehicleMaintenanceStatus @default(OPEN)
-  description String?
-  scheduledAt DateTime?                @map("scheduled_at")
-  completedAt DateTime?                @map("completed_at")
-  createdAt   DateTime                 @default(now()) @map("created_at")
-  updatedAt   DateTime                 @updatedAt @map("updated_at")
+  id                 String                     @id @default(uuid()) @db.Uuid
+  tenantId           String                     @map("tenant_id") @db.Uuid
+  vehicleId          String                     @map("vehicle_id") @db.Uuid
+  type               VehicleMaintenanceType     @default(PREVENTIVE)
+  status             VehicleMaintenanceStatus   @default(OPEN)
+  priority           VehicleMaintenancePriority @default(MEDIUM)
+  /// Data de abertura da manutencao (distinta de createdAt: pode ser
+  /// retroativa, ex: importacao de historico).
+  openedAt           DateTime                   @default(now()) @map("opened_at")
+  scheduledAt        DateTime?                  @map("scheduled_at")
+  completedAt        DateTime?                  @map("completed_at")
+  odometerKm         Decimal?                   @map("odometer_km") @db.Decimal(10, 2)
+  workshop           String?
+  supplier           String?
+  mechanic           String?
+  /// Usuario interno responsavel por acompanhar esta manutencao -- distinto
+  /// do AuditLog.userId (que registra quem alterou o REGISTRO, nao quem e
+  /// o responsavel pela manutencao em si).
+  responsibleUserId  String?                    @map("responsible_user_id") @db.Uuid
+  description        String?
+  notes              String?
+  laborCost          Decimal?                   @map("labor_cost") @db.Decimal(10, 2)
+  partsCost          Decimal?                   @map("parts_cost") @db.Decimal(10, 2)
+  /// Sempre calculado pelo service (laborCost + partsCost) -- nunca aceito
+  /// diretamente do cliente.
+  totalCost          Decimal?                   @map("total_cost") @db.Decimal(10, 2)
+  serviceOrderNumber String?                    @map("service_order_number")
+  warrantyUntil      DateTime?                  @map("warranty_until")
+  nextReviewAt       DateTime?                  @map("next_review_at")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+  updatedAt          DateTime                   @updatedAt @map("updated_at")
 
-  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle         Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  responsibleUser UserAccount? @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, openedAt])
   @@index([vehicleId, status])
   @@map("vehicle_maintenances")
 }

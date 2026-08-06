@@ -278,7 +278,8 @@ export class VehiclesService {
     // "viagem em andamento" = composicao deste veiculo ligada a um Trip
     // IN_PROGRESS. "composicao ativa" = composicao deste veiculo ainda nao
     // concluida/cancelada (sem trip ainda, ou trip PLANNED/IN_PROGRESS).
-    // "manutencao aberta" = VehicleMaintenance.status = OPEN. Os contadores
+    // "manutencao aberta" = VehicleMaintenance.status fora de COMPLETED/
+    // CANCELLED (cobre OPEN, IN_PROGRESS e WAITING_PARTS -- Fase 13). Os contadores
     // podem se sobrepor, o que e aceitavel para a mensagem de erro (mesmo
     // padrao usado no bloqueio de exclusao de Tenant/Driver: contadores
     // informativos, nao mutuamente exclusivos).
@@ -297,7 +298,13 @@ export class VehiclesService {
         },
       }),
       this.prisma.vehicleMaintenance.count({
-        where: { tenantId, vehicleId: id, status: VehicleMaintenanceStatus.OPEN },
+        where: {
+          tenantId,
+          vehicleId: id,
+          status: {
+            notIn: [VehicleMaintenanceStatus.COMPLETED, VehicleMaintenanceStatus.CANCELLED],
+          },
+        },
       }),
     ]);
     if (hasActiveRelationship({ activeTrips, activeCompositions, openMaintenances })) {
