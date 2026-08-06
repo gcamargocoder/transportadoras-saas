@@ -20,6 +20,9 @@ export class TenantEntity {
   @ApiProperty()
   slug!: string;
 
+  @ApiProperty({ nullable: true })
+  logoUrl!: string | null;
+
   @ApiProperty()
   isActive!: boolean;
 

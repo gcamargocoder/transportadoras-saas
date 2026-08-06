@@ -251,6 +251,9 @@ model Tenant {
   /// (sem subdominio nesta fase) -- preparado para resolucao futura de tenant
   /// por subdominio/dominio personalizado (ex: "acme" em acme.app.com).
   slug      String   @unique
+  /// URL do logotipo da empresa. Upload de arquivo fica para fase futura --
+  /// aqui e apenas a referencia (ex: URL de um storage externo).
+  logoUrl   String?  @map("logo_url")
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

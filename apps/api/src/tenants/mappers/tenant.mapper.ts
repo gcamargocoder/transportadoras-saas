@@ -4,7 +4,7 @@ import { TenantSettingsEntity } from '../entities/tenant-settings.entity';
 
 export type TenantWithSettings = Tenant & { settings: TenantSettings | null };
 
-function toTenantSettingsEntity(settings: TenantSettings): TenantSettingsEntity {
+export function toTenantSettingsEntity(settings: TenantSettings): TenantSettingsEntity {
   const entity = new TenantSettingsEntity();
   entity.timezone = settings.timezone;
   entity.currency = settings.currency;
@@ -23,6 +23,7 @@ export function toTenantEntity(tenant: TenantWithSettings): TenantEntity {
   entity.tradeName = tenant.tradeName;
   entity.document = tenant.document;
   entity.slug = tenant.slug;
+  entity.logoUrl = tenant.logoUrl;
   entity.isActive = tenant.isActive;
   entity.settings = tenant.settings ? toTenantSettingsEntity(tenant.settings) : null;
   entity.createdAt = tenant.createdAt;

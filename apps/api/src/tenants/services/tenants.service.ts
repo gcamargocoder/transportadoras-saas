@@ -3,14 +3,21 @@ import { Prisma, UserRole } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { hashPassword } from '../../auth/utils/password.util';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
+import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
+import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTenantDto } from '../dto/create-tenant.dto';
-import { UpdateTenantDto } from '../dto/update-tenant.dto';
+import { FindTenantsQueryDto } from '../dto/find-tenants-query.dto';
+import { UpdateTenantFullDto } from '../dto/update-tenant-full.dto';
 import { UpdateTenantStatusDto } from '../dto/update-tenant-status.dto';
+import { UpdateTenantDto } from '../dto/update-tenant.dto';
+import { PaginatedTenantsEntity } from '../entities/paginated-tenants.entity';
 import { TenantEntity } from '../entities/tenant.entity';
+import { hasAnyRelationship } from '../interfaces/tenant-relationship-counts.interface';
 import { toTenantEntity } from '../mappers/tenant.mapper';
+import { TenantsRepository } from '../repositories/tenants.repository';
 import { slugify } from '../utils/slugify.util';
 
 @Injectable()
@@ -18,6 +25,7 @@ export class TenantsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly tenantsRepository: TenantsRepository,
   ) {}
 
   // Cria Tenant + TenantSettings (padrao) + primeiro usuario ADMIN numa
@@ -55,7 +63,7 @@ export class TenantsService {
           name: dto.name,
           document: dto.document,
           slug,
-          ...compact({ tradeName: dto.tradeName }),
+          ...compact({ tradeName: dto.tradeName, logoUrl: dto.logoUrl }),
         },
       });
 
@@ -121,7 +129,7 @@ export class TenantsService {
 
     await this.prisma.tenant.update({
       where: { id: tenantId },
-      data: compact({ name: dto.name, tradeName: dto.tradeName }),
+      data: compact({ name: dto.name, tradeName: dto.tradeName, logoUrl: dto.logoUrl }),
     });
 
     if (dto.settings) {
@@ -186,5 +194,166 @@ export class TenantsService {
     });
 
     return this.findOwn(tenantId);
+  }
+
+  // ==========================================================================
+  // Operacoes administrativas (SUPER_ADMIN) -- cross-tenant, introduzidas
+  // nesta fase. Usam TenantsRepository (camada de acesso a dados dedicada),
+  // diferente dos metodos self-service acima (Fase 5), que continuam
+  // chamando PrismaService diretamente e nao foram tocados.
+  // ==========================================================================
+
+  async findAll(query: FindTenantsQueryDto): Promise<PaginatedTenantsEntity> {
+    const where: Prisma.TenantWhereInput = {
+      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { name: { contains: query.search, mode: Prisma.QueryMode.insensitive } },
+              { tradeName: { contains: query.search, mode: Prisma.QueryMode.insensitive } },
+              { document: { contains: query.search } },
+              { slug: { contains: query.search, mode: Prisma.QueryMode.insensitive } },
+            ],
+          }
+        : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      this.tenantsRepository.findMany({
+        where,
+        orderBy: { [query.sortBy]: query.sortOrder },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.tenantsRepository.count(where),
+    ]);
+
+    const result = new PaginatedTenantsEntity();
+    result.items = items.map(toTenantEntity);
+    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
+    return result;
+  }
+
+  async findById(id: string): Promise<TenantEntity> {
+    const tenant = await this.tenantsRepository.findById(id);
+    if (!tenant) {
+      throw new NotFoundException('Tenant nao encontrado.');
+    }
+    return toTenantEntity(tenant);
+  }
+
+  async updateById(
+    id: string,
+    dto: UpdateTenantFullDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<TenantEntity> {
+    const before = await this.tenantsRepository.findById(id);
+    if (!before) {
+      throw new NotFoundException('Tenant nao encontrado.');
+    }
+
+    if (dto.document && dto.document !== before.document) {
+      const existing = await this.tenantsRepository.findByDocumentExcluding(dto.document, id);
+      if (existing) {
+        throw new ConflictException('Ja existe uma empresa cadastrada com este CNPJ.');
+      }
+    }
+    if (dto.slug && dto.slug !== before.slug) {
+      const existing = await this.tenantsRepository.findBySlugExcluding(dto.slug, id);
+      if (existing) {
+        throw new ConflictException('Ja existe uma empresa com este identificador (slug).');
+      }
+    }
+
+    await this.tenantsRepository.updateById(
+      id,
+      compact({
+        name: dto.name,
+        tradeName: dto.tradeName,
+        document: dto.document,
+        slug: dto.slug,
+        logoUrl: dto.logoUrl,
+        isActive: dto.isActive,
+      }),
+    );
+
+    if (dto.settings) {
+      const { preferences, ...rest } = dto.settings;
+      await this.prisma.tenantSettings.update({
+        where: { tenantId: id },
+        data: {
+          ...rest,
+          ...(preferences !== undefined
+            ? { preferences: preferences as Prisma.InputJsonValue }
+            : {}),
+        },
+      });
+    }
+
+    const after = await this.tenantsRepository.findById(id);
+    if (!after) {
+      throw new NotFoundException('Tenant nao encontrado.');
+    }
+
+    await this.audit.log({
+      tenantId: id,
+      userId: actor.userId,
+      action: 'tenant.updated_by_admin',
+      entityName: 'Tenant',
+      entityId: id,
+      previousValue: toJsonSafe(before),
+      newValue: toJsonSafe(after),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toTenantEntity(after);
+  }
+
+  // actorTenantId: a EMPRESA DO ATOR (super admin), nao a empresa sendo
+  // excluida -- AuditLog.tenantId tem onDelete: Cascade a partir de Tenant,
+  // entao gravar o log com tenantId = id (o tenant que esta sendo excluido)
+  // faria o proprio registro de auditoria ser destruido pela cascata da
+  // exclusao que ele documenta. Atribuir ao tenant do ator preserva o
+  // registro; o que foi excluido continua identificado via entityId/
+  // previousValue.
+  async deleteById(
+    id: string,
+    actorTenantId: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<void> {
+    const before = await this.tenantsRepository.findById(id);
+    if (!before) {
+      throw new NotFoundException('Tenant nao encontrado.');
+    }
+
+    const counts = await this.tenantsRepository.countRelationships(id);
+    if (hasAnyRelationship(counts)) {
+      throw new ConflictException(
+        'Nao e possivel excluir esta empresa: existem registros vinculados ' +
+          `(usuarios: ${counts.users}, motoristas: ${counts.drivers}, veiculos: ${counts.vehicles}, ` +
+          `viagens: ${counts.trips}). Remova-os antes de excluir a empresa.`,
+      );
+    }
+
+    await this.tenantsRepository.deleteById(id);
+
+    await this.audit.log({
+      tenantId: actorTenantId,
+      userId: actor.userId,
+      action: 'tenant.deleted',
+      entityName: 'Tenant',
+      entityId: id,
+      previousValue: toJsonSafe({
+        name: before.name,
+        document: before.document,
+        slug: before.slug,
+      }),
+      newValue: null,
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
   }
 }

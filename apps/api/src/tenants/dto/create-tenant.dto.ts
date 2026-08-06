@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsOptional, IsString, Matches, MinLength, ValidateNested } from 'class-validator';
+import { IsOptional, IsString, IsUrl, Matches, MinLength, ValidateNested } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateTenantAdminDto } from './create-tenant-admin.dto';
 
@@ -29,6 +29,14 @@ export class CreateTenantDto {
     message: 'slug deve conter apenas letras minusculas, numeros e hifen (ex: "minha-empresa").',
   })
   slug?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://cdn.exemplo.com/logo.png',
+    description: 'URL do logotipo.',
+  })
+  @IsOptional()
+  @IsUrl({}, { message: 'logoUrl deve ser uma URL valida.' })
+  logoUrl?: string;
 
   @ApiProperty({
     type: CreateTenantAdminDto,
