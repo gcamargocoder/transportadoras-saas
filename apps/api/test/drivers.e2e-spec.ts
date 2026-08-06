@@ -458,4 +458,224 @@ describe('Drivers (e2e)', () => {
         .expect(404);
     });
   });
+
+  describe('motorista inexistente', () => {
+    it('GET, PATCH e DELETE com id inexistente retornam 404', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('Missing');
+      const auth = `Bearer ${adminAccessToken}`;
+      const missingId = randomUUID();
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/drivers/${missingId}`)
+        .set('Authorization', auth)
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${missingId}`)
+        .set('Authorization', auth)
+        .send({ name: 'Nao Existe' })
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/drivers/${missingId}`)
+        .set('Authorization', auth)
+        .expect(404);
+    });
+  });
+
+  describe('filtros adicionais (CPF exato, categoria de CNH, CNH vencendo)', () => {
+    let adminAccessToken: string;
+    let cpfAlvo: string;
+
+    beforeAll(async () => {
+      ({ adminAccessToken } = await createTenantAndLoginAsAdmin('Filters'));
+      const auth = `Bearer ${adminAccessToken}`;
+
+      cpfAlvo = randomValidCpf();
+      await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(buildDriverPayload({ name: 'Motorista Categoria B', cpf: cpfAlvo, cnhCategory: 'B' }))
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(
+          buildDriverPayload({
+            name: 'Motorista CNH Vencendo',
+            cnhCategory: 'AE',
+            cnhExpiresAt: '2026-08-20',
+          }),
+        )
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(
+          buildDriverPayload({
+            name: 'Motorista CNH em dia',
+            cnhCategory: 'AE',
+            cnhExpiresAt: '2030-01-01',
+          }),
+        )
+        .expect(201);
+    });
+
+    it('filtra por CPF exato', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/drivers?cpf=${cpfAlvo}`)
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.items[0].cpf).toBe(cpfAlvo);
+    });
+
+    it('filtra por categoria de CNH', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/drivers?cnhCategory=B')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.items[0].name).toBe('Motorista Categoria B');
+    });
+
+    it('rejeita categoria de CNH invalida no filtro com 400', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/drivers?cnhCategory=Z')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(400);
+    });
+
+    it('filtra motoristas com CNH vencendo nos proximos N dias', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/drivers?cnhExpiringInDays=60')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(200);
+      const names = res.body.data.items.map((d: { name: string }) => d.name);
+      expect(names).toContain('Motorista CNH Vencendo');
+      expect(names).not.toContain('Motorista CNH em dia');
+    });
+  });
+
+  describe('vinculo com usuario (login opcional)', () => {
+    it('vincula, rejeita reutilizacao e desvincula um UserAccount existente', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('LinkUser');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const driverRes = await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(buildDriverPayload())
+        .expect(201);
+      const driverId = driverRes.body.data.id;
+
+      const userEmail = `driver-login-${randomUUID()}@teste.com`;
+      const userRes = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', auth)
+        .send({
+          name: 'Login do Motorista',
+          email: userEmail,
+          password: 'SenhaForte123!',
+          role: 'DRIVER',
+        })
+        .expect(201);
+      const userAccountId = userRes.body.data.id;
+
+      const linkRes = await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/user-link`)
+        .set('Authorization', auth)
+        .send({ userAccountId })
+        .expect(200);
+      expect(linkRes.body.data.userAccountId).toBe(userAccountId);
+
+      // Outro motorista nao pode reutilizar o mesmo usuario -> 409.
+      const otherDriverRes = await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(buildDriverPayload())
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${otherDriverRes.body.data.id}/user-link`)
+        .set('Authorization', auth)
+        .send({ userAccountId })
+        .expect(409);
+
+      // Usuario de outro tenant nao pode ser vinculado -> 404.
+      const otherTenant = await createTenantAndLoginAsAdmin('LinkUserOther');
+      const foreignUserRes = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', `Bearer ${otherTenant.adminAccessToken}`)
+        .send({
+          name: 'Usuario de outro tenant',
+          email: `foreign-${randomUUID()}@teste.com`,
+          password: 'SenhaForte123!',
+          role: 'DRIVER',
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${otherDriverRes.body.data.id}/user-link`)
+        .set('Authorization', auth)
+        .send({ userAccountId: foreignUserRes.body.data.id })
+        .expect(404);
+
+      // Desvincula.
+      const unlinkRes = await request(app.getHttpServer())
+        .delete(`/api/v1/drivers/${driverId}/user-link`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(unlinkRes.body.data.userAccountId).toBeNull();
+
+      // Desvincular de novo (ja sem usuario) -> 409.
+      await request(app.getHttpServer())
+        .delete(`/api/v1/drivers/${driverId}/user-link`)
+        .set('Authorization', auth)
+        .expect(409);
+    });
+  });
+
+  describe('exclusao bloqueada por viagem ativa', () => {
+    it('bloqueia DELETE quando o motorista tem viagem PLANNED/IN_PROGRESS vinculada', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('DeleteGuard');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const driverRes = await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(buildDriverPayload())
+        .expect(201);
+      const driverId = driverRes.body.data.id;
+
+      const origin = await prisma.location.create({
+        data: { tenantId, name: 'Origem Teste', type: 'OTHER' },
+      });
+      const destination = await prisma.location.create({
+        data: { tenantId, name: 'Destino Teste', type: 'OTHER' },
+      });
+      const trip = await prisma.trip.create({
+        data: {
+          tenantId,
+          driverId,
+          originLocationId: origin.id,
+          destinationLocationId: destination.id,
+          status: 'PLANNED',
+        },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/drivers/${driverId}`)
+        .set('Authorization', auth)
+        .expect(409);
+
+      // Cancela a viagem -- exclusao passa a ser permitida.
+      await prisma.trip.update({ where: { id: trip.id }, data: { status: 'CANCELLED' } });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/drivers/${driverId}`)
+        .set('Authorization', auth)
+        .expect(204);
+    });
+  });
 });

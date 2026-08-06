@@ -5,6 +5,7 @@ export function toDriverEntity(driver: Driver): DriverEntity {
   const entity = new DriverEntity();
   entity.id = driver.id;
   entity.tenantId = driver.tenantId;
+  entity.userAccountId = driver.userAccountId;
   entity.name = driver.name;
   entity.cpf = driver.cpf;
   entity.rg = driver.rg;

@@ -27,6 +27,7 @@ import { DRIVER_READ_ROLES, DRIVER_WRITE_ROLES } from '../constants/driver-roles
 import { CreateDriverDocumentDto } from '../dto/create-driver-document.dto';
 import { CreateDriverDto } from '../dto/create-driver.dto';
 import { FindDriversQueryDto } from '../dto/find-drivers-query.dto';
+import { LinkDriverUserDto } from '../dto/link-driver-user.dto';
 import { UpdateDriverStatusDto } from '../dto/update-driver-status.dto';
 import { UpdateDriverDto } from '../dto/update-driver.dto';
 import { DriverDocumentEntity } from '../entities/driver-document.entity';
@@ -130,6 +131,45 @@ export class DriversController {
   @ApiNotFoundResponse({ description: 'Motorista nao encontrado nesta empresa.' })
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.driversService.softDelete(
+      this.tenantContext.requireTenantId(),
+      id,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Patch(':id/user-link')
+  @Roles(...DRIVER_WRITE_ROLES)
+  @ApiOperation({
+    summary: 'Vincula um usuario (UserAccount) ja existente ao motorista (login opcional).',
+    description:
+      'Nunca cria um usuario novo -- apenas referencia um UserAccount ja existente nesta empresa. ' +
+      'Um usuario so pode estar vinculado a um motorista por vez.',
+  })
+  @ApiOkResponse({ type: DriverEntity })
+  @ApiNotFoundResponse({ description: 'Motorista ou usuario nao encontrado nesta empresa.' })
+  @ApiConflictResponse({ description: 'O usuario ja esta vinculado a outro motorista.' })
+  linkUser(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LinkDriverUserDto,
+  ): Promise<DriverEntity> {
+    return this.driversService.linkUser(
+      this.tenantContext.requireTenantId(),
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Delete(':id/user-link')
+  @Roles(...DRIVER_WRITE_ROLES)
+  @ApiOperation({ summary: 'Desvincula o usuario (UserAccount) associado ao motorista.' })
+  @ApiOkResponse({ type: DriverEntity })
+  @ApiNotFoundResponse({ description: 'Motorista nao encontrado nesta empresa.' })
+  @ApiConflictResponse({ description: 'Este motorista nao possui usuario vinculado.' })
+  unlinkUser(@Param('id', ParseUUIDPipe) id: string): Promise<DriverEntity> {
+    return this.driversService.unlinkUser(
       this.tenantContext.requireTenantId(),
       id,
       { userId: this.tenantContext.requireUserId() },

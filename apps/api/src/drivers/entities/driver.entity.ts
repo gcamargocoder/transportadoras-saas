@@ -7,6 +7,13 @@ export class DriverEntity {
   @ApiProperty({ format: 'uuid' })
   tenantId!: string;
 
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description: 'UserAccount vinculado (login opcional).',
+  })
+  userAccountId!: string | null;
+
   @ApiProperty()
   name!: string;
 

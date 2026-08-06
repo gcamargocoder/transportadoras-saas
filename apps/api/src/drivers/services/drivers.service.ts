@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Driver, Prisma } from '@prisma/client';
+import { Driver, Prisma, TripStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
@@ -9,11 +9,14 @@ import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateDriverDto } from '../dto/create-driver.dto';
 import { FindDriversQueryDto } from '../dto/find-drivers-query.dto';
+import { LinkDriverUserDto } from '../dto/link-driver-user.dto';
 import { UpdateDriverDto } from '../dto/update-driver.dto';
 import { UpdateDriverStatusDto } from '../dto/update-driver-status.dto';
 import { DriverEntity } from '../entities/driver.entity';
 import { PaginatedDriversEntity } from '../entities/paginated-drivers.entity';
+import { hasActiveRelationship } from '../interfaces/driver-relationship-counts.interface';
 import { toDriverEntity } from '../mappers/driver.mapper';
+import { cnhExpiringThreshold } from '../utils/cnh-expiry.util';
 import { normalizeCpf } from '../utils/cpf.util';
 
 // Isolamento multi-tenant: toda query recebe tenantId explicitamente e
@@ -31,6 +34,11 @@ export class DriversService {
       tenantId,
       deletedAt: null,
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.cpf ? { cpf: normalizeCpf(query.cpf) } : {}),
+      ...(query.cnhCategory ? { cnhCategory: query.cnhCategory.toUpperCase() } : {}),
+      ...(query.cnhExpiringInDays !== undefined
+        ? { cnhExpiresAt: { lte: cnhExpiringThreshold(query.cnhExpiringInDays) } }
+        : {}),
       ...(query.search
         ? {
             OR: [
@@ -197,6 +205,21 @@ export class DriversService {
   ): Promise<void> {
     const before = await this.findActiveOrThrow(tenantId, id);
 
+    const activeTrips = await this.prisma.trip.count({
+      where: {
+        tenantId,
+        driverId: id,
+        deletedAt: null,
+        status: { in: [TripStatus.PLANNED, TripStatus.IN_PROGRESS] },
+      },
+    });
+    if (hasActiveRelationship({ activeTrips })) {
+      throw new ConflictException(
+        `Nao e possivel excluir este motorista: existem viagens ativas vinculadas (${activeTrips}). ` +
+          'Finalize ou cancele essas viagens antes de excluir o motorista.',
+      );
+    }
+
     await this.prisma.driver.update({
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
@@ -213,6 +236,83 @@ export class DriversService {
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
+  }
+
+  // Login opcional: vincula um UserAccount JA EXISTENTE (mesmo tenant) ao
+  // motorista -- nunca cria usuario aqui. userAccountId e @unique em Driver,
+  // entao um UserAccount so pode estar vinculado a um motorista por vez.
+  async linkUser(
+    tenantId: string,
+    id: string,
+    dto: LinkDriverUserDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<DriverEntity> {
+    const before = await this.findActiveOrThrow(tenantId, id);
+
+    const userAccount = await this.prisma.userAccount.findFirst({
+      where: { id: dto.userAccountId, tenantId, deletedAt: null },
+    });
+    if (!userAccount) {
+      throw new NotFoundException('Usuario nao encontrado nesta empresa.');
+    }
+
+    const alreadyLinkedTo = await this.prisma.driver.findUnique({
+      where: { userAccountId: dto.userAccountId },
+    });
+    if (alreadyLinkedTo && alreadyLinkedTo.id !== id) {
+      throw new ConflictException('Este usuario ja esta vinculado a outro motorista.');
+    }
+
+    const driver = await this.prisma.driver.update({
+      where: { id },
+      data: { userAccountId: dto.userAccountId },
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'driver.user_linked',
+      entityName: 'Driver',
+      entityId: id,
+      previousValue: { userAccountId: before.userAccountId },
+      newValue: { userAccountId: driver.userAccountId },
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toDriverEntity(driver);
+  }
+
+  async unlinkUser(
+    tenantId: string,
+    id: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<DriverEntity> {
+    const before = await this.findActiveOrThrow(tenantId, id);
+    if (!before.userAccountId) {
+      throw new ConflictException('Este motorista nao possui usuario vinculado.');
+    }
+
+    const driver = await this.prisma.driver.update({
+      where: { id },
+      data: { userAccountId: null },
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'driver.user_unlinked',
+      entityName: 'Driver',
+      entityId: id,
+      previousValue: { userAccountId: before.userAccountId },
+      newValue: { userAccountId: null },
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toDriverEntity(driver);
   }
 
   async findActiveOrThrow(tenantId: string, id: string): Promise<Driver> {
