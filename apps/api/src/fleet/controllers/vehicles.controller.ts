@@ -22,8 +22,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../constants/fleet-roles.constants';
 import { CreateVehicleTagDto } from '../dto/create-vehicle-tag.dto';
@@ -52,7 +54,7 @@ export class VehiclesController {
   @Roles(...FLEET_READ_ROLES)
   @ApiOperation({
     summary:
-      'Lista veiculos da empresa (busca, filtro por frota/tipo/status, paginacao, ordenacao).',
+      'Lista veiculos da empresa (busca, filtro por placa/marca/modelo/tipo/categoria/status/ano/frota, paginacao, ordenacao).',
   })
   @ApiOkResponse({ type: PaginatedVehiclesEntity })
   findAll(@Query() query: FindVehiclesQueryDto): Promise<PaginatedVehiclesEntity> {
@@ -107,7 +109,9 @@ export class VehiclesController {
 
   @Patch(':id/status')
   @Roles(...FLEET_WRITE_ROLES)
-  @ApiOperation({ summary: 'Ativa ou desativa um veiculo.' })
+  @ApiOperation({
+    summary: 'Altera a situacao do veiculo (ACTIVE, INACTIVE, MAINTENANCE ou SOLD).',
+  })
   @ApiOkResponse({ type: VehicleEntity })
   @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
   updateStatus(
@@ -123,13 +127,33 @@ export class VehiclesController {
     );
   }
 
+  @Get(':id/history')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({
+    summary: 'Historico de auditoria do veiculo (quem, quando, IP, User-Agent, antes/depois).',
+  })
+  @ApiOkResponse({ type: PaginatedAuditLogEntity })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  findHistory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<PaginatedAuditLogEntity> {
+    return this.vehiclesService.getHistory(this.tenantContext.requireTenantId(), id, query);
+  }
+
   @Delete(':id')
   @Roles(...FLEET_WRITE_ROLES)
   @Throttle(CRITICAL_THROTTLE)
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Exclui logicamente um veiculo.' })
+  @ApiOperation({
+    summary:
+      'Exclui logicamente um veiculo -- somente se nao houver viagem ativa nem manutencao aberta.',
+  })
   @ApiNoContentResponse({ description: 'Veiculo excluido.' })
   @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  @ApiConflictResponse({
+    description: 'Existem viagens ativas ou manutencao aberta vinculadas a este veiculo.',
+  })
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.vehiclesService.softDelete(
       this.tenantContext.requireTenantId(),

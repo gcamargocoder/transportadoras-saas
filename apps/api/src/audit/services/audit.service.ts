@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AuditLog, Prisma } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogEntry } from '../interfaces/audit-log-entry.interface';
@@ -41,6 +41,29 @@ export class AuditService {
         error instanceof Error ? error.stack : undefined,
       );
     }
+  }
+
+  // Leitura do historico de auditoria de uma entidade especifica (ex:
+  // "GET /vehicles/:id/history"). Reutilizavel por qualquer modulo que
+  // queira expor esse mesmo tipo de rota no futuro -- nao fica preso ao
+  // modulo de frota.
+  async findByEntity(
+    tenantId: string,
+    entityName: string,
+    entityId: string,
+    pagination: { page: number; pageSize: number },
+  ): Promise<{ items: AuditLog[]; total: number }> {
+    const where: Prisma.AuditLogWhereInput = { tenantId, entityName, entityId };
+    const [items, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (pagination.page - 1) * pagination.pageSize,
+        take: pagination.pageSize,
+      }),
+      this.prisma.auditLog.count({ where }),
+    ]);
+    return { items, total };
   }
 
   private toJsonInput(

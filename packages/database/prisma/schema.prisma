@@ -63,6 +63,40 @@ enum VehicleType {
   @@map("vehicle_type")
 }
 
+/// Situacao operacional do veiculo -- distinta de deletedAt (exclusao
+/// logica): um veiculo SOLD/MAINTENANCE ainda e um registro valido e
+/// consultavel, apenas nao esta disponivel para uso.
+enum VehicleStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  SOLD
+
+  @@map("vehicle_status")
+}
+
+enum VehicleFuelType {
+  DIESEL
+  DIESEL_S10
+  GASOLINE
+  ETHANOL
+  FLEX
+  ELECTRIC
+  HYBRID
+  GNV
+  OTHER
+
+  @@map("vehicle_fuel_type")
+}
+
+enum VehicleMaintenanceStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+
+  @@map("vehicle_maintenance_status")
+}
+
 enum TrailerType {
   SIMPLE
   BITREM
@@ -268,6 +302,7 @@ model Tenant {
   locations               Location[]
   trips                   Trip[]
   vehicleTags             VehicleTag[]
+  vehicleMaintenances     VehicleMaintenance[]
   documents               Document[]
   attachments             Attachment[]
   externalReferences      ExternalReference[]
@@ -417,31 +452,45 @@ model Fleet {
 /// regiao (ex: "Toco", "Truck 6x2", "Cavalo Trucado") -- nao vale a pena
 /// travar num enum fixo.
 model Vehicle {
-  id              String      @id @default(uuid()) @db.Uuid
-  tenantId        String      @map("tenant_id") @db.Uuid
-  fleetId         String?     @map("fleet_id") @db.Uuid
-  plate           String      @db.VarChar(10)
-  renavam         String?     @db.VarChar(20)
-  chassisNumber   String?     @map("chassis_number") @db.VarChar(30)
-  brand           String
-  model           String
-  manufactureYear Int?        @map("manufacture_year")
-  modelYear       Int?        @map("model_year")
-  color           String?
-  type            VehicleType @default(TRACTOR_UNIT)
-  category        String?
-  notes           String?
-  isActive        Boolean     @default(true) @map("is_active")
+  id                    String           @id @default(uuid()) @db.Uuid
+  tenantId              String           @map("tenant_id") @db.Uuid
+  fleetId               String?          @map("fleet_id") @db.Uuid
+  plate                 String           @db.VarChar(10)
+  renavam               String?          @db.VarChar(20)
+  chassisNumber         String?          @map("chassis_number") @db.VarChar(30)
+  brand                 String
+  model                 String
+  manufactureYear       Int?             @map("manufacture_year")
+  modelYear             Int?             @map("model_year")
+  color                 String?
+  type                  VehicleType      @default(TRACTOR_UNIT)
+  category              String?
+  fuelType              VehicleFuelType? @map("fuel_type")
+  /// Capacidade do tanque de combustivel (litros).
+  tankCapacityLiters    Decimal?         @map("tank_capacity_liters") @db.Decimal(10, 2)
+  /// Consumo medio (km por litro).
+  averageConsumptionKmL Decimal?         @map("average_consumption_km_l") @db.Decimal(10, 2)
+  /// Quilometragem atual registrada do veiculo (distinta de
+  /// Telemetry.odometerKm, que e uma serie historica de leituras).
+  odometerKm            Decimal?         @map("odometer_km") @db.Decimal(10, 2)
+  /// Peso Bruto Total (PBT), em kg.
+  grossWeightKg         Decimal?         @map("gross_weight_kg") @db.Decimal(10, 2)
+  netWeightKg           Decimal?         @map("net_weight_kg") @db.Decimal(10, 2)
+  cargoCapacityKg       Decimal?         @map("cargo_capacity_kg") @db.Decimal(10, 2)
+  axleCount             Int?             @map("axle_count")
+  notes                 String?
+  status                VehicleStatus    @default(ACTIVE)
   /// Exclusao logica (mesmo padrao ja usado em Driver/UserAccount).
-  deletedAt       DateTime?   @map("deleted_at")
-  createdAt       DateTime    @default(now()) @map("created_at")
-  updatedAt       DateTime    @updatedAt @map("updated_at")
+  deletedAt             DateTime?        @map("deleted_at")
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  fleet            Fleet?            @relation(fields: [fleetId], references: [id], onDelete: SetNull)
+  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleet            Fleet?               @relation(fields: [fleetId], references: [id], onDelete: SetNull)
   tripCompositions TripComposition[]
   tags             VehicleTag[]
   telemetry        Telemetry[]
+  maintenances     VehicleMaintenance[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -449,6 +498,29 @@ model Vehicle {
   @@index([tenantId])
   @@index([fleetId])
   @@map("vehicles")
+}
+
+/// Registro de manutencao do veiculo. Modulo de negocio completo (agendamento,
+/// custo, oficina, pecas...) fica para uma fase dedicada -- aqui existe o
+/// suficiente para o relacionamento Vehicle->Manutencoes e para a regra de
+/// exclusao ("nao excluir veiculo com manutencao aberta").
+model VehicleMaintenance {
+  id          String                   @id @default(uuid()) @db.Uuid
+  tenantId    String                   @map("tenant_id") @db.Uuid
+  vehicleId   String                   @map("vehicle_id") @db.Uuid
+  status      VehicleMaintenanceStatus @default(OPEN)
+  description String?
+  scheduledAt DateTime?                @map("scheduled_at")
+  completedAt DateTime?                @map("completed_at")
+  createdAt   DateTime                 @default(now()) @map("created_at")
+  updatedAt   DateTime                 @updatedAt @map("updated_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([vehicleId, status])
+  @@map("vehicle_maintenances")
 }
 
 /// Implemento (carreta simples, bitrem, rodotrem, vanderleia, reboque,

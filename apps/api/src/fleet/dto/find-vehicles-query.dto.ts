@@ -1,8 +1,21 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { VehicleType } from '@prisma/client';
-import { IsBoolean, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { ParseBooleanQuery } from '../../common/decorators/parse-boolean-query.decorator';
+import { VehicleStatus, VehicleType } from '@prisma/client';
+import { Type } from 'class-transformer';
+import {
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+
+const MIN_VEHICLE_YEAR = 1950;
+const currentYear = new Date().getFullYear();
 
 export enum VehicleSortField {
   PLATE = 'plate',
@@ -28,11 +41,16 @@ export class FindVehiclesQueryDto extends PaginationQueryDto {
   @IsEnum(VehicleType)
   type?: VehicleType;
 
-  @ApiPropertyOptional({ description: 'Filtra por status (ativo/inativo).' })
+  @ApiPropertyOptional({ description: 'Filtra por categoria (parcial).' })
   @IsOptional()
-  @ParseBooleanQuery()
-  @IsBoolean()
-  isActive?: boolean;
+  @IsString()
+  @MaxLength(50)
+  category?: string;
+
+  @ApiPropertyOptional({ enum: VehicleStatus, description: 'Filtra por situacao do veiculo.' })
+  @IsOptional()
+  @IsEnum(VehicleStatus)
+  status?: VehicleStatus;
 
   @ApiPropertyOptional({ description: 'Filtra por placa (parcial, com ou sem formatacao).' })
   @IsOptional()
@@ -51,6 +69,22 @@ export class FindVehiclesQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(50)
   model?: string;
+
+  @ApiPropertyOptional({ description: 'Filtra por ano de fabricacao exato.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_VEHICLE_YEAR)
+  @Max(currentYear + 1)
+  manufactureYear?: number;
+
+  @ApiPropertyOptional({ description: 'Filtra por ano do modelo exato.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_VEHICLE_YEAR)
+  @Max(currentYear + 1)
+  modelYear?: number;
 
   @ApiPropertyOptional({ enum: VehicleSortField, default: VehicleSortField.PLATE })
   @IsOptional()

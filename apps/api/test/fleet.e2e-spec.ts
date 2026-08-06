@@ -216,6 +216,65 @@ describe('Fleet (e2e)', () => {
         .expect(400);
     });
 
+    it('rejeita chassi invalido com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehChassisInvalid');
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(buildVehiclePayload({ chassisNumber: 'CHASSI-CURTO' }))
+        .expect(400);
+    });
+
+    it('rejeita ano do modelo anterior ao ano de fabricacao (ano inconsistente) com 409', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehYearInconsistent');
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(buildVehiclePayload({ manufactureYear: 2023, modelYear: 2022 }))
+        .expect(409);
+    });
+
+    it('rejeita quilometragem negativa com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehOdometerNegative');
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(buildVehiclePayload({ odometerKm: -1 }))
+        .expect(400);
+    });
+
+    it('aceita quilometragem igual a zero', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehOdometerZero');
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send(buildVehiclePayload({ odometerKm: 0 }))
+        .expect(201);
+    });
+
+    it('rejeita capacidades zero ou negativas quando informadas com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehCapacityInvalid');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ tankCapacityLiters: 0 }))
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ grossWeightKg: -10 }))
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload({ axleCount: 1 }))
+        .expect(400);
+    });
+
     it('aceita placa no formato antigo e Mercosul', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehPlateFormats');
       const auth = `Bearer ${adminAccessToken}`;
@@ -260,10 +319,27 @@ describe('Fleet (e2e)', () => {
           color: 'Branco',
           type: 'TRACTOR_UNIT',
           category: 'Cavalo Trucado',
+          fuelType: 'DIESEL_S10',
+          tankCapacityLiters: 400,
+          averageConsumptionKmL: 3.5,
+          odometerKm: 12000,
+          grossWeightKg: 23000,
+          netWeightKg: 8000,
+          cargoCapacityKg: 15000,
+          axleCount: 3,
         })
         .expect(201);
       const vehicleId = createRes.body.data.id;
       expect(createRes.body.data.fleetId).toBe(fleetId);
+      expect(createRes.body.data.status).toBe('ACTIVE');
+      expect(createRes.body.data.fuelType).toBe('DIESEL_S10');
+      expect(createRes.body.data.tankCapacityLiters).toBe(400);
+      expect(createRes.body.data.averageConsumptionKmL).toBe(3.5);
+      expect(createRes.body.data.odometerKm).toBe(12000);
+      expect(createRes.body.data.grossWeightKg).toBe(23000);
+      expect(createRes.body.data.netWeightKg).toBe(8000);
+      expect(createRes.body.data.cargoCapacityKg).toBe(15000);
+      expect(createRes.body.data.axleCount).toBe(3);
 
       // Placa duplicada -> 409.
       await request(app.getHttpServer())
@@ -301,11 +377,18 @@ describe('Fleet (e2e)', () => {
         .expect(200);
       expect(updateRes.body.data.color).toBe('Prata');
 
+      const statusRes = await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'MAINTENANCE' })
+        .expect(200);
+      expect(statusRes.body.data.status).toBe('MAINTENANCE');
+
       await request(app.getHttpServer())
         .patch(`/api/v1/vehicles/${vehicleId}/status`)
         .set('Authorization', auth)
-        .send({ isActive: false })
-        .expect(200);
+        .send({ status: 'INVALIDO' })
+        .expect(400);
 
       await request(app.getHttpServer())
         .delete(`/api/v1/vehicles/${vehicleId}`)
@@ -377,24 +460,39 @@ describe('Fleet (e2e)', () => {
       const alvo = await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send(buildVehiclePayload({ brand: 'Scania', model: 'R450', fleetId }))
+        .send(
+          buildVehiclePayload({
+            brand: 'Scania',
+            model: 'R450',
+            fleetId,
+            category: 'Cavalo Trucado',
+            manufactureYear: 2022,
+          }),
+        )
         .expect(201);
 
       await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
-        .send(buildVehiclePayload({ brand: 'Mercedes-Benz', model: 'Actros' }))
+        .send(
+          buildVehiclePayload({
+            brand: 'Mercedes-Benz',
+            model: 'Actros',
+            category: 'Toco',
+            manufactureYear: 2023,
+          }),
+        )
         .expect(201);
 
-      const inactive = await request(app.getHttpServer())
+      const inMaintenance = await request(app.getHttpServer())
         .post('/api/v1/vehicles')
         .set('Authorization', auth)
         .send(buildVehiclePayload({ brand: 'Volkswagen', model: 'Constellation' }))
         .expect(201);
       await request(app.getHttpServer())
-        .patch(`/api/v1/vehicles/${inactive.body.data.id}/status`)
+        .patch(`/api/v1/vehicles/${inMaintenance.body.data.id}/status`)
         .set('Authorization', auth)
-        .send({ isActive: false })
+        .send({ status: 'MAINTENANCE' })
         .expect(200);
 
       const byPlate = await request(app.getHttpServer())
@@ -418,8 +516,22 @@ describe('Fleet (e2e)', () => {
       expect(byModel.body.data.items).toHaveLength(1);
       expect(byModel.body.data.items[0].model).toBe('Actros');
 
+      const byCategory = await request(app.getHttpServer())
+        .get('/api/v1/vehicles?category=Cavalo')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byCategory.body.data.items).toHaveLength(1);
+      expect(byCategory.body.data.items[0].brand).toBe('Scania');
+
+      const byManufactureYear = await request(app.getHttpServer())
+        .get('/api/v1/vehicles?manufactureYear=2022')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byManufactureYear.body.data.items).toHaveLength(1);
+      expect(byManufactureYear.body.data.items[0].brand).toBe('Scania');
+
       const byStatus = await request(app.getHttpServer())
-        .get('/api/v1/vehicles?isActive=false')
+        .get('/api/v1/vehicles?status=MAINTENANCE')
         .set('Authorization', auth)
         .expect(200);
       expect(byStatus.body.data.items).toHaveLength(1);
@@ -433,7 +545,7 @@ describe('Fleet (e2e)', () => {
       expect(byFleet.body.data.items[0].id).toBe(alvo.body.data.id);
 
       const paginated = await request(app.getHttpServer())
-        .get('/api/v1/vehicles?isActive=true&page=1&pageSize=1&sortBy=brand&sortOrder=asc')
+        .get('/api/v1/vehicles?status=ACTIVE&page=1&pageSize=1&sortBy=brand&sortOrder=asc')
         .set('Authorization', auth)
         .expect(200);
       expect(paginated.body.data.items).toHaveLength(1);
@@ -506,6 +618,89 @@ describe('Fleet (e2e)', () => {
         .delete(`/api/v1/vehicles/${vehicle2Id}`)
         .set('Authorization', auth)
         .expect(409);
+    });
+
+    it('bloqueia exclusao quando ha manutencao aberta vinculada', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('VehMaintGuard');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const vehicleRes = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload())
+        .expect(201);
+      const vehicleId = vehicleRes.body.data.id;
+
+      // Nao ha endpoint de CRUD de manutencao nesta fase (fora do escopo) --
+      // o registro e criado diretamente via Prisma, mesmo padrao usado para
+      // Trip/TripComposition no teste de guarda acima.
+      const maintenance = await prisma.vehicleMaintenance.create({
+        data: { tenantId, vehicleId, status: 'OPEN', description: 'Troca de pneus' },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', auth)
+        .expect(409);
+
+      // Conclui a manutencao -- exclusao passa a ser permitida.
+      await prisma.vehicleMaintenance.update({
+        where: { id: maintenance.id },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', auth)
+        .expect(204);
+    });
+
+    it('retorna o historico de auditoria do veiculo (GET /vehicles/:id/history)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehHistory');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const vehicleRes = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload())
+        .expect(201);
+      const vehicleId = vehicleRes.body.data.id;
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', auth)
+        .send({ color: 'Prata' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'MAINTENANCE' })
+        .expect(200);
+
+      const historyRes = await request(app.getHttpServer())
+        .get(`/api/v1/vehicles/${vehicleId}/history`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      expect(historyRes.body.data.items.length).toBeGreaterThanOrEqual(3);
+      const actions = historyRes.body.data.items.map((i: { action: string }) => i.action);
+      expect(actions).toEqual(
+        expect.arrayContaining(['vehicle.created', 'vehicle.updated', 'vehicle.status_changed']),
+      );
+      // Ordenado do mais recente para o mais antigo.
+      expect(historyRes.body.data.items[0].action).toBe('vehicle.status_changed');
+      expect(historyRes.body.data.items[0].entityId).toBe(vehicleId);
+      expect(historyRes.body.data.items[0].userId).toBeTruthy();
+      expect(historyRes.body.data.meta.total).toBeGreaterThanOrEqual(3);
+    });
+
+    it('historico de veiculo inexistente retorna 404', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehHistoryMissing');
+      await request(app.getHttpServer())
+        .get(`/api/v1/vehicles/${randomUUID()}/history`)
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(404);
     });
   });
 

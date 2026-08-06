@@ -1,9 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { VehicleType } from '@prisma/client';
+import { VehicleFuelType, VehicleType } from '@prisma/client';
 import {
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   IsUUID,
   Max,
@@ -11,6 +13,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { IsChassisNumber } from '../validators/is-chassis-number.validator';
 import { IsRenavam } from '../validators/is-renavam.validator';
 import { IsVehiclePlate } from '../validators/is-vehicle-plate.validator';
 
@@ -32,10 +35,12 @@ export class CreateVehicleDto {
   @IsRenavam()
   renavam?: string;
 
-  @ApiPropertyOptional({ example: '9BWZZZ377VT004251' })
+  @ApiPropertyOptional({
+    example: '9BWZZZ377VT004251',
+    description: 'Chassi (VIN, 17 caracteres alfanumericos, sem I/O/Q).',
+  })
   @IsOptional()
-  @IsString()
-  @MaxLength(30)
+  @IsChassisNumber()
   chassisNumber?: string;
 
   @ApiProperty({ example: 'Volvo' })
@@ -81,6 +86,53 @@ export class CreateVehicleDto {
   @IsString()
   @MaxLength(50)
   category?: string;
+
+  @ApiPropertyOptional({ enum: VehicleFuelType, example: VehicleFuelType.DIESEL_S10 })
+  @IsOptional()
+  @IsEnum(VehicleFuelType, { message: 'fuelType invalido.' })
+  fuelType?: VehicleFuelType;
+
+  @ApiPropertyOptional({ example: 400, description: 'Capacidade do tanque, em litros.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive({ message: 'tankCapacityLiters deve ser maior que zero quando informado.' })
+  tankCapacityLiters?: number;
+
+  @ApiPropertyOptional({ example: 3.5, description: 'Consumo medio, em km/litro.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive({ message: 'averageConsumptionKmL deve ser maior que zero quando informado.' })
+  averageConsumptionKmL?: number;
+
+  @ApiPropertyOptional({ example: 120000, description: 'Quilometragem atual do veiculo.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0, { message: 'odometerKm deve ser maior ou igual a zero.' })
+  odometerKm?: number;
+
+  @ApiPropertyOptional({ example: 23000, description: 'Peso Bruto Total (PBT), em kg.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive({ message: 'grossWeightKg deve ser maior que zero quando informado.' })
+  grossWeightKg?: number;
+
+  @ApiPropertyOptional({ example: 8000, description: 'Peso liquido (tara), em kg.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive({ message: 'netWeightKg deve ser maior que zero quando informado.' })
+  netWeightKg?: number;
+
+  @ApiPropertyOptional({ example: 15000, description: 'Capacidade de carga, em kg.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive({ message: 'cargoCapacityKg deve ser maior que zero quando informado.' })
+  cargoCapacityKg?: number;
+
+  @ApiPropertyOptional({ example: 3, description: 'Quantidade de eixos do veiculo.' })
+  @IsOptional()
+  @IsInt()
+  @Min(2, { message: 'axleCount deve ser no minimo 2.' })
+  axleCount?: number;
 
   @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()

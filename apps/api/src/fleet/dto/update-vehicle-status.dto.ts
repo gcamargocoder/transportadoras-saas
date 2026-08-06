@@ -1,8 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean } from 'class-validator';
+import { VehicleStatus } from '@prisma/client';
+import { IsEnum } from 'class-validator';
 
 export class UpdateVehicleStatusDto {
-  @ApiProperty({ example: false, description: 'true = ativa o veiculo; false = desativa.' })
-  @IsBoolean()
-  isActive!: boolean;
+  @ApiProperty({
+    enum: VehicleStatus,
+    example: VehicleStatus.MAINTENANCE,
+    description: 'Situacao do veiculo: ACTIVE, INACTIVE, MAINTENANCE ou SOLD.',
+  })
+  @IsEnum(VehicleStatus, { message: 'status invalido.' })
+  status!: VehicleStatus;
 }

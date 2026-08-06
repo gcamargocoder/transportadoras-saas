@@ -1,9 +1,6 @@
-import { Prisma, TripMetrics } from '@prisma/client';
+import { TripMetrics } from '@prisma/client';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { TripMetricsEntity } from '../entities/trip-metrics.entity';
-
-function toNumberOrNull(value: Prisma.Decimal | null): number | null {
-  return value === null ? null : value.toNumber();
-}
 
 export function toTripMetricsEntity(metrics: TripMetrics): TripMetricsEntity {
   const entity = new TripMetricsEntity();

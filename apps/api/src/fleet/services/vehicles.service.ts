@@ -1,9 +1,18 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, TripStatus, Vehicle } from '@prisma/client';
+import {
+  Prisma,
+  TripStatus,
+  Vehicle,
+  VehicleMaintenanceStatus,
+  VehicleStatus,
+} from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
+import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
+import { toAuditLogEntity } from '../../audit/mappers/audit-log.mapper';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { compact } from '../../common/utils/compact.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -30,7 +39,12 @@ export class VehiclesService {
       deletedAt: null,
       ...(query.fleetId ? { fleetId: query.fleetId } : {}),
       ...(query.type ? { type: query.type } : {}),
-      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.category
+        ? { category: { contains: query.category, mode: Prisma.QueryMode.insensitive } }
+        : {}),
+      ...(query.manufactureYear !== undefined ? { manufactureYear: query.manufactureYear } : {}),
+      ...(query.modelYear !== undefined ? { modelYear: query.modelYear } : {}),
       ...(query.plate
         ? { plate: { contains: normalizePlate(query.plate), mode: Prisma.QueryMode.insensitive } }
         : {}),
@@ -77,6 +91,25 @@ export class VehiclesService {
     return toVehicleEntity(await this.findActiveOrThrow(tenantId, id));
   }
 
+  // Historico de auditoria do veiculo (AuditService.findByEntity e generico
+  // -- so filtramos entityName='Vehicle'). Confirma que o veiculo existe e
+  // pertence ao tenant antes de consultar, mesmo padrao de isolamento usado
+  // em todo o resto do modulo.
+  async getHistory(
+    tenantId: string,
+    id: string,
+    pagination: PaginationQueryDto,
+  ): Promise<PaginatedAuditLogEntity> {
+    await this.findActiveOrThrow(tenantId, id);
+
+    const { items, total } = await this.audit.findByEntity(tenantId, 'Vehicle', id, pagination);
+
+    const result = new PaginatedAuditLogEntity();
+    result.items = items.map(toAuditLogEntity);
+    result.meta = buildPaginationMeta(total, pagination.page, pagination.pageSize);
+    return result;
+  }
+
   async create(
     tenantId: string,
     dto: CreateVehicleDto,
@@ -84,6 +117,7 @@ export class VehiclesService {
     metadata: RequestMetadata,
   ): Promise<VehicleEntity> {
     const plate = normalizePlate(dto.plate);
+    this.assertYearConsistency(dto.manufactureYear, dto.modelYear);
     await this.assertUniqueFields(tenantId, {
       plate,
       renavam: dto.renavam,
@@ -100,7 +134,6 @@ export class VehiclesService {
         type: dto.type,
         brand: dto.brand,
         model: dto.model,
-        isActive: true,
         ...compact({
           fleetId: dto.fleetId,
           renavam: dto.renavam,
@@ -109,6 +142,14 @@ export class VehiclesService {
           modelYear: dto.modelYear,
           color: dto.color,
           category: dto.category,
+          fuelType: dto.fuelType,
+          tankCapacityLiters: dto.tankCapacityLiters,
+          averageConsumptionKmL: dto.averageConsumptionKmL,
+          odometerKm: dto.odometerKm,
+          grossWeightKg: dto.grossWeightKg,
+          netWeightKg: dto.netWeightKg,
+          cargoCapacityKg: dto.cargoCapacityKg,
+          axleCount: dto.axleCount,
           notes: dto.notes,
         }),
       },
@@ -143,6 +184,10 @@ export class VehiclesService {
     const before = await this.findActiveOrThrow(tenantId, id);
 
     const plate = dto.plate ? normalizePlate(dto.plate) : undefined;
+    this.assertYearConsistency(
+      dto.manufactureYear ?? before.manufactureYear ?? undefined,
+      dto.modelYear ?? before.modelYear ?? undefined,
+    );
     await this.assertUniqueFields(
       tenantId,
       { plate, renavam: dto.renavam, chassisNumber: dto.chassisNumber },
@@ -166,6 +211,14 @@ export class VehiclesService {
         color: dto.color,
         type: dto.type,
         category: dto.category,
+        fuelType: dto.fuelType,
+        tankCapacityLiters: dto.tankCapacityLiters,
+        averageConsumptionKmL: dto.averageConsumptionKmL,
+        odometerKm: dto.odometerKm,
+        grossWeightKg: dto.grossWeightKg,
+        netWeightKg: dto.netWeightKg,
+        cargoCapacityKg: dto.cargoCapacityKg,
+        axleCount: dto.axleCount,
         notes: dto.notes,
       }),
     });
@@ -196,7 +249,7 @@ export class VehiclesService {
 
     const vehicle = await this.prisma.vehicle.update({
       where: { id },
-      data: { isActive: dto.isActive },
+      data: { status: dto.status },
     });
 
     await this.audit.log({
@@ -205,8 +258,8 @@ export class VehiclesService {
       action: 'vehicle.status_changed',
       entityName: 'Vehicle',
       entityId: id,
-      previousValue: { isActive: before.isActive },
-      newValue: { isActive: vehicle.isActive },
+      previousValue: { status: before.status },
+      newValue: { status: vehicle.status },
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
@@ -224,11 +277,12 @@ export class VehiclesService {
 
     // "viagem em andamento" = composicao deste veiculo ligada a um Trip
     // IN_PROGRESS. "composicao ativa" = composicao deste veiculo ainda nao
-    // concluida/cancelada (sem trip ainda, ou trip PLANNED/IN_PROGRESS) --
-    // os dois contadores podem se sobrepor, o que e aceitavel para a
-    // mensagem de erro (mesmo padrao usado no bloqueio de exclusao de
-    // Tenant/Driver: contadores informativos, nao mutuamente exclusivos).
-    const [activeTrips, activeCompositions] = await Promise.all([
+    // concluida/cancelada (sem trip ainda, ou trip PLANNED/IN_PROGRESS).
+    // "manutencao aberta" = VehicleMaintenance.status = OPEN. Os contadores
+    // podem se sobrepor, o que e aceitavel para a mensagem de erro (mesmo
+    // padrao usado no bloqueio de exclusao de Tenant/Driver: contadores
+    // informativos, nao mutuamente exclusivos).
+    const [activeTrips, activeCompositions, openMaintenances] = await Promise.all([
       this.prisma.tripComposition.count({
         where: { tenantId, vehicleId: id, trip: { status: TripStatus.IN_PROGRESS } },
       }),
@@ -242,18 +296,22 @@ export class VehiclesService {
           ],
         },
       }),
+      this.prisma.vehicleMaintenance.count({
+        where: { tenantId, vehicleId: id, status: VehicleMaintenanceStatus.OPEN },
+      }),
     ]);
-    if (hasActiveRelationship({ activeTrips, activeCompositions })) {
+    if (hasActiveRelationship({ activeTrips, activeCompositions, openMaintenances })) {
       throw new ConflictException(
-        'Nao e possivel excluir este veiculo: existem viagens em andamento ' +
-          `(${activeTrips}) ou composicoes ativas (${activeCompositions}) vinculadas. ` +
-          'Finalize as viagens e remova as composicoes antes de excluir o veiculo.',
+        'Nao e possivel excluir este veiculo: existem viagens ativas ' +
+          `(${activeTrips} em andamento, ${activeCompositions} composicoes ativas) ou ` +
+          `manutencao aberta (${openMaintenances}) vinculadas. Finalize as viagens, remova as ` +
+          'composicoes e conclua/cancele as manutencoes antes de excluir o veiculo.',
       );
     }
 
     await this.prisma.vehicle.update({
       where: { id },
-      data: { deletedAt: new Date(), isActive: false },
+      data: { deletedAt: new Date(), status: VehicleStatus.INACTIVE },
     });
 
     await this.audit.log({
@@ -262,7 +320,7 @@ export class VehiclesService {
       action: 'vehicle.deleted',
       entityName: 'Vehicle',
       entityId: id,
-      previousValue: toJsonSafe({ plate: before.plate, isActive: before.isActive }),
+      previousValue: toJsonSafe({ plate: before.plate, status: before.status }),
       newValue: null,
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
@@ -277,6 +335,15 @@ export class VehiclesService {
       throw new NotFoundException('Veiculo nao encontrado.');
     }
     return vehicle;
+  }
+
+  private assertYearConsistency(manufactureYear?: number, modelYear?: number): void {
+    if (manufactureYear === undefined || modelYear === undefined) return;
+    if (modelYear < manufactureYear) {
+      throw new ConflictException(
+        'Ano inconsistente: modelYear nao pode ser anterior a manufactureYear.',
+      );
+    }
   }
 
   private async assertFleetBelongsToTenant(tenantId: string, fleetId: string): Promise<void> {

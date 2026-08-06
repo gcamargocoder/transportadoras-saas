@@ -1,4 +1,5 @@
 import { Vehicle } from '@prisma/client';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { VehicleEntity } from '../entities/vehicle.entity';
 
 export function toVehicleEntity(vehicle: Vehicle): VehicleEntity {
@@ -16,8 +17,16 @@ export function toVehicleEntity(vehicle: Vehicle): VehicleEntity {
   entity.color = vehicle.color;
   entity.type = vehicle.type;
   entity.category = vehicle.category;
+  entity.fuelType = vehicle.fuelType;
+  entity.tankCapacityLiters = toNumberOrNull(vehicle.tankCapacityLiters);
+  entity.averageConsumptionKmL = toNumberOrNull(vehicle.averageConsumptionKmL);
+  entity.odometerKm = toNumberOrNull(vehicle.odometerKm);
+  entity.grossWeightKg = toNumberOrNull(vehicle.grossWeightKg);
+  entity.netWeightKg = toNumberOrNull(vehicle.netWeightKg);
+  entity.cargoCapacityKg = toNumberOrNull(vehicle.cargoCapacityKg);
+  entity.axleCount = vehicle.axleCount;
   entity.notes = vehicle.notes;
-  entity.isActive = vehicle.isActive;
+  entity.status = vehicle.status;
   entity.createdAt = vehicle.createdAt;
   entity.updatedAt = vehicle.updatedAt;
   return entity;
