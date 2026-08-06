@@ -34,9 +34,13 @@ datasource db {
 // ============================================================================
 
 enum UserRole {
+  SUPER_ADMIN
   ADMIN
+  MANAGER
   OPERATOR
   DISPATCHER
+  AUDITOR
+  DRIVER
 
   @@map("user_role")
 }
@@ -170,6 +174,8 @@ enum DocumentType {
   CRLV
   ANTT
   CNH
+  MEDICAL_EXAM
+  MOPP
   LICENSING
   INSURANCE
   OTHER
@@ -214,8 +220,16 @@ enum ExternalSystem {
 /// referencia Tenant direta ou indiretamente.
 model Tenant {
   id        String   @id @default(uuid()) @db.Uuid
+  /// Razao social.
   name      String
+  /// Nome fantasia (opcional -- nem toda transportadora usa um).
+  tradeName String?  @map("trade_name")
   document  String   @unique @map("document") @db.VarChar(20) // CNPJ
+  /// Identificador amigavel/URL-safe, unico. Ainda nao usado para roteamento
+  /// (sem subdominio nesta fase) -- preparado para resolucao futura de tenant
+  /// por subdominio/dominio personalizado (ex: "acme" em acme.app.com).
+  slug      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -261,6 +275,7 @@ model TenantSettings {
   alertDelayThresholdMin Int      @default(15) @map("alert_delay_threshold_min")
   timezone               String   @default("America/Sao_Paulo")
   currency               String   @default("BRL") @db.VarChar(3)
+  language               String   @default("pt-BR") @map("language")
   preferences            Json?    @default("{}")
   createdAt              DateTime @default(now()) @map("created_at")
   updatedAt              DateTime @updatedAt @map("updated_at")
@@ -274,25 +289,50 @@ model TenantSettings {
 /// podem opcionalmente ter uma UserAccount vinculada para login no app --
 /// ver Driver.userAccountId.
 model UserAccount {
-  id           String   @id @default(uuid()) @db.Uuid
-  tenantId     String   @map("tenant_id") @db.Uuid
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
   name         String
   email        String
-  passwordHash String   @map("password_hash")
-  role         UserRole @default(OPERATOR)
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(OPERATOR)
+  isActive     Boolean   @default(true) @map("is_active")
+  /// Exclusao logica (distinta de isActive: usuario desativado pode ser
+  /// reativado; usuario excluido nao aparece mais em nenhuma listagem).
+  deletedAt    DateTime? @map("deleted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
   tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   driverProfile      Driver?
   auditLogs          AuditLog[]
   acknowledgedAlerts Alert[]        @relation("AlertAcknowledgedBy")
   notifications      Notification[]
+  refreshTokens      RefreshToken[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
   @@map("user_accounts")
+}
+
+/// Sessao de refresh token (JWT de longa duracao), persistida para permitir
+/// revogacao/rotacao -- um JWT sozinho nao pode ser invalidado antes de
+/// expirar. O id do registro E o "jti" embutido no payload do refresh token.
+/// Nao carrega tenant_id: autenticacao e por usuario, o isolamento por
+/// tenant do restante do sistema e resolvido via UserAccount.tenantId.
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash")
+  userAgent String?   @map("user_agent")
+  ipAddress String?   @map("ip_address") @db.VarChar(45)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user UserAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
 }
 
 /// Trilha de auditoria geral da plataforma (nao apenas pedagio). Registrada
@@ -422,24 +462,44 @@ model VehicleTag {
 // ============================================================================
 
 /// Perfil operacional do motorista. userAccountId e opcional -- so existe
-/// quando o motorista tem login no app (Driver App).
+/// quando o motorista tem login no app (Driver App). Documentos (CNH,
+/// exame medico, MOPP, ANTT...) NAO sao campos aqui -- usam o model
+/// Document generico/polimorfico (ownerType=DRIVER, ownerId=Driver.id).
 model Driver {
-  id            String   @id @default(uuid()) @db.Uuid
-  tenantId      String   @map("tenant_id") @db.Uuid
-  userAccountId String?  @unique @map("user_account_id") @db.Uuid
-  name          String
-  cnhNumber     String   @map("cnh_number") @db.VarChar(20)
-  cnhCategory   String   @map("cnh_category") @db.VarChar(5)
-  phone         String?
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  userAccountId   String?   @unique @map("user_account_id") @db.Uuid
+  name            String
+  cpf             String    @db.VarChar(11)
+  rg              String?   @db.VarChar(20)
+  cnhNumber       String    @map("cnh_number") @db.VarChar(20)
+  cnhCategory     String    @map("cnh_category") @db.VarChar(5)
+  cnhExpiresAt    DateTime  @map("cnh_expires_at")
+  birthDate       DateTime? @map("birth_date")
+  phone           String?
+  email           String?
+  address         String?
+  city            String?
+  state           String?   @db.VarChar(2)
+  zipCode         String?   @map("zip_code") @db.VarChar(9)
+  notes           String?
+  admissionDate   DateTime? @map("admission_date")
+  /// Preenchida no desligamento do motorista -- distinta de deletedAt
+  /// (desligado ainda e um registro historico valido; excluido logicamente
+  /// nao deveria mais aparecer em listagens).
+  terminationDate DateTime? @map("termination_date")
+  isActive        Boolean   @default(true) @map("is_active")
+  /// Exclusao logica (mesmo padrao de UserAccount.deletedAt).
+  deletedAt       DateTime? @map("deleted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userAccount UserAccount?  @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
   trips       Trip[]
   shifts      DriverShift[]
 
+  @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
   @@index([tenantId])
   @@map("drivers")

@@ -1,0 +1,7 @@
+{
+  "extends": "@transportadoras/config-typescript/nestjs.json",
+  "compilerOptions": {
+    "baseUrl": "./"
+  },
+  "include": ["src", "test"]
+}
