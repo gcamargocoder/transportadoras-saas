@@ -6,9 +6,11 @@ import { CommonModule } from './common/common.module';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 import { DriversModule } from './drivers/drivers.module';
+import { FleetModule } from './fleet/fleet.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenantsModule } from './tenants/tenants.module';
+import { TripsModule } from './trips/trips.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -30,8 +32,10 @@ import { UsersModule } from './users/users.module';
     TenantsModule,
     UsersModule,
     DriversModule,
-    // Modulos de negocio (veiculos, viagens, pedagios...) serao registrados
-    // aqui conforme forem implementados.
+    FleetModule,
+    TripsModule,
+    // Modulos de negocio (pedagios...) serao registrados aqui conforme
+    // forem implementados.
   ],
 })
 export class AppModule {}

@@ -53,11 +53,24 @@ enum FleetType {
   @@map("fleet_type")
 }
 
+enum VehicleType {
+  TRACTOR_UNIT
+  TRUCK
+  VAN
+  PICKUP
+  OTHER
+
+  @@map("vehicle_type")
+}
+
 enum TrailerType {
   SIMPLE
   BITREM
   RODOTREM
   VANDERLEIA
+  FULL_TRAILER
+  SEMI_TRAILER
+  DOLLY
   OTHER
 
   @@map("trailer_type")
@@ -70,6 +83,15 @@ enum TripStatus {
   CANCELLED
 
   @@map("trip_status")
+}
+
+enum TripPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+
+  @@map("trip_priority")
 }
 
 enum RouteVersionReason {
@@ -370,6 +392,9 @@ model Fleet {
   name       String
   type       FleetType @default(OWN)
   locationId String?   @map("location_id") @db.Uuid // base/filial, opcional
+  isActive   Boolean   @default(true) @map("is_active")
+  /// Exclusao logica (mesmo padrao ja usado em Driver/UserAccount).
+  deletedAt  DateTime? @map("deleted_at")
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
@@ -384,15 +409,30 @@ model Fleet {
 /// Unidade tratora (cavalo mecanico). NAO carrega mais eixos/categoria fixos
 /// -- isso e derivado de AxleConfiguration por composicao de viagem, porque
 /// o mesmo cavalo pode puxar implementos diferentes em viagens diferentes.
+/// "category" e texto livre (proposital) porque a nomenclatura de categoria
+/// de veiculo no transporte rodoviario brasileiro varia muito por empresa/
+/// regiao (ex: "Toco", "Truck 6x2", "Cavalo Trucado") -- nao vale a pena
+/// travar num enum fixo.
 model Vehicle {
-  id        String   @id @default(uuid()) @db.Uuid
-  tenantId  String   @map("tenant_id") @db.Uuid
-  fleetId   String?  @map("fleet_id") @db.Uuid
-  plate     String   @db.VarChar(10)
-  model     String?
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id              String      @id @default(uuid()) @db.Uuid
+  tenantId        String      @map("tenant_id") @db.Uuid
+  fleetId         String?     @map("fleet_id") @db.Uuid
+  plate           String      @db.VarChar(10)
+  renavam         String?     @db.VarChar(20)
+  chassisNumber   String?     @map("chassis_number") @db.VarChar(30)
+  brand           String?
+  model           String?
+  manufactureYear Int?        @map("manufacture_year")
+  modelYear       Int?        @map("model_year")
+  color           String?
+  type            VehicleType @default(TRACTOR_UNIT)
+  category        String?
+  notes           String?
+  isActive        Boolean     @default(true) @map("is_active")
+  /// Exclusao logica (mesmo padrao ja usado em Driver/UserAccount).
+  deletedAt       DateTime?   @map("deleted_at")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
 
   tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fleet            Fleet?            @relation(fields: [fleetId], references: [id], onDelete: SetNull)
@@ -401,18 +441,25 @@ model Vehicle {
   telemetry        Telemetry[]
 
   @@unique([tenantId, plate])
+  @@unique([tenantId, renavam])
+  @@unique([tenantId, chassisNumber])
   @@index([tenantId])
+  @@index([fleetId])
   @@map("vehicles")
 }
 
-/// Implemento (carreta simples, bitrem, rodotrem, vanderleia). Combinado ao
-/// Vehicle via TripComposition/TripCompositionTrailer em cada viagem.
+/// Implemento (carreta simples, bitrem, rodotrem, vanderleia, reboque,
+/// semirreboque, dolly). Combinado ao Vehicle via TripComposition/
+/// TripCompositionTrailer em cada composicao.
 model Trailer {
   id        String      @id @default(uuid()) @db.Uuid
   tenantId  String      @map("tenant_id") @db.Uuid
   plate     String      @db.VarChar(10)
   type      TrailerType @default(SIMPLE)
+  notes     String?
   isActive  Boolean     @default(true) @map("is_active")
+  /// Exclusao logica (mesmo padrao ja usado em Driver/UserAccount).
+  deletedAt DateTime?   @map("deleted_at")
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
@@ -439,13 +486,14 @@ model TagProvider {
 /// Vinculo entre o veiculo do tenant e sua tag de pedagio, preparando a
 /// importacao futura de extratos por operadora.
 model VehicleTag {
-  id            String   @id @default(uuid()) @db.Uuid
-  tenantId      String   @map("tenant_id") @db.Uuid
-  vehicleId     String   @map("vehicle_id") @db.Uuid
-  tagProviderId String   @map("tag_provider_id") @db.Uuid
-  tagNumber     String   @map("tag_number")
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  vehicleId     String    @map("vehicle_id") @db.Uuid
+  tagProviderId String    @map("tag_provider_id") @db.Uuid
+  tagNumber     String    @map("tag_number")
+  isActive      Boolean   @default(true) @map("is_active")
+  activatedAt   DateTime? @map("activated_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   vehicle     Vehicle     @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -588,17 +636,21 @@ model Location {
 // COMPOSICAO DE VEICULO — cavalo + implementos + eixos
 // ============================================================================
 
-/// Composicao efetivamente usada em uma viagem: qual cavalo mecanico.
-/// 1:1 com Trip.
+/// Composicao de cavalo mecanico + implementos, com configuracao de eixos.
+/// tripId e OPCIONAL de proposito: a composicao pode ser montada/testada
+/// pela gestao de frota (esta fase) ANTES de existir uma Trip -- o modulo
+/// de Viagens (fase futura) associa tripId quando a viagem e criada. Quando
+/// associada, e 1:1 com Trip (unique).
 model TripComposition {
   id        String   @id @default(uuid()) @db.Uuid
   tenantId  String   @map("tenant_id") @db.Uuid
-  tripId    String   @unique @map("trip_id") @db.Uuid
+  tripId    String?  @unique @map("trip_id") @db.Uuid
   vehicleId String   @map("vehicle_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   tenant            Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip              Trip                     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  trip              Trip?                    @relation(fields: [tripId], references: [id], onDelete: Cascade)
   vehicle           Vehicle                  @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   trailers          TripCompositionTrailer[]
   axleConfiguration AxleConfiguration?
@@ -644,6 +696,7 @@ model AxleConfiguration {
   /// derivada dos campos acima -- usada para casar com TollRate.axleCategory.
   billableCategory  String   @map("billable_category")
   createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tripComposition TripComposition @relation(fields: [tripCompositionId], references: [id], onDelete: Cascade)
@@ -659,18 +712,24 @@ model AxleConfiguration {
 /// Viagem. Estados: PLANNED -> IN_PROGRESS -> COMPLETED | CANCELLED.
 /// Replanejamento e um evento dentro de IN_PROGRESS, nao um status proprio.
 model Trip {
-  id                    String     @id @default(uuid()) @db.Uuid
-  tenantId              String     @map("tenant_id") @db.Uuid
-  customerId            String?    @map("customer_id") @db.Uuid
-  driverId              String?    @map("driver_id") @db.Uuid
-  originLocationId      String     @map("origin_location_id") @db.Uuid
-  destinationLocationId String     @map("destination_location_id") @db.Uuid
-  status                TripStatus @default(PLANNED)
-  plannedDeparture      DateTime?  @map("planned_departure")
-  actualDeparture       DateTime?  @map("actual_departure")
-  actualArrival         DateTime?  @map("actual_arrival")
-  createdAt             DateTime   @default(now()) @map("created_at")
-  updatedAt             DateTime   @updatedAt @map("updated_at")
+  id                    String       @id @default(uuid()) @db.Uuid
+  tenantId              String       @map("tenant_id") @db.Uuid
+  customerId            String?      @map("customer_id") @db.Uuid
+  driverId              String?      @map("driver_id") @db.Uuid
+  originLocationId      String       @map("origin_location_id") @db.Uuid
+  destinationLocationId String       @map("destination_location_id") @db.Uuid
+  status                TripStatus   @default(PLANNED)
+  priority              TripPriority @default(NORMAL)
+  notes                 String?
+  plannedDeparture      DateTime?    @map("planned_departure")
+  plannedArrival        DateTime?    @map("planned_arrival")
+  actualDeparture       DateTime?    @map("actual_departure")
+  actualArrival         DateTime?    @map("actual_arrival")
+  /// Exclusao logica -- so permitida enquanto a viagem nunca saiu do
+  /// planejamento (ver regra em TripsService: apenas PLANNED/CANCELLED).
+  deletedAt             DateTime?    @map("deleted_at")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  updatedAt             DateTime     @updatedAt @map("updated_at")
 
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
