@@ -1,17 +1,18 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { Providers } from './providers';
 
-// Layout raiz minimo. Nenhum componente de navegacao, autenticacao
-// ou dashboard de negocio foi criado nesta etapa.
 export const metadata: Metadata = {
   title: 'Painel Administrativo — Transportadoras SaaS',
-  description: 'Fundacao do painel administrativo (em construcao)',
+  description: 'Gestão de viagens, frota, pedágios e financeiro para transportadoras.',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: React.ReactNode }): JSX.Element {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
