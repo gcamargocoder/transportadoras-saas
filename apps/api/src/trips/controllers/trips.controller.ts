@@ -21,8 +21,22 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { FindTripExpensesQueryDto } from '../../trip-expenses/dto/find-trip-expenses-query.dto';
+import { PaginatedTripExpensesEntity } from '../../trip-expenses/entities/paginated-trip-expenses.entity';
+import { TripFinancialSummaryEntity } from '../../trip-expenses/entities/trip-financial-summary.entity';
+import { TripExpensesService } from '../../trip-expenses/services/trip-expenses.service';
+import {
+  TRIP_SETTLEMENT_CLOSE_ROLES,
+  TRIP_SETTLEMENT_READ_ROLES,
+} from '../../trip-settlements/constants/trip-settlement-roles.constants';
+import { CloseTripSettlementDto } from '../../trip-settlements/dto/close-trip-settlement.dto';
+import { TripFinancialDashboardEntity } from '../../trip-settlements/entities/trip-financial-dashboard.entity';
+import { TripSettlementEntity } from '../../trip-settlements/entities/trip-settlement.entity';
+import { TripSettlementsService } from '../../trip-settlements/services/trip-settlements.service';
 import { TRIP_READ_ROLES, TRIP_WRITE_ROLES } from '../constants/trip-roles.constants';
 import { CreateRouteEventDto } from '../dto/create-route-event.dto';
 import { CreateTripDto } from '../dto/create-trip.dto';
@@ -35,6 +49,7 @@ import { PaginatedTripsEntity } from '../entities/paginated-trips.entity';
 import { RouteEventEntity } from '../entities/route-event.entity';
 import { RouteVersionEntity } from '../entities/route-version.entity';
 import { TripMetricsEntity } from '../entities/trip-metrics.entity';
+import { TripSummaryEntity } from '../entities/trip-summary.entity';
 import { TripEntity } from '../entities/trip.entity';
 import { RouteEventsService } from '../services/route-events.service';
 import { RouteVersionsService } from '../services/route-versions.service';
@@ -50,6 +65,8 @@ export class TripsController {
     private readonly routeVersionsService: RouteVersionsService,
     private readonly routeEventsService: RouteEventsService,
     private readonly tripMetricsService: TripMetricsService,
+    private readonly tripExpensesService: TripExpensesService,
+    private readonly tripSettlementsService: TripSettlementsService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -74,14 +91,15 @@ export class TripsController {
   @Roles(...TRIP_WRITE_ROLES)
   @ApiOperation({
     summary:
-      'Planeja uma nova viagem. Cria automaticamente a RouteVersion inicial e o TripMetrics (previstos).',
+      'Planeja uma nova viagem (motorista e composicao/veiculo obrigatorios). Cria ' +
+      'automaticamente a RouteVersion inicial e o TripMetrics (previstos).',
   })
   @ApiCreatedResponse({ type: TripEntity })
   @ApiNotFoundResponse({
     description: 'Cliente, motorista, local ou composicao nao encontrados nesta empresa.',
   })
   @ApiConflictResponse({
-    description: 'Motorista ou composicao indisponiveis no periodo informado.',
+    description: 'Motorista ou veiculo/composicao indisponiveis no periodo informado.',
   })
   create(@Body() dto: CreateTripDto): Promise<TripEntity> {
     return this.tripsService.create(
@@ -117,11 +135,18 @@ export class TripsController {
   @Patch(':id/status')
   @Roles(...TRIP_WRITE_ROLES)
   @ApiOperation({
-    summary: 'Transiciona o status da viagem (PLANNED -> IN_PROGRESS -> COMPLETED).',
+    summary:
+      'Transiciona o status da viagem (PLANNED -> WAITING_DRIVER -> WAITING_DEPARTURE -> ' +
+      'IN_PROGRESS -> PAUSED -> COMPLETED). Ao concluir, registra automaticamente data final, ' +
+      'duracao e (se finalOdometerKm informado) atualiza a quilometragem do veiculo.',
   })
   @ApiOkResponse({ type: TripEntity })
   @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
-  @ApiConflictResponse({ description: 'Transicao de status nao permitida.' })
+  @ApiConflictResponse({
+    description:
+      'Transicao de status nao permitida, ou nao e possivel iniciar (motorista/veiculo ' +
+      'inativo, veiculo em manutencao, motorista/veiculo ja em outra viagem ativa).',
+  })
   updateStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTripStatusDto,
@@ -133,6 +158,35 @@ export class TripsController {
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
+  }
+
+  @Get(':id/timeline')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Timeline de eventos da viagem (criada, motorista/veiculo vinculado, inicio, pausa, ' +
+      'retorno, chegada, conclusao, cancelamento) -- cada evento traz quem, quando, IP e User-Agent.',
+  })
+  @ApiOkResponse({ type: PaginatedAuditLogEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findTimeline(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<PaginatedAuditLogEntity> {
+    return this.tripsService.getTimeline(this.tenantContext.requireTenantId(), id, query);
+  }
+
+  @Get(':id/summary')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Resumo consolidado da viagem: motorista, veiculo, origem, destino, tempo, status, ' +
+      'distancia, pedagios e custos.',
+  })
+  @ApiOkResponse({ type: TripSummaryEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findSummary(@Param('id', ParseUUIDPipe) id: string): Promise<TripSummaryEntity> {
+    return this.tripsService.getSummary(this.tenantContext.requireTenantId(), id);
   }
 
   @Patch(':id/cancel')
@@ -284,6 +338,129 @@ export class TripsController {
       dto,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
+    );
+  }
+
+  // ==========================================================================
+  // DESPESAS (Fase 16) -- sub-recurso de Trip; CRUD completo fica em
+  // /trip-expenses (ver TripExpensesController).
+  // ==========================================================================
+  @Get(':id/expenses')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Lista as despesas registradas na viagem (paginado, mesmos filtros de /trip-expenses).',
+  })
+  @ApiOkResponse({ type: PaginatedTripExpensesEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findExpenses(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Query() query: FindTripExpensesQueryDto,
+  ): Promise<PaginatedTripExpensesEntity> {
+    return this.tripExpensesService.findAllForTrip(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      query,
+    );
+  }
+
+  @Get(':id/financial-summary')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Resumo financeiro da viagem: total, por categoria (combustivel/alimentacao/hospedagem/' +
+      'manutencao/pedagio extra/outros), quantidade, media e maior despesa. Considera apenas ' +
+      'despesas PENDING ou APPROVED.',
+  })
+  @ApiOkResponse({ type: TripFinancialSummaryEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findFinancialSummary(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<TripFinancialSummaryEntity> {
+    return this.tripExpensesService.getFinancialSummary(
+      this.tenantContext.requireTenantId(),
+      tripId,
+    );
+  }
+
+  // ==========================================================================
+  // FECHAMENTO FINANCEIRO (Fase 17) -- receitas/adiantamentos ficam em
+  // /trip-revenues e /trip-advances; aqui apenas o fechamento em si e o
+  // dashboard consolidado, sub-recursos de Trip.
+  // ==========================================================================
+  @Get(':id/settlement')
+  @Roles(...TRIP_SETTLEMENT_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Consulta o fechamento financeiro da viagem. Se nunca foi fechada, retorna um preview ' +
+      'calculado ao vivo (status OPEN); se ja foi fechada, retorna o snapshot congelado no ' +
+      'ultimo fechamento.',
+  })
+  @ApiOkResponse({ type: TripSettlementEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findSettlement(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripSettlementEntity> {
+    return this.tripSettlementsService.getSettlement(this.tenantContext.requireTenantId(), tripId);
+  }
+
+  @Post(':id/settlement/close')
+  @Roles(...TRIP_SETTLEMENT_CLOSE_ROLES)
+  @ApiOperation({
+    summary:
+      'Fecha a viagem financeiramente (perfil de gestao): calcula e congela Total Receitas, ' +
+      'Total Despesas (APPROVED), Total Adiantamentos e Resultado liquido. Resultado negativo ' +
+      'nunca bloqueia o fechamento. Bloqueado se ja estiver CLOSED (reabra antes).',
+  })
+  @ApiOkResponse({ type: TripSettlementEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  @ApiConflictResponse({ description: 'Fechamento ja esta CLOSED.' })
+  closeSettlement(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Body() dto: CloseTripSettlementDto,
+  ): Promise<TripSettlementEntity> {
+    return this.tripSettlementsService.close(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post(':id/settlement/reopen')
+  @Roles(...TRIP_SETTLEMENT_CLOSE_ROLES)
+  @ApiOperation({
+    summary:
+      'Reabre um fechamento CLOSED (perfil de gestao). Altera apenas o status para REOPENED -- ' +
+      'nunca apaga o snapshot/historico do fechamento anterior.',
+  })
+  @ApiOkResponse({ type: TripSettlementEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  @ApiConflictResponse({ description: 'So e possivel reabrir um fechamento CLOSED.' })
+  reopenSettlement(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripSettlementEntity> {
+    return this.tripSettlementsService.reopen(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/financial-dashboard')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Dashboard financeiro consolidado da viagem: receitas, despesas (APPROVED), ' +
+      'adiantamentos, lucro, margem, quantidade de lancamentos, maior despesa/receita e ' +
+      'resultado liquido.',
+  })
+  @ApiOkResponse({ type: TripFinancialDashboardEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findFinancialDashboard(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<TripFinancialDashboardEntity> {
+    return this.tripSettlementsService.getFinancialDashboard(
+      this.tenantContext.requireTenantId(),
+      tripId,
     );
   }
 }

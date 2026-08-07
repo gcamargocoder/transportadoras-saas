@@ -62,6 +62,18 @@ class EnvironmentVariables {
     message: 'JWT_REFRESH_EXPIRES_IN deve seguir o formato "15m", "1h", "7d".',
   })
   JWT_REFRESH_EXPIRES_IN = '7d';
+
+  // Diretorio (relativo ao cwd do processo) onde extratos de pedagio
+  // enviados por upload sao armazenados -- privado, nunca servido
+  // estaticamente (ver toll-import/config/toll-import-storage.config.ts).
+  @IsString()
+  TOLL_IMPORT_STORAGE_DIR = './storage/toll-imports';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  TOLL_IMPORT_MAX_FILE_SIZE_MB = 10;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

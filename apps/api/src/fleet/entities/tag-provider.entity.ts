@@ -9,4 +9,22 @@ export class TagProviderEntity {
 
   @ApiProperty()
   name!: string;
+
+  @ApiProperty()
+  isActive!: boolean;
+
+  @ApiProperty({ nullable: true })
+  website!: string | null;
+
+  @ApiProperty({ nullable: true })
+  phone!: string | null;
+
+  @ApiProperty({ nullable: true })
+  notes!: string | null;
+
+  @ApiProperty()
+  createdAt!: Date;
+
+  @ApiProperty()
+  updatedAt!: Date;
 }

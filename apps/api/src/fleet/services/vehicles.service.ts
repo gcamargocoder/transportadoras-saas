@@ -276,25 +276,34 @@ export class VehiclesService {
     const before = await this.findActiveOrThrow(tenantId, id);
 
     // "viagem em andamento" = composicao deste veiculo ligada a um Trip
-    // IN_PROGRESS. "composicao ativa" = composicao deste veiculo ainda nao
-    // concluida/cancelada (sem trip ainda, ou trip PLANNED/IN_PROGRESS).
-    // "manutencao aberta" = VehicleMaintenance.status fora de COMPLETED/
-    // CANCELLED (cobre OPEN, IN_PROGRESS e WAITING_PARTS -- Fase 13). Os contadores
-    // podem se sobrepor, o que e aceitavel para a mensagem de erro (mesmo
-    // padrao usado no bloqueio de exclusao de Tenant/Driver: contadores
-    // informativos, nao mutuamente exclusivos).
+    // IN_PROGRESS/PAUSED (fisicamente na estrada agora). "composicao ativa" =
+    // composicao deste veiculo ainda nao concluida/cancelada (sem trip ainda,
+    // ou trip em qualquer estado nao-terminal -- PLANNED, WAITING_DRIVER,
+    // WAITING_DEPARTURE, IN_PROGRESS, PAUSED -- Fase 14). "manutencao aberta" =
+    // VehicleMaintenance.status fora de COMPLETED/CANCELLED (Fase 13). Os
+    // contadores podem se sobrepor, o que e aceitavel para a mensagem de erro
+    // (mesmo padrao usado no bloqueio de exclusao de Tenant/Driver:
+    // contadores informativos, nao mutuamente exclusivos).
+    const NON_TERMINAL_TRIP_STATUSES = [
+      TripStatus.PLANNED,
+      TripStatus.WAITING_DRIVER,
+      TripStatus.WAITING_DEPARTURE,
+      TripStatus.IN_PROGRESS,
+      TripStatus.PAUSED,
+    ];
     const [activeTrips, activeCompositions, openMaintenances] = await Promise.all([
       this.prisma.tripComposition.count({
-        where: { tenantId, vehicleId: id, trip: { status: TripStatus.IN_PROGRESS } },
+        where: {
+          tenantId,
+          vehicleId: id,
+          trip: { status: { in: [TripStatus.IN_PROGRESS, TripStatus.PAUSED] } },
+        },
       }),
       this.prisma.tripComposition.count({
         where: {
           tenantId,
           vehicleId: id,
-          OR: [
-            { tripId: null },
-            { trip: { status: { in: [TripStatus.PLANNED, TripStatus.IN_PROGRESS] } } },
-          ],
+          OR: [{ tripId: null }, { trip: { status: { in: NON_TERMINAL_TRIP_STATUSES } } }],
         },
       }),
       this.prisma.vehicleMaintenance.count({

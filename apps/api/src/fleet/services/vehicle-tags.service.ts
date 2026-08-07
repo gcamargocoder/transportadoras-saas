@@ -7,6 +7,7 @@ import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateVehicleTagDto } from '../dto/create-vehicle-tag.dto';
 import { UpdateVehicleTagStatusDto } from '../dto/update-vehicle-tag-status.dto';
+import { UpdateVehicleTagDto } from '../dto/update-vehicle-tag.dto';
 import { VehicleTagEntity } from '../entities/vehicle-tag.entity';
 import { toVehicleTagEntity } from '../mappers/vehicle-tag.mapper';
 import { VehiclesService } from './vehicles.service';
@@ -62,7 +63,10 @@ export class VehicleTagsService {
         tagProviderId: dto.tagProviderId,
         tagNumber: dto.tagNumber,
         isActive: true,
-        ...compact({ activatedAt: dto.activatedAt ? new Date(dto.activatedAt) : undefined }),
+        ...compact({
+          activatedAt: dto.activatedAt ? new Date(dto.activatedAt) : undefined,
+          expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : undefined,
+        }),
       },
     });
 
@@ -77,6 +81,54 @@ export class VehicleTagsService {
         tagProviderId: tag.tagProviderId,
         tagNumber: tag.tagNumber,
       }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toVehicleTagEntity(tag);
+  }
+
+  async update(
+    tenantId: string,
+    vehicleId: string,
+    tagId: string,
+    dto: UpdateVehicleTagDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<VehicleTagEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, vehicleId, tagId);
+
+    if (dto.tagNumber && dto.tagNumber !== before.tagNumber) {
+      const existing = await this.prisma.vehicleTag.findUnique({
+        where: {
+          tagProviderId_tagNumber: {
+            tagProviderId: before.tagProviderId,
+            tagNumber: dto.tagNumber,
+          },
+        },
+      });
+      if (existing) {
+        throw new ConflictException('Este numero de tag ja esta cadastrado para esta operadora.');
+      }
+    }
+
+    const tag = await this.prisma.vehicleTag.update({
+      where: { id: tagId },
+      data: compact({
+        tagNumber: dto.tagNumber,
+        activatedAt: dto.activatedAt ? new Date(dto.activatedAt) : undefined,
+        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : undefined,
+      }),
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'vehicle_tag.updated',
+      entityName: 'VehicleTag',
+      entityId: tagId,
+      previousValue: toJsonSafe(before),
+      newValue: toJsonSafe(tag),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });

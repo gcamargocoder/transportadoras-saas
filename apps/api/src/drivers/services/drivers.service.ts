@@ -210,7 +210,10 @@ export class DriversService {
         tenantId,
         driverId: id,
         deletedAt: null,
-        status: { in: [TripStatus.PLANNED, TripStatus.IN_PROGRESS] },
+        // "ativa" = ainda nao concluida/cancelada (cobre toda a maquina de
+        // estados da Fase 14: PLANNED, WAITING_DRIVER, WAITING_DEPARTURE,
+        // IN_PROGRESS, PAUSED).
+        status: { notIn: [TripStatus.COMPLETED, TripStatus.CANCELLED] },
       },
     });
     if (hasActiveRelationship({ activeTrips })) {

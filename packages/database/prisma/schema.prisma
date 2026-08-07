@@ -89,6 +89,38 @@ enum VehicleFuelType {
   @@map("vehicle_fuel_type")
 }
 
+/// Combustivel efetivamente abastecido em um FuelSupply (Fase 18) --
+/// DISTINTO de VehicleFuelType (especificacao do veiculo): um veiculo FLEX
+/// pode abastecer GASOLINA numa vez e ETANOL noutra, e ARLA32 (fluido de
+/// arrefecimento de motores diesel) nao e um combustivel de especificacao
+/// de veiculo. Nomenclatura em pt-BR de proposito (granularidade de posto
+/// de combustivel real: S10/S500, nao apenas "DIESEL").
+enum FuelType {
+  DIESEL_S10
+  DIESEL_S500
+  GASOLINA
+  ETANOL
+  ARLA32
+  OUTRO
+
+  @@map("fuel_type")
+}
+
+/// Forma de pagamento do abastecimento -- DISTINTO de ExpensePaymentMethod
+/// (Fase 16): FLEET_CARD (cartao frota, o meio mais comum de pagamento de
+/// combustivel) e INVOICE (fatura do posto) nao existem la, e nao ha
+/// separacao CREDIT/DEBIT aqui.
+enum PaymentType {
+  CASH
+  PIX
+  CARD
+  INVOICE
+  FLEET_CARD
+  OTHER
+
+  @@map("payment_type")
+}
+
 enum VehicleMaintenanceStatus {
   OPEN
   IN_PROGRESS
@@ -133,7 +165,10 @@ enum TrailerType {
 
 enum TripStatus {
   PLANNED
+  WAITING_DRIVER
+  WAITING_DEPARTURE
   IN_PROGRESS
+  PAUSED
   COMPLETED
   CANCELLED
 
@@ -214,6 +249,48 @@ enum TollTransactionSource {
   @@map("toll_transaction_source")
 }
 
+/// Classificacao automatica da transacao (valor cobrado vs. calculado pela
+/// formula pricePerAxle * axleCount) -- ver TollTransactionsService.
+enum TollTransactionStatus {
+  NORMAL
+  DIVERGENT
+  EXEMPT
+
+  @@map("toll_transaction_status")
+}
+
+/// Formato do arquivo de extrato importado (Fase 15). XML/TXT/API_INTEGRATION
+/// ja modelados para permitir suporte futuro sem alterar o restante do
+/// sistema -- apenas CSV/XLSX sao aceitos pelo upload nesta fase.
+enum ImportFileType {
+  CSV
+  XLSX
+  XML
+  TXT
+  API_INTEGRATION
+
+  @@map("import_file_type")
+}
+
+enum ImportJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIAL_SUCCESS
+
+  @@map("import_job_status")
+}
+
+/// Motivo pelo qual uma linha do extrato NAO virou TollTransaction --
+/// alimenta ImportJobError (ver GET /toll-import/:id/errors).
+enum ImportRowIssueType {
+  VALIDATION_ERROR
+  DUPLICATE
+
+  @@map("import_row_issue_type")
+}
+
 enum TollAuditStatus {
   OK
   DISCREPANCY
@@ -222,17 +299,66 @@ enum TollAuditStatus {
   @@map("toll_audit_status")
 }
 
+/// Categoria da despesa de viagem (Fase 16). TOLL_EXTRA cobre pedagio pago
+/// fora do fluxo de tag/TollTransaction (ex: reembolso avulso) -- a fonte de
+/// verdade do pedagio via tag continua sendo TollTransaction.
 enum ExpenseCategory {
-  TOLL
   FUEL
+  FOOD
+  HOTEL
+  TOLL_EXTRA
   MAINTENANCE
-  MEALS
+  TIRES
   PARKING
-  LODGING
-  PER_DIEM
+  WASH
+  ADVANCE
+  FINE
   OTHER
 
   @@map("expense_category")
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+
+  @@map("expense_status")
+}
+
+enum ExpensePaymentMethod {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  PIX
+  BANK_TRANSFER
+  COMPANY_ACCOUNT
+  OTHER
+
+  @@map("expense_payment_method")
+}
+
+enum RevenueCategory {
+  FREIGHT
+  BONUS
+  EXTRA_SERVICE
+  INSURANCE
+  OTHER
+
+  @@map("revenue_category")
+}
+
+/// Estado do fechamento financeiro da viagem (Fase 17). REOPENED e distinto
+/// de OPEN -- OPEN nunca foi fechado; REOPENED ja foi fechado ao menos uma
+/// vez e foi reaberto (o historico do fechamento anterior nunca e apagado,
+/// apenas sobrescrito no proximo fechamento).
+enum SettlementStatus {
+  OPEN
+  CLOSED
+  REOPENED
+
+  @@map("settlement_status")
 }
 
 enum LocationType {
@@ -338,10 +464,17 @@ model Tenant {
   notifications           Notification[]
   telemetry               Telemetry[]
   tripExpenses            TripExpense[]
+  tripRevenues            TripRevenue[]
+  tripAdvances            TripAdvance[]
+  tripSettlements         TripSettlement[]
   tripMetrics             TripMetrics[]
   driverShifts            DriverShift[]
   tollTransactions        TollTransaction[]
   tollAudits              TollAudit[]
+  importJobs              ImportJob[]
+  importJobErrors         ImportJobError[]
+  fuelStations            FuelStation[]
+  fuelSupplies            FuelSupply[]
 
   @@map("tenants")
 }
@@ -390,6 +523,17 @@ model UserAccount {
   notifications                  Notification[]
   refreshTokens                  RefreshToken[]
   vehicleMaintenancesResponsible VehicleMaintenance[]
+  importJobsCreated              ImportJob[]
+  tripExpensesCreated            TripExpense[]        @relation("TripExpenseCreator")
+  tripExpensesUpdated            TripExpense[]        @relation("TripExpenseUpdater")
+  tripExpensesApproved           TripExpense[]        @relation("TripExpenseApprover")
+  tripRevenuesCreated            TripRevenue[]        @relation("TripRevenueCreator")
+  tripRevenuesUpdated            TripRevenue[]        @relation("TripRevenueUpdater")
+  tripAdvancesCreated            TripAdvance[]        @relation("TripAdvanceCreator")
+  tripAdvancesUpdated            TripAdvance[]        @relation("TripAdvanceUpdater")
+  tripSettlementsClosed          TripSettlement[]      @relation("TripSettlementCloser")
+  fuelSuppliesCreated            FuelSupply[]         @relation("FuelSupplyCreator")
+  fuelSuppliesUpdated            FuelSupply[]         @relation("FuelSupplyUpdater")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -513,6 +657,9 @@ model Vehicle {
   tags             VehicleTag[]
   telemetry        Telemetry[]
   maintenances     VehicleMaintenance[]
+  tollTransactions TollTransaction[]
+  tripExpenses     TripExpense[]
+  fuelSupplies     FuelSupply[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -570,6 +717,75 @@ model VehicleMaintenance {
   @@map("vehicle_maintenances")
 }
 
+/// Posto de abastecimento (Fase 18) -- dado de cadastro do tenant (ao
+/// contrario de TollPlaza/TagProvider, que sao globais: cada transportadora
+/// cadastra seus proprios postos conveniados/habituais).
+model FuelStation {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  cnpj      String?  @db.VarChar(20)
+  city      String?
+  state     String?  @db.VarChar(2)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplies FuelSupply[]
+
+  @@index([tenantId])
+  @@map("fuel_stations")
+}
+
+/// Abastecimento de um veiculo (Fase 18). tripId e opcional -- quando
+/// presente, vehicleId/driverId sao SEMPRE derivados da Trip (nunca aceitos
+/// do cliente); quando ausente, vehicleId/driverId sao informados
+/// diretamente (e validados). totalAmount e SEMPRE calculado
+/// (liters * pricePerLiter), nunca aceito do cliente.
+model FuelSupply {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  vehicleId     String       @map("vehicle_id") @db.Uuid
+  driverId      String       @map("driver_id") @db.Uuid
+  tripId        String?      @map("trip_id") @db.Uuid
+  fuelStationId String       @map("fuel_station_id") @db.Uuid
+  attachmentId  String?      @map("attachment_id") @db.Uuid
+  fuelType      FuelType     @map("fuel_type")
+  liters        Decimal      @db.Decimal(10, 3)
+  pricePerLiter Decimal      @map("price_per_liter") @db.Decimal(10, 4)
+  /// Sempre liters * pricePerLiter -- ver FuelSuppliesService.
+  totalAmount   Decimal      @map("total_amount") @db.Decimal(10, 2)
+  /// Odometro no momento do abastecimento -- nunca menor que
+  /// Vehicle.odometerKm no momento do registro (ver validacao no service).
+  odometerKm    Decimal      @map("odometer_km") @db.Decimal(10, 2)
+  supplyDate    DateTime     @map("supply_date")
+  paymentType   PaymentType? @map("payment_type")
+  invoiceNumber String?      @map("invoice_number")
+  notes         String?
+  createdBy     String       @map("created_by") @db.Uuid
+  updatedBy     String?      @map("updated_by") @db.Uuid
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle     Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  driver      Driver       @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  trip        Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  fuelStation FuelStation  @relation(fields: [fuelStationId], references: [id], onDelete: Restrict)
+  attachment  Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator     UserAccount  @relation("FuelSupplyCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater     UserAccount? @relation("FuelSupplyUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, driverId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, fuelStationId])
+  @@index([tenantId, supplyDate])
+  @@map("fuel_supplies")
+}
+
 /// Implemento (carreta simples, bitrem, rodotrem, vanderleia, reboque,
 /// semirreboque, dolly). Combinado ao Vehicle via TripComposition/
 /// TripCompositionTrailer em cada composicao.
@@ -598,9 +814,16 @@ model Trailer {
 model TagProvider {
   id        String   @id @default(uuid()) @db.Uuid
   name      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  website   String?
+  phone     String?
+  notes     String?
   createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  vehicleTags VehicleTag[]
+  vehicleTags      VehicleTag[]
+  tollTransactions TollTransaction[]
+  importJobs       ImportJob[]
 
   @@map("tag_providers")
 }
@@ -615,6 +838,9 @@ model VehicleTag {
   tagNumber     String    @map("tag_number")
   isActive      Boolean   @default(true) @map("is_active")
   activatedAt   DateTime? @map("activated_at")
+  /// Data de vencimento da tag -- usada para bloquear transacoes de pedagio
+  /// registradas com tag vencida (ver TollTransactionsService).
+  expiresAt     DateTime? @map("expires_at")
   createdAt     DateTime  @default(now()) @map("created_at")
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -664,10 +890,14 @@ model Driver {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userAccount UserAccount?  @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
-  trips       Trip[]
-  shifts      DriverShift[]
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userAccount      UserAccount?      @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
+  trips            Trip[]
+  shifts           DriverShift[]
+  tollTransactions TollTransaction[]
+  tripExpenses     TripExpense[]
+  tripAdvances     TripAdvance[]
+  fuelSupplies     FuelSupply[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
@@ -725,8 +955,9 @@ model Customer {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trips  Trip[]
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trips    Trip[]
+  revenues TripRevenue[]
 
   @@index([tenantId])
   @@map("customers")
@@ -866,6 +1097,10 @@ model Trip {
   alerts           Alert[]
   tollTransactions TollTransaction[]
   expenses         TripExpense[]
+  revenues         TripRevenue[]
+  advances         TripAdvance[]
+  settlement       TripSettlement?
+  fuelSupplies     FuelSupply[]
   metrics          TripMetrics?
   driverShifts     DriverShift[]
   telemetry        Telemetry[]
@@ -1019,13 +1254,26 @@ model Telemetry {
 
 /// Praca de pedagio. Dado de referencia GLOBAL -- nao pertence a um tenant.
 model TollPlaza {
-  id        String                                @id @default(uuid()) @db.Uuid
-  name      String
-  operator  String // concessionaria
-  highway   String?
-  /// Ponto geografico (PostGIS).
-  geoPoint  Unsupported("geometry(Point, 4326)")? @map("geo_point")
-  createdAt DateTime                              @default(now()) @map("created_at")
+  id           String                                @id @default(uuid()) @db.Uuid
+  name         String
+  operator     String // concessionaria (ex: CCR, Arteris) -- distinta de TagProvider (Sem Parar, ConectCar...), texto livre de proposito
+  highway      String?
+  /// Quilometro da rodovia onde a praca esta localizada.
+  km           Decimal?                              @db.Decimal(10, 3)
+  city         String?
+  state        String?                               @db.VarChar(2)
+  latitude     Decimal?                              @db.Decimal(10, 7)
+  longitude    Decimal?                              @db.Decimal(10, 7)
+  /// Valor cobrado por eixo -- usado no calculo automatico de
+  /// TollTransaction.expectedAmount (valorPorEixo * quantidadeDeEixos).
+  /// Distinto de TollRate (tarifa por categoria/periodo, usada nas
+  /// previsoes de rota) -- aqui e uma formula linear simples.
+  pricePerAxle Decimal?                              @map("price_per_axle") @db.Decimal(10, 2)
+  /// Ponto geografico (PostGIS) -- exige SQL bruto, nao exposto via API
+  /// nesta fase (mesmo padrao ja usado em Location.geoPoint).
+  geoPoint     Unsupported("geometry(Point, 4326)")? @map("geo_point")
+  createdAt    DateTime                              @default(now()) @map("created_at")
+  updatedAt    DateTime                              @updatedAt @map("updated_at")
 
   rates        TollRate[]
   predictions  TollPrediction[]
@@ -1071,26 +1319,107 @@ model TollPrediction {
 }
 
 /// Cobranca real ocorrida em uma praca. Vincula-se a Trip e a TollPlaza --
-/// NUNCA diretamente a uma RouteVersion; e a TollAudit quem cruza os dois.
+/// NUNCA diretamente a uma RouteVersion; e a TollAudit quem cruza os dois
+/// (conciliacao com a PREVISAO de rota). vehicleId/driverId/tagProviderId
+/// sao denormalizados a partir da Trip/tag ativa no momento do registro --
+/// mesma convencao ja adotada no projeto (tenant_id denormalizado em toda
+/// tabela operacional) para permitir filtros/relatorios diretos sem joins
+/// complexos e sensiveis a mudanca de tag ao longo do tempo.
 model TollTransaction {
-  id            String                @id @default(uuid()) @db.Uuid
-  tenantId      String                @map("tenant_id") @db.Uuid
-  tripId        String                @map("trip_id") @db.Uuid
-  tollPlazaId   String                @map("toll_plaza_id") @db.Uuid
-  chargedAmount Decimal               @map("charged_amount") @db.Decimal(10, 2)
-  chargedAt     DateTime              @map("charged_at")
-  source        TollTransactionSource @default(INTEGRATION)
-  createdAt     DateTime              @default(now()) @map("created_at")
+  id                String                @id @default(uuid()) @db.Uuid
+  tenantId          String                @map("tenant_id") @db.Uuid
+  tripId            String                @map("trip_id") @db.Uuid
+  vehicleId         String                @map("vehicle_id") @db.Uuid
+  driverId          String?               @map("driver_id") @db.Uuid
+  tollPlazaId       String                @map("toll_plaza_id") @db.Uuid
+  tagProviderId     String?               @map("tag_provider_id") @db.Uuid
+  axleCount         Int                   @map("axle_count")
+  /// Calculado automaticamente: TollPlaza.pricePerAxle * axleCount.
+  expectedAmount    Decimal               @map("expected_amount") @db.Decimal(10, 2)
+  chargedAmount     Decimal               @map("charged_amount") @db.Decimal(10, 2)
+  /// Calculado automaticamente: chargedAmount - expectedAmount.
+  discrepancyAmount Decimal               @map("discrepancy_amount") @db.Decimal(10, 2)
+  /// Classificacao automatica (NORMAL/DIVERGENT/EXEMPT) -- ver
+  /// TollTransactionsService. Distinta de TollAudit.status (que conciliar
+  /// com a PREVISAO de rota, nao com a formula simples de valor por eixo).
+  status            TollTransactionStatus @default(NORMAL)
+  chargedAt         DateTime              @map("charged_at")
+  source            TollTransactionSource @default(INTEGRATION)
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @updatedAt @map("updated_at")
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  tollPlaza TollPlaza  @relation(fields: [tollPlazaId], references: [id], onDelete: Restrict)
-  audit     TollAudit?
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip        Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicle     Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  driver      Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  tollPlaza   TollPlaza    @relation(fields: [tollPlazaId], references: [id], onDelete: Restrict)
+  tagProvider TagProvider? @relation(fields: [tagProviderId], references: [id], onDelete: SetNull)
+  audit       TollAudit?
 
   @@index([tenantId])
   @@index([tripId])
   @@index([tollPlazaId, chargedAt])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, driverId])
+  @@index([tenantId, status])
+  @@index([tenantId, tagProviderId])
   @@map("toll_transactions")
+}
+
+/// Job de importacao de extrato de pedagio enviado por uma operadora (Fase
+/// 15). O parser real (CSV/XLSX hoje; XML/TXT/API_INTEGRATION preparados
+/// para o futuro) e escolhido dinamicamente a partir de fileType, sem exigir
+/// mudanca de schema para suportar um novo formato.
+model ImportJob {
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @map("tenant_id") @db.Uuid
+  providerId       String          @map("provider_id") @db.Uuid
+  /// Nome do arquivo no storage privado (gerado, nunca o nome original --
+  /// evita colisao/overwrite e nao expoe o nome enviado pelo usuario no disco).
+  filename         String
+  originalFilename String          @map("original_filename")
+  fileType         ImportFileType  @map("file_type")
+  status           ImportJobStatus @default(PENDING)
+  importedRecords  Int             @default(0) @map("imported_records")
+  ignoredRecords   Int             @default(0) @map("ignored_records")
+  errorRecords     Int             @default(0) @map("error_records")
+  startedAt        DateTime?       @map("started_at")
+  finishedAt       DateTime?       @map("finished_at")
+  createdBy        String          @map("created_by") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at")
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider TagProvider      @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  creator  UserAccount      @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  errors   ImportJobError[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([providerId])
+  @@map("import_jobs")
+}
+
+/// Detalhe de uma linha do extrato nao importada (erro de validacao ou
+/// duplicidade) -- nunca interrompe o job inteiro, apenas registra a
+/// inconsistencia daquela linha especifica. Alimenta GET /toll-import/:id/errors.
+model ImportJobError {
+  id          String             @id @default(uuid()) @db.Uuid
+  tenantId    String             @map("tenant_id") @db.Uuid
+  importJobId String             @map("import_job_id") @db.Uuid
+  rowNumber   Int                @map("row_number")
+  issueType   ImportRowIssueType @map("issue_type")
+  message     String
+  /// Snapshot da linha original do arquivo, para o usuario conseguir
+  /// corrigir e reenviar sem precisar abrir o arquivo de novo.
+  rawData     Json               @map("raw_data")
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  importJob ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId])
+  @@index([tenantId])
+  @@map("import_job_errors")
 }
 
 /// Conciliacao entre valor previsto e valor cobrado. SEMPRE derivada/
@@ -1116,26 +1445,120 @@ model TollAudit {
 // FINANCEIRO — despesas e comparativo planejado x executado
 // ============================================================================
 
-/// Despesa da viagem por categoria. Categoria TOLL e um espelho agregado
-/// (a fonte de verdade do pedagio e TollTransaction); as demais categorias
-/// sao lancadas diretamente aqui.
+/// Despesa operacional de uma viagem (abastecimento, alimentacao,
+/// hospedagem, manutencao emergencial, etc. -- Fase 16). Toda despesa
+/// pertence obrigatoriamente a uma Trip; driverId/vehicleId sao SEMPRE
+/// derivados da Trip no momento da criacao (nunca aceitos do cliente), o
+/// mesmo principio ja aplicado em TollTransaction (Fase 14). Suporta um
+/// fluxo de aprovacao simples (status) e vinculo opcional a um Attachment
+/// ja existente (comprovante) -- sem upload de arquivo nesta fase.
 model TripExpense {
+  id             String                @id @default(uuid()) @db.Uuid
+  tenantId       String                @map("tenant_id") @db.Uuid
+  tripId         String                @map("trip_id") @db.Uuid
+  driverId       String?               @map("driver_id") @db.Uuid
+  vehicleId      String?               @map("vehicle_id") @db.Uuid
+  category       ExpenseCategory
+  description    String
+  supplier       String?
+  documentNumber String?               @map("document_number")
+  expenseDate    DateTime              @map("expense_date")
+  amount         Decimal               @db.Decimal(10, 2)
+  currency       String                @default("BRL") @db.VarChar(3)
+  paymentMethod  ExpensePaymentMethod? @map("payment_method")
+  status         ExpenseStatus         @default(PENDING)
+  /// Quem tomou a decisao (aprovou OU rejeitou) -- preenchido em ambos os
+  /// casos, ja que nao ha um par rejectedBy/rejectedAt dedicado; a decisao
+  /// exata fica registrada no AuditLog da acao.
+  approvedBy     String?               @map("approved_by") @db.Uuid
+  approvedAt     DateTime?             @map("approved_at")
+  attachmentId   String?               @map("attachment_id") @db.Uuid
+  createdBy      String                @map("created_by") @db.Uuid
+  updatedBy      String?               @map("updated_by") @db.Uuid
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip       Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  driver     Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle    Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  attachment Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  approver   UserAccount? @relation("TripExpenseApprover", fields: [approvedBy], references: [id], onDelete: SetNull)
+  creator    UserAccount  @relation("TripExpenseCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    UserAccount? @relation("TripExpenseUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, status])
+  @@index([tenantId, category])
+  @@index([tenantId, driverId])
+  @@index([tenantId, vehicleId])
+  @@map("trip_expenses")
+}
+
+/// Receita da viagem (frete, bonificacao, servico extra, seguro -- Fase 17).
+/// Toda receita pertence obrigatoriamente a uma Trip do mesmo tenant.
+model TripRevenue {
   id            String          @id @default(uuid()) @db.Uuid
   tenantId      String          @map("tenant_id") @db.Uuid
   tripId        String          @map("trip_id") @db.Uuid
-  category      ExpenseCategory
-  description   String?
-  plannedAmount Decimal?        @map("planned_amount") @db.Decimal(10, 2)
-  actualAmount  Decimal?        @map("actual_amount") @db.Decimal(10, 2)
-  occurredAt    DateTime?       @map("occurred_at")
+  description   String
+  category      RevenueCategory
+  /// Nunca negativo -- validado tambem no DTO (@Min(0)).
+  amount        Decimal         @db.Decimal(10, 2)
+  receivedAt    DateTime        @map("received_at")
+  invoiceNumber String?         @map("invoice_number")
+  customerId    String?         @map("customer_id") @db.Uuid
+  attachmentId  String?         @map("attachment_id") @db.Uuid
+  createdBy     String          @map("created_by") @db.Uuid
+  updatedBy     String?         @map("updated_by") @db.Uuid
   createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip       Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  customer   Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  attachment Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator    UserAccount  @relation("TripRevenueCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    UserAccount? @relation("TripRevenueUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
-  @@index([tripId, category])
-  @@map("trip_expenses")
+  @@index([tenantId, tripId])
+  @@index([tenantId, category])
+  @@index([tenantId, customerId])
+  @@map("trip_revenues")
+}
+
+/// Adiantamento pago ao motorista durante a viagem (Fase 17). driverId e
+/// SEMPRE derivado da Trip (nunca aceito do cliente) -- mesmo principio ja
+/// aplicado em TripExpense/TollTransaction.
+model TripAdvance {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @map("tenant_id") @db.Uuid
+  tripId        String                @map("trip_id") @db.Uuid
+  driverId      String                @map("driver_id") @db.Uuid
+  description   String
+  /// Sempre positivo -- validado tambem no DTO (@IsPositive).
+  amount        Decimal               @db.Decimal(10, 2)
+  paymentMethod ExpensePaymentMethod? @map("payment_method")
+  paidAt        DateTime              @map("paid_at")
+  attachmentId  String?               @map("attachment_id") @db.Uuid
+  createdBy     String                @map("created_by") @db.Uuid
+  updatedBy     String?               @map("updated_by") @db.Uuid
+  createdAt     DateTime              @default(now()) @map("created_at")
+  updatedAt     DateTime              @updatedAt @map("updated_at")
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip       Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  driver     Driver       @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  attachment Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator    UserAccount  @relation("TripAdvanceCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    UserAccount? @relation("TripAdvanceUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, driverId])
+  @@map("trip_advances")
 }
 
 /// Comparativo planejado x executado -- o maior diferencial do sistema.
@@ -1165,6 +1588,37 @@ model TripMetrics {
 
   @@index([tenantId])
   @@map("trip_metrics")
+}
+
+/// Fechamento financeiro da viagem (Fase 17) -- 1:1 com Trip, criado (lazy)
+/// apenas quando a viagem e fechada pela primeira vez. Os totais sao um
+/// SNAPSHOT calculado no momento do fechamento (nao recalculado ao vivo);
+/// reabrir (REOPENED) altera apenas o status, nunca apaga o snapshot
+/// anterior -- fechar novamente depois de reaberto recalcula os totais.
+model TripSettlement {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  tripId         String           @unique @map("trip_id") @db.Uuid
+  totalRevenue   Decimal          @default(0) @map("total_revenue") @db.Decimal(12, 2)
+  totalExpenses  Decimal          @default(0) @map("total_expenses") @db.Decimal(12, 2)
+  totalAdvances  Decimal          @default(0) @map("total_advances") @db.Decimal(12, 2)
+  /// totalRevenue - totalExpenses - totalAdvances -- pode ser negativo
+  /// (prejuizo); nunca bloqueia o fechamento.
+  netResult      Decimal          @default(0) @map("net_result") @db.Decimal(12, 2)
+  status         SettlementStatus @default(OPEN)
+  closedBy       String?          @map("closed_by") @db.Uuid
+  closedAt       DateTime?        @map("closed_at")
+  notes          String?
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip    Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  closer  UserAccount? @relation("TripSettlementCloser", fields: [closedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("trip_settlements")
 }
 
 // ============================================================================
@@ -1207,8 +1661,12 @@ model Attachment {
   uploadedById String?        @map("uploaded_by_id") @db.Uuid
   createdAt    DateTime       @default(now()) @map("created_at")
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  document Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document     Document?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  tripExpenses TripExpense[]
+  tripRevenues TripRevenue[]
+  tripAdvances TripAdvance[]
+  fuelSupplies FuelSupply[]
 
   @@index([tenantId, entityName, entityId])
   @@map("attachments")

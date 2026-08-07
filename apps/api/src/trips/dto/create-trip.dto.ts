@@ -26,19 +26,18 @@ export class CreateTripDto {
   @IsUUID('4', { message: 'destinationLocationId deve ser um UUID valido.' })
   destinationLocationId!: string;
 
-  @ApiPropertyOptional({ format: 'uuid' })
-  @IsOptional()
+  @ApiProperty({ format: 'uuid', description: 'Motorista responsavel pela viagem.' })
   @IsUUID('4', { message: 'driverId deve ser um UUID valido.' })
-  driverId?: string;
+  driverId!: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     format: 'uuid',
     description:
-      'Composicao de frota ja cadastrada (cavalo + implementos). Precisa estar livre (sem viagem).',
+      'Composicao de frota ja cadastrada (cavalo mecanico + implementos, ver POST ' +
+      '/trip-compositions). Precisa estar livre (sem viagem vinculada).',
   })
-  @IsOptional()
   @IsUUID('4', { message: 'compositionId deve ser um UUID valido.' })
-  compositionId?: string;
+  compositionId!: string;
 
   @ApiProperty({ example: '2026-03-10T08:00:00.000Z' })
   @IsDateString({}, { message: 'plannedDeparture deve ser uma data valida (ISO 8601).' })

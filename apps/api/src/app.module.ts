@@ -14,6 +14,11 @@ import { FleetModule } from './fleet/fleet.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenantsModule } from './tenants/tenants.module';
+import { TollImportModule } from './toll-import/toll-import.module';
+import { TollsModule } from './tolls/tolls.module';
+import { TripAdvancesModule } from './trip-advances/trip-advances.module';
+import { TripExpensesModule } from './trip-expenses/trip-expenses.module';
+import { TripRevenuesModule } from './trip-revenues/trip-revenues.module';
 import { TripsModule } from './trips/trips.module';
 import { UsersModule } from './users/users.module';
 
@@ -48,8 +53,11 @@ import { UsersModule } from './users/users.module';
     DriversModule,
     FleetModule,
     TripsModule,
-    // Modulos de negocio (pedagios...) serao registrados aqui conforme
-    // forem implementados.
+    TollsModule,
+    TollImportModule,
+    TripExpensesModule,
+    TripRevenuesModule,
+    TripAdvancesModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

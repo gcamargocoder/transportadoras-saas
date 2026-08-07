@@ -33,6 +33,7 @@ import { CreateVehicleDto } from '../dto/create-vehicle.dto';
 import { FindVehiclesQueryDto } from '../dto/find-vehicles-query.dto';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto';
 import { UpdateVehicleTagStatusDto } from '../dto/update-vehicle-tag-status.dto';
+import { UpdateVehicleTagDto } from '../dto/update-vehicle-tag.dto';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto';
 import { PaginatedMaintenancesEntity } from '../entities/paginated-maintenances.entity';
 import { PaginatedVehiclesEntity } from '../entities/paginated-vehicles.entity';
@@ -204,6 +205,27 @@ export class VehiclesController {
     return this.vehicleTagsService.create(
       this.tenantContext.requireTenantId(),
       vehicleId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Patch(':id/tags/:tagId')
+  @Roles(...FLEET_WRITE_ROLES)
+  @ApiOperation({ summary: 'Atualiza dados de uma tag do veiculo (numero, ativacao, vencimento).' })
+  @ApiOkResponse({ type: VehicleTagEntity })
+  @ApiNotFoundResponse({ description: 'Tag nao encontrada para este veiculo.' })
+  @ApiConflictResponse({ description: 'Numero de tag ja cadastrado para esta operadora.' })
+  updateTag(
+    @Param('id', ParseUUIDPipe) vehicleId: string,
+    @Param('tagId', ParseUUIDPipe) tagId: string,
+    @Body() dto: UpdateVehicleTagDto,
+  ): Promise<VehicleTagEntity> {
+    return this.vehicleTagsService.update(
+      this.tenantContext.requireTenantId(),
+      vehicleId,
+      tagId,
       dto,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,

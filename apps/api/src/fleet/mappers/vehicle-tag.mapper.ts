@@ -10,6 +10,7 @@ export function toVehicleTagEntity(tag: VehicleTag): VehicleTagEntity {
   entity.tagNumber = tag.tagNumber;
   entity.isActive = tag.isActive;
   entity.activatedAt = tag.activatedAt;
+  entity.expiresAt = tag.expiresAt;
   entity.createdAt = tag.createdAt;
   return entity;
 }
@@ -18,5 +19,11 @@ export function toTagProviderEntity(provider: TagProvider): TagProviderEntity {
   const entity = new TagProviderEntity();
   entity.id = provider.id;
   entity.name = provider.name;
+  entity.isActive = provider.isActive;
+  entity.website = provider.website;
+  entity.phone = provider.phone;
+  entity.notes = provider.notes;
+  entity.createdAt = provider.createdAt;
+  entity.updatedAt = provider.updatedAt;
   return entity;
 }

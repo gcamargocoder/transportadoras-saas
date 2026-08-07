@@ -19,4 +19,9 @@ export class CreateVehicleTagDto {
   @IsOptional()
   @IsDateString({}, { message: 'activatedAt deve ser uma data valida (ISO 8601).' })
   activatedAt?: string;
+
+  @ApiPropertyOptional({ example: '2027-01-01', description: 'Data de vencimento da tag.' })
+  @IsOptional()
+  @IsDateString({}, { message: 'expiresAt deve ser uma data valida (ISO 8601).' })
+  expiresAt?: string;
 }

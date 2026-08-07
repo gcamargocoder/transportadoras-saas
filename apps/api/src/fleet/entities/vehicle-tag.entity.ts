@@ -19,6 +19,9 @@ export class VehicleTagEntity {
   @ApiProperty({ nullable: true })
   activatedAt!: Date | null;
 
+  @ApiProperty({ nullable: true, description: 'Data de vencimento da tag.' })
+  expiresAt!: Date | null;
+
   @ApiProperty()
   createdAt!: Date;
 }

@@ -64,6 +64,42 @@ describe('Fleet (e2e)', () => {
     return { tenantId, adminAccessToken: loginRes.body.data.accessToken as string };
   }
 
+  // Promove o admin auto-criado a SUPER_ADMIN diretamente no banco -- nao ha
+  // fluxo publico para criar um Super Admin (mesmo padrao ja usado em
+  // tenants.e2e-spec.ts).
+  async function createTenantWithSuperAdmin(label: string) {
+    const unique = randomUUID().replace(/-/g, '').slice(0, 12);
+    const payload = {
+      name: `Transportadora ${label} ${unique}`,
+      document: randomCnpj(),
+      slug: `fleet-${label.toLowerCase()}-${unique}`,
+      admin: {
+        name: `Admin ${label}`,
+        email: `admin-${label.toLowerCase()}-${unique}@teste.com`,
+        password: 'SenhaForte123!',
+      },
+    };
+
+    const createRes = await request(app.getHttpServer())
+      .post('/api/v1/tenants')
+      .send(payload)
+      .expect(201);
+    const tenantId: string = createRes.body.data.id;
+    createdTenantIds.push(tenantId);
+
+    await prisma.userAccount.update({
+      where: { tenantId_email: { tenantId, email: payload.admin.email } },
+      data: { role: 'SUPER_ADMIN' },
+    });
+
+    const loginRes = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ tenantId, email: payload.admin.email, password: payload.admin.password })
+      .expect(200);
+
+    return { tenantId, superAdminAccessToken: loginRes.body.data.accessToken as string };
+  }
+
   function randomPlate(): string {
     const letters = Array.from({ length: 3 }, () =>
       String.fromCharCode(65 + Math.floor(Math.random() * 26)),
@@ -802,10 +838,23 @@ describe('Fleet (e2e)', () => {
       const createTagRes = await request(app.getHttpServer())
         .post(`/api/v1/vehicles/${vehicleId}/tags`)
         .set('Authorization', auth)
-        .send({ tagProviderId: semParar.id, tagNumber, activatedAt: '2026-01-01' })
+        .send({
+          tagProviderId: semParar.id,
+          tagNumber,
+          activatedAt: '2026-01-01',
+          expiresAt: '2027-01-01',
+        })
         .expect(201);
       const tagId = createTagRes.body.data.id;
       expect(createTagRes.body.data.isActive).toBe(true);
+      expect(createTagRes.body.data.expiresAt).toBeTruthy();
+
+      const updateTagRes = await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}/tags/${tagId}`)
+        .set('Authorization', auth)
+        .send({ expiresAt: '2028-01-01' })
+        .expect(200);
+      expect(updateTagRes.body.data.expiresAt).toContain('2028');
 
       // Numero de tag duplicado para a MESMA operadora -> 409.
       await request(app.getHttpServer())
@@ -843,6 +892,92 @@ describe('Fleet (e2e)', () => {
         .set('Authorization', auth)
         .expect(200);
       expect(listAfterRemove.body.data).toHaveLength(0);
+    });
+
+    it('SUPER_ADMIN cadastra, atualiza, ativa/desativa e exclui uma operadora', async () => {
+      const { superAdminAccessToken } = await createTenantWithSuperAdmin('TagProviderCrud');
+      const auth = `Bearer ${superAdminAccessToken}`;
+      const name = `Operadora Teste ${randomUUID()}`;
+
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/tag-providers')
+        .set('Authorization', auth)
+        .send({ name, website: 'https://exemplo.com', phone: '0800123456' })
+        .expect(201);
+      const providerId = createRes.body.data.id;
+      expect(createRes.body.data.isActive).toBe(true);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/tag-providers')
+        .set('Authorization', auth)
+        .send({ name })
+        .expect(409);
+
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/tag-providers/${providerId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(getRes.body.data.website).toBe('https://exemplo.com');
+
+      const updateRes = await request(app.getHttpServer())
+        .patch(`/api/v1/tag-providers/${providerId}`)
+        .set('Authorization', auth)
+        .send({ notes: 'Observacao de teste' })
+        .expect(200);
+      expect(updateRes.body.data.notes).toBe('Observacao de teste');
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/tag-providers/${providerId}/status`)
+        .set('Authorization', auth)
+        .send({ isActive: false })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/tag-providers/${providerId}`)
+        .set('Authorization', auth)
+        .expect(204);
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/tag-providers/${providerId}`)
+        .set('Authorization', auth)
+        .expect(404);
+    });
+
+    it('rejeita escrita em operadoras por usuario que nao e SUPER_ADMIN (403)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('TagProviderForbidden');
+      await request(app.getHttpServer())
+        .post('/api/v1/tag-providers')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .send({ name: `Operadora Proibida ${randomUUID()}` })
+        .expect(403);
+    });
+
+    it('bloqueia exclusao de operadora com tags vinculadas', async () => {
+      const { superAdminAccessToken } = await createTenantWithSuperAdmin('TagProviderInUse');
+      const auth = `Bearer ${superAdminAccessToken}`;
+
+      const providersRes = await request(app.getHttpServer())
+        .get('/api/v1/tag-providers')
+        .set('Authorization', auth)
+        .expect(200);
+      const semParar = providersRes.body.data.find((p: { name: string }) => p.name === 'Sem Parar');
+
+      const vehicleRes = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send(buildVehiclePayload())
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/vehicles/${vehicleRes.body.data.id}/tags`)
+        .set('Authorization', auth)
+        .send({ tagProviderId: semParar.id, tagNumber: String(Math.floor(Math.random() * 1e10)) })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/tag-providers/${semParar.id}`)
+        .set('Authorization', auth)
+        .expect(409);
     });
   });
 
