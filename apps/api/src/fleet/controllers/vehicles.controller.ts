@@ -26,6 +26,9 @@ import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-lo
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { FuelHistoryQueryDto } from '../../fuel-supplies/dto/fuel-history-query.dto';
+import { VehicleFuelHistoryEntity } from '../../fuel-supplies/entities/vehicle-fuel-history.entity';
+import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../constants/fleet-roles.constants';
 import { CreateVehicleTagDto } from '../dto/create-vehicle-tag.dto';
@@ -51,6 +54,7 @@ export class VehiclesController {
     private readonly vehiclesService: VehiclesService,
     private readonly vehicleTagsService: VehicleTagsService,
     private readonly maintenancesService: MaintenancesService,
+    private readonly fuelSuppliesService: FuelSuppliesService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -177,6 +181,26 @@ export class VehiclesController {
     @Query() query: PaginationQueryDto,
   ): Promise<PaginatedMaintenancesEntity> {
     return this.maintenancesService.findAllForVehicle(
+      this.tenantContext.requireTenantId(),
+      vehicleId,
+      query,
+    );
+  }
+
+  @Get(':id/fuel-history')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Historico de abastecimentos do veiculo: ultimos abastecimentos, consumo medio (km/l), ' +
+      'gasto total e litros totais.',
+  })
+  @ApiOkResponse({ type: VehicleFuelHistoryEntity })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  findFuelHistory(
+    @Param('id', ParseUUIDPipe) vehicleId: string,
+    @Query() query: FuelHistoryQueryDto,
+  ): Promise<VehicleFuelHistoryEntity> {
+    return this.fuelSuppliesService.getVehicleFuelHistory(
       this.tenantContext.requireTenantId(),
       vehicleId,
       query,

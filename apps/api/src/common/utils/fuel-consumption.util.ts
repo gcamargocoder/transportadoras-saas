@@ -31,8 +31,9 @@ export function computeFuelConsumptionSegments(
   const segments: FuelConsumptionSegment[] = [];
 
   for (let i = 1; i < sorted.length; i++) {
-    const previous = sorted[i - 1];
-    const current = sorted[i];
+    const previous = sorted.at(i - 1);
+    const current = sorted.at(i);
+    if (!previous || !current) continue;
     const distanceKm = current.odometerKm - previous.odometerKm;
     segments.push({
       id: current.id,
@@ -44,19 +45,41 @@ export function computeFuelConsumptionSegments(
   return segments;
 }
 
+export interface FuelConsumptionTotals {
+  totalDistanceKm: number;
+  /** Litros abastecidos apos o primeiro ponto (que so define o odometro inicial). */
+  totalLiters: number;
+}
+
+// Totais brutos (distancia + litros) de um conjunto de abastecimentos --
+// base tanto de computeAverageConsumptionKmL (um veiculo) quanto de
+// agregacoes que precisam somar distancia/litros de VARIOS veiculos antes
+// de dividir (ex: dashboard da frota) -- ver FuelSuppliesService.getDashboard.
+export function computeConsumptionTotals(
+  points: FuelConsumptionPoint[],
+): FuelConsumptionTotals | null {
+  const sorted = sortByOdometer(points);
+  if (sorted.length < 2) return null;
+
+  const first = sorted.at(0);
+  const last = sorted.at(-1);
+  if (!first || !last) return null;
+
+  return {
+    totalDistanceKm: last.odometerKm - first.odometerKm,
+    totalLiters: sorted.slice(1).reduce((sum, point) => sum + point.liters, 0),
+  };
+}
+
 // Consumo medio agregado: distancia total (primeiro ao ultimo odometro)
 // dividida pelos litros abastecidos ENTRE eles (exclui o primeiro
 // abastecimento, que so estabelece o ponto de partida do odometro, sem
 // trecho anterior para medir). Mais preciso que a media simples dos
 // segmentos individuais (nao pondera trechos curtos igualmente a longos).
 export function computeAverageConsumptionKmL(points: FuelConsumptionPoint[]): number | null {
-  const sorted = sortByOdometer(points);
-  if (sorted.length < 2) return null;
-
-  const totalDistanceKm = sorted[sorted.length - 1].odometerKm - sorted[0].odometerKm;
-  const totalLiters = sorted.slice(1).reduce((sum, point) => sum + point.liters, 0);
-
-  return totalLiters > 0 ? totalDistanceKm / totalLiters : null;
+  const totals = computeConsumptionTotals(points);
+  if (!totals) return null;
+  return totals.totalLiters > 0 ? totals.totalDistanceKm / totals.totalLiters : null;
 }
 
 export function computeTotalAmount(liters: number, pricePerLiter: number): number {

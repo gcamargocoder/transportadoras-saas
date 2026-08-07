@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { FuelSuppliesModule } from '../fuel-supplies/fuel-supplies.module';
 import { FleetsController } from './controllers/fleets.controller';
 import { MaintenancesController } from './controllers/maintenances.controller';
 import { TagProvidersController } from './controllers/tag-providers.controller';
@@ -14,6 +15,7 @@ import { VehicleTagsService } from './services/vehicle-tags.service';
 import { VehiclesService } from './services/vehicles.service';
 
 @Module({
+  imports: [FuelSuppliesModule],
   controllers: [
     FleetsController,
     VehiclesController,

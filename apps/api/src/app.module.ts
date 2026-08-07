@@ -11,6 +11,8 @@ import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
+import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
+import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -58,6 +60,8 @@ import { UsersModule } from './users/users.module';
     TripExpensesModule,
     TripRevenuesModule,
     TripAdvancesModule,
+    FuelStationsModule,
+    FuelSuppliesModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
