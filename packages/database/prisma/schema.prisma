@@ -150,6 +150,27 @@ enum VehicleMaintenancePriority {
   @@map("vehicle_maintenance_priority")
 }
 
+/// Estado do ciclo de vida do pneu (Fase 20) -- distinto de TireLocationType
+/// (ONDE o pneu esta fisicamente agora). RETREADED e setado automaticamente
+/// ao registrar uma recapagem; SCRAPPED ao registrar um descarte.
+enum TireStatus {
+  NEW
+  IN_USE
+  STOCK
+  RETREADED
+  SCRAPPED
+
+  @@map("tire_status")
+}
+
+enum TireLocationType {
+  STOCK
+  VEHICLE
+  TRAILER
+
+  @@map("tire_location_type")
+}
+
 enum TrailerType {
   SIMPLE
   BITREM
@@ -475,6 +496,11 @@ model Tenant {
   importJobErrors         ImportJobError[]
   fuelStations            FuelStation[]
   fuelSupplies            FuelSupply[]
+  tires                   Tire[]
+  tireMovements           TireMovement[]
+  tireRetreads            TireRetread[]
+  tireInspections         TireInspection[]
+  tireDisposals           TireDisposal[]
 
   @@map("tenants")
 }
@@ -534,6 +560,12 @@ model UserAccount {
   tripSettlementsClosed          TripSettlement[]      @relation("TripSettlementCloser")
   fuelSuppliesCreated            FuelSupply[]         @relation("FuelSupplyCreator")
   fuelSuppliesUpdated            FuelSupply[]         @relation("FuelSupplyUpdater")
+  tiresCreated                   Tire[]               @relation("TireCreator")
+  tiresUpdated                   Tire[]               @relation("TireUpdater")
+  tireMovementsCreated           TireMovement[]       @relation("TireMovementCreator")
+  tireRetreadsCreated            TireRetread[]        @relation("TireRetreadCreator")
+  tireInspectionsCreated         TireInspection[]     @relation("TireInspectionCreator")
+  tireDisposalsCreated           TireDisposal[]       @relation("TireDisposalCreator")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -660,6 +692,9 @@ model Vehicle {
   tollTransactions TollTransaction[]
   tripExpenses     TripExpense[]
   fuelSupplies     FuelSupply[]
+  tires                    Tire[]         @relation("TireCurrentVehicle")
+  tireMovementsAsPrevious  TireMovement[] @relation("TireMovementPreviousVehicle")
+  tireMovementsAsNew       TireMovement[] @relation("TireMovementNewVehicle")
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -715,6 +750,158 @@ model VehicleMaintenance {
   @@index([tenantId, openedAt])
   @@index([vehicleId, status])
   @@map("vehicle_maintenances")
+}
+
+/// Pneu da frota (Fase 20). status = estado de ciclo de vida (NEW/IN_USE/
+/// STOCK/RETREADED/SCRAPPED); locationType/vehicleId/trailerId/position =
+/// ONDE o pneu esta fisicamente AGORA (sempre um snapshot atual -- o
+/// historico de cada troca fica em TireMovement, nunca sobrescrito).
+model Tire {
+  id                  String            @id @default(uuid()) @db.Uuid
+  tenantId            String            @map("tenant_id") @db.Uuid
+  fireNumber          String            @map("fire_number")
+  manufacturer        String
+  model               String
+  size                String
+  dot                 String?
+  serialNumber        String?           @map("serial_number")
+  purchaseDate        DateTime?         @map("purchase_date")
+  purchasePrice       Decimal?          @map("purchase_price") @db.Decimal(10, 2)
+  expectedLifespanKm  Decimal?          @map("expected_lifespan_km") @db.Decimal(10, 2)
+  initialTreadDepthMm Decimal?          @map("initial_tread_depth_mm") @db.Decimal(5, 2)
+  /// Atualizado automaticamente pela inspecao mais recente (ver
+  /// TiresService.createInspection).
+  currentTreadDepthMm Decimal?          @map("current_tread_depth_mm") @db.Decimal(5, 2)
+  status              TireStatus        @default(STOCK)
+  locationType        TireLocationType  @default(STOCK) @map("location_type")
+  vehicleId           String?           @map("vehicle_id") @db.Uuid
+  trailerId           String?           @map("trailer_id") @db.Uuid
+  position            String?
+  createdBy           String            @map("created_by") @db.Uuid
+  updatedBy           String?           @map("updated_by") @db.Uuid
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle     Vehicle?         @relation("TireCurrentVehicle", fields: [vehicleId], references: [id], onDelete: SetNull)
+  trailer     Trailer?         @relation("TireCurrentTrailer", fields: [trailerId], references: [id], onDelete: SetNull)
+  creator     UserAccount      @relation("TireCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater     UserAccount?     @relation("TireUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  movements   TireMovement[]
+  retreads    TireRetread[]
+  inspections TireInspection[]
+  disposal    TireDisposal?
+
+  @@unique([tenantId, fireNumber])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, trailerId])
+  @@map("tires")
+}
+
+/// Historico de troca/movimentacao de um pneu -- toda alteracao de
+/// localizacao gera uma linha aqui, nunca sobrescrita (ver
+/// TiresService.createMovement). previous* fica null na primeira
+/// movimentacao (pneu recem-cadastrado, sem localizacao anterior alem do
+/// estoque implicito).
+model TireMovement {
+  id                   String            @id @default(uuid()) @db.Uuid
+  tenantId             String            @map("tenant_id") @db.Uuid
+  tireId               String            @map("tire_id") @db.Uuid
+  movementDate         DateTime          @default(now()) @map("movement_date")
+  previousLocationType TireLocationType? @map("previous_location_type")
+  previousVehicleId    String?           @map("previous_vehicle_id") @db.Uuid
+  previousTrailerId    String?           @map("previous_trailer_id") @db.Uuid
+  previousPosition     String?           @map("previous_position")
+  newLocationType      TireLocationType  @map("new_location_type")
+  newVehicleId         String?           @map("new_vehicle_id") @db.Uuid
+  newTrailerId         String?           @map("new_trailer_id") @db.Uuid
+  newPosition          String?           @map("new_position")
+  odometerKm           Decimal?          @map("odometer_km") @db.Decimal(10, 2)
+  reason               String?
+  createdBy            String            @map("created_by") @db.Uuid
+  createdAt            DateTime          @default(now()) @map("created_at")
+
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tire            Tire         @relation(fields: [tireId], references: [id], onDelete: Cascade)
+  previousVehicle Vehicle?     @relation("TireMovementPreviousVehicle", fields: [previousVehicleId], references: [id], onDelete: SetNull)
+  newVehicle      Vehicle?     @relation("TireMovementNewVehicle", fields: [newVehicleId], references: [id], onDelete: SetNull)
+  previousTrailer Trailer?     @relation("TireMovementPreviousTrailer", fields: [previousTrailerId], references: [id], onDelete: SetNull)
+  newTrailer      Trailer?     @relation("TireMovementNewTrailer", fields: [newTrailerId], references: [id], onDelete: SetNull)
+  creator         UserAccount  @relation("TireMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, tireId])
+  @@map("tire_movements")
+}
+
+/// Recapagem -- um pneu pode ter varias ao longo da vida. Registrar uma
+/// recapagem atualiza Tire.status para RETREADED automaticamente.
+model TireRetread {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  tireId      String   @map("tire_id") @db.Uuid
+  company     String
+  cost        Decimal  @db.Decimal(10, 2)
+  retreadDate DateTime @map("retread_date")
+  warranty    String?
+  mileageKm   Decimal? @map("mileage_km") @db.Decimal(10, 2)
+  notes       String?
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tire    Tire        @relation(fields: [tireId], references: [id], onDelete: Cascade)
+  creator UserAccount @relation("TireRetreadCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, tireId])
+  @@map("tire_retreads")
+}
+
+/// Inspecao periodica (sulco/pressao) -- registrar uma inspecao atualiza
+/// Tire.currentTreadDepthMm automaticamente para o valor medido.
+model TireInspection {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  tireId         String   @map("tire_id") @db.Uuid
+  inspectionDate DateTime @default(now()) @map("inspection_date")
+  treadDepthMm   Decimal  @map("tread_depth_mm") @db.Decimal(5, 2)
+  pressurePsi    Decimal? @map("pressure_psi") @db.Decimal(6, 2)
+  notes          String?
+  createdBy      String   @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tire    Tire        @relation(fields: [tireId], references: [id], onDelete: Cascade)
+  creator UserAccount @relation("TireInspectionCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, tireId])
+  @@map("tire_inspections")
+}
+
+/// Descarte -- 1:1 com Tire (um pneu so e descartado uma vez). Registrar um
+/// descarte atualiza Tire.status para SCRAPPED e remove o pneu de qualquer
+/// veiculo/carreta automaticamente.
+model TireDisposal {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  tireId        String   @unique @map("tire_id") @db.Uuid
+  reason        String
+  disposalDate  DateTime @map("disposal_date")
+  odometerKm    Decimal? @map("odometer_km") @db.Decimal(10, 2)
+  residualValue Decimal? @map("residual_value") @db.Decimal(10, 2)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tire    Tire        @relation(fields: [tireId], references: [id], onDelete: Cascade)
+  creator UserAccount @relation("TireDisposalCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@map("tire_disposals")
 }
 
 /// Posto de abastecimento (Fase 18) -- dado de cadastro do tenant (ao
@@ -803,6 +990,9 @@ model Trailer {
 
   tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tripCompositionTrailers TripCompositionTrailer[]
+  tires                   Tire[]         @relation("TireCurrentTrailer")
+  tireMovementsAsPrevious TireMovement[] @relation("TireMovementPreviousTrailer")
+  tireMovementsAsNew      TireMovement[] @relation("TireMovementNewTrailer")
 
   @@unique([tenantId, plate])
   @@index([tenantId])

@@ -9,6 +9,7 @@ import { buildThrottlerOptions } from './common/config/throttler.config';
 import { AppConfig } from './config/configuration';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
@@ -21,6 +22,7 @@ import { TollsModule } from './tolls/tolls.module';
 import { TripAdvancesModule } from './trip-advances/trip-advances.module';
 import { TripExpensesModule } from './trip-expenses/trip-expenses.module';
 import { TripRevenuesModule } from './trip-revenues/trip-revenues.module';
+import { TiresModule } from './tires/tires.module';
 import { TripsModule } from './trips/trips.module';
 import { UsersModule } from './users/users.module';
 
@@ -62,6 +64,8 @@ import { UsersModule } from './users/users.module';
     TripAdvancesModule,
     FuelStationsModule,
     FuelSuppliesModule,
+    DashboardModule,
+    TiresModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
