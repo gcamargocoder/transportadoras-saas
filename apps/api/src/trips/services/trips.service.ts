@@ -24,6 +24,7 @@ import { TripEntity } from '../entities/trip.entity';
 import { TripSummaryEntity } from '../entities/trip-summary.entity';
 import { toTripEntity, TripWithRelations } from '../mappers/trip.mapper';
 import { toTripSummaryEntity } from '../mappers/trip-summary.mapper';
+import { TollRoutesService } from '../../toll-routes/services/toll-routes.service';
 import { CustomersService } from './customers.service';
 import { LocationsService } from './locations.service';
 
@@ -33,6 +34,7 @@ const TRIP_INCLUDE = {
   origin: true,
   destination: true,
   composition: { include: { vehicle: true } },
+  tollRoute: true,
 } satisfies Prisma.TripInclude;
 
 // Viagens ainda "em aberto" (nao concluidas/canceladas) -- usado tanto para
@@ -97,6 +99,7 @@ export class TripsService {
     private readonly audit: AuditService,
     private readonly locationsService: LocationsService,
     private readonly customersService: CustomersService,
+    private readonly tollRoutesService: TollRoutesService,
   ) {}
 
   async findAll(tenantId: string, query: FindTripsQueryDto): Promise<PaginatedTripsEntity> {
@@ -220,6 +223,9 @@ export class TripsService {
     if (dto.customerId) {
       await this.customersService.findActiveOrThrow(tenantId, dto.customerId);
     }
+    if (dto.tollRouteId) {
+      await this.tollRoutesService.findActiveOrThrow(tenantId, dto.tollRouteId);
+    }
     await this.assertDriverAvailable(tenantId, dto.driverId, departure, arrival);
     const composition = await this.assertCompositionAvailable(tenantId, dto.compositionId);
     await this.assertVehicleAvailable(tenantId, composition.vehicleId, departure, arrival);
@@ -235,6 +241,7 @@ export class TripsService {
           plannedArrival: arrival,
           ...compact({
             customerId: dto.customerId,
+            tollRouteId: dto.tollRouteId,
             priority: dto.priority,
             notes: dto.notes,
           }),
@@ -345,6 +352,12 @@ export class TripsService {
     }
     if (dto.customerId) await this.customersService.findActiveOrThrow(tenantId, dto.customerId);
 
+    const tollRouteChanged =
+      dto.tollRouteId !== undefined && dto.tollRouteId !== before.tollRouteId;
+    if (tollRouteChanged && dto.tollRouteId) {
+      await this.tollRoutesService.findActiveOrThrow(tenantId, dto.tollRouteId);
+    }
+
     const driverChanged = dto.driverId !== undefined && dto.driverId !== before.driverId;
     if (driverChanged && departure && arrival) {
       await this.assertDriverAvailable(tenantId, dto.driverId as string, departure, arrival, id);
@@ -375,6 +388,7 @@ export class TripsService {
           driverId: dto.driverId,
           originLocationId: dto.originLocationId,
           destinationLocationId: dto.destinationLocationId,
+          tollRouteId: dto.tollRouteId,
           plannedDeparture: dto.plannedDeparture ? departure : undefined,
           plannedArrival: dto.plannedArrival ? arrival : undefined,
           priority: dto.priority,
@@ -413,6 +427,7 @@ export class TripsService {
         plannedArrival: before.plannedArrival,
         driverId: before.driverId,
         compositionId: currentCompositionId,
+        tollRouteId: before.tollRouteId,
       }),
       newValue: toJsonSafe({
         originLocationId: after.originLocationId,
@@ -421,6 +436,7 @@ export class TripsService {
         plannedArrival: after.plannedArrival,
         driverId: after.driverId,
         compositionId: after.composition?.id ?? null,
+        tollRouteId: after.tollRouteId,
       }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,

@@ -2,6 +2,7 @@ import type { Paginated, PaginationParams } from '../../types/api';
 import type {
   ImportJobEntity,
   ImportJobErrorEntity,
+  TollAuditVerdict,
   TollDashboardEntity,
   TollPlazaEntity,
   TollTransactionEntity,
@@ -16,6 +17,7 @@ export interface FindTollTransactionsQuery extends PaginationParams {
   tagProviderId?: string | undefined;
   tollPlazaId?: string | undefined;
   status?: TollTransactionStatus | undefined;
+  auditVerdict?: TollAuditVerdict | undefined;
   chargedFrom?: string | undefined;
   chargedTo?: string | undefined;
   sortBy?: string | undefined;
@@ -68,6 +70,30 @@ export function listTollPlazas(query: FindTollPlazasQuery = {}, signal?: AbortSi
 
 export function getTollPlaza(id: string) {
   return api.get<TollPlazaEntity>(`/toll-plazas/${id}`);
+}
+
+export interface CreateTollPlazaPayload {
+  name: string;
+  operator: string;
+  highway?: string | undefined;
+  km?: number | undefined;
+  city?: string | undefined;
+  state?: string | undefined;
+  latitude?: number | undefined;
+  longitude?: number | undefined;
+  pricePerAxle?: number | undefined;
+}
+
+export function createTollPlaza(payload: CreateTollPlazaPayload) {
+  return api.post<TollPlazaEntity>('/toll-plazas', payload);
+}
+
+export function updateTollPlaza(id: string, payload: Partial<CreateTollPlazaPayload>) {
+  return api.patch<TollPlazaEntity>(`/toll-plazas/${id}`, payload);
+}
+
+export function deleteTollPlaza(id: string) {
+  return api.delete<void>(`/toll-plazas/${id}`);
 }
 
 // --- Importação de extratos ---

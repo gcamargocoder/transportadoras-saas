@@ -6,6 +6,9 @@ import {
   Gauge,
   HandCoins,
   LayoutDashboard,
+  Link2,
+  MapPinned,
+  Milestone,
   Receipt,
   Route,
   Settings,
@@ -25,6 +28,7 @@ import {
   FLEET_READ_ROLES,
   FUEL_STATION_READ_ROLES,
   FUEL_SUPPLY_READ_ROLES,
+  SUPER_ADMIN_ONLY,
   TIRE_READ_ROLES,
   TOLL_READ_ROLES,
   TRIP_ADVANCE_READ_ROLES,
@@ -57,6 +61,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Viagens', href: '/trips', icon: Route, roles: TRIP_READ_ROLES },
       { label: 'Pedágios', href: '/tolls', icon: Ticket, roles: TOLL_READ_ROLES },
+      { label: 'Rotas de pedágio', href: '/toll-routes', icon: Milestone, roles: TOLL_READ_ROLES },
     ],
   },
   {
@@ -64,6 +69,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Veículos', href: '/vehicles', icon: Truck, roles: FLEET_READ_ROLES },
       { label: 'Carretas', href: '/trailers', icon: Container, roles: FLEET_READ_ROLES },
+      { label: 'Composições', href: '/compositions', icon: Link2, roles: FLEET_READ_ROLES },
       { label: 'Motoristas', href: '/drivers', icon: UserRound, roles: DRIVER_READ_ROLES },
       { label: 'Pneus', href: '/tires', icon: CircleDot, roles: TIRE_READ_ROLES },
       { label: 'Manutenções', href: '/maintenances', icon: Wrench, roles: FLEET_READ_ROLES },
@@ -97,6 +103,12 @@ export const NAV_GROUPS: NavGroup[] = [
         href: '/fuel-stations',
         icon: Fuel,
         roles: FUEL_STATION_READ_ROLES,
+      },
+      {
+        label: 'Praças de pedágio',
+        href: '/toll-plazas',
+        icon: MapPinned,
+        roles: SUPER_ADMIN_ONLY,
       },
     ],
   },

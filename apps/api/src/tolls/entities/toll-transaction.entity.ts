@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { TollTransactionSource, TollTransactionStatus } from '@prisma/client';
+import { TOLL_AUDIT_VERDICTS, TollAuditVerdict } from '../utils/toll-calculation.util';
 
 export class TollTransactionEntity {
   @ApiProperty({ format: 'uuid' })
@@ -49,6 +50,21 @@ export class TollTransactionEntity {
 
   @ApiProperty({ enum: TollTransactionStatus })
   status!: TollTransactionStatus;
+
+  @ApiProperty({
+    enum: TOLL_AUDIT_VERDICTS,
+    description:
+      'Motor de conferencia (Fase 22): calculado em tempo de leitura a partir do estado ' +
+      'ATUAL de TollPlaza.pricePerAxle -- nunca do expectedAmount/status ja gravados. ' +
+      'Distinto de "status": nunca gera falso positivo quando a tarifa da praca e desconhecida.',
+  })
+  auditVerdict!: TollAuditVerdict;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Preenchido apenas quando auditVerdict = UNVERIFIABLE.',
+  })
+  auditMessage!: string | null;
 
   @ApiProperty()
   chargedAt!: Date;

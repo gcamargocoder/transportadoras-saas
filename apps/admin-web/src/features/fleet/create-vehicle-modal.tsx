@@ -16,11 +16,18 @@ import { VEHICLE_FUEL_TYPE_LABELS, VEHICLE_TYPE_LABELS } from '../../lib/labels'
 import type { VehicleFuelType } from '../../types/enums';
 
 const schema = z.object({
-  plate: z.string().min(1, 'Informe a placa.').max(10),
+  plate: z.string().min(7, 'Informe uma placa válida (7 caracteres).').max(10, 'Placa inválida.'),
   brand: z.string().min(1, 'Informe a marca.'),
   model: z.string().min(1, 'Informe o modelo.'),
   type: z.enum(['TRACTOR_UNIT', 'TRUCK', 'VAN', 'PICKUP', 'OTHER']),
   fuelType: z.string().optional(),
+  axleCount: z.coerce
+    .number()
+    .int()
+    .optional()
+    .refine((v) => v === undefined || v === 0 || v >= 2, {
+      message: 'A quantidade de eixos deve ser no mínimo 2 (deixe em branco se não souber).',
+    }),
   manufactureYear: z.coerce.number().optional(),
   modelYear: z.coerce.number().optional(),
   odometerKm: z.coerce.number().optional(),
@@ -52,6 +59,7 @@ export function CreateVehicleModal({
       createVehicle({
         ...values,
         fuelType: values.fuelType ? (values.fuelType as VehicleFuelType) : undefined,
+        axleCount: values.axleCount ? values.axleCount : undefined,
       }),
     onSuccess: () => {
       toast.success('Veículo cadastrado com sucesso.');
@@ -89,12 +97,20 @@ export function CreateVehicleModal({
       }
     >
       <form className="grid grid-cols-1 gap-4 sm:grid-cols-2" onSubmit={(e) => e.preventDefault()}>
-        <FormField label="Placa" htmlFor="plate" required error={errors.plate?.message}>
+        <FormField
+          label="Placa"
+          htmlFor="plate"
+          required
+          error={errors.plate?.message}
+          hint="Identificação principal do veículo — usada em toda a auditoria de pedágio."
+        >
           <Input
             id="plate"
             invalid={Boolean(errors.plate)}
             {...register('plate')}
             placeholder="ABC1D23"
+            className="font-mono uppercase tracking-wider"
+            maxLength={10}
           />
         </FormField>
         <FormField label="Tipo" htmlFor="type" required>
@@ -111,6 +127,20 @@ export function CreateVehicleModal({
         </FormField>
         <FormField label="Modelo" htmlFor="model" required error={errors.model?.message}>
           <Input id="model" invalid={Boolean(errors.model)} {...register('model')} />
+        </FormField>
+        <FormField
+          label="Quantidade de eixos do veículo"
+          htmlFor="axleCount"
+          error={errors.axleCount?.message}
+          hint="Eixos físicos do veículo (distinto da configuração de eixos da composição, usada na conferência de pedágio)."
+        >
+          <Input
+            id="axleCount"
+            type="number"
+            min={2}
+            invalid={Boolean(errors.axleCount)}
+            {...register('axleCount')}
+          />
         </FormField>
         <FormField label="Combustível" htmlFor="fuelType" hint="Opcional">
           <Select id="fuelType" {...register('fuelType')}>

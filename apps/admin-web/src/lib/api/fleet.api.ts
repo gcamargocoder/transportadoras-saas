@@ -243,3 +243,23 @@ export function listTripCompositions(query: FindTripCompositionsQuery = {}, sign
 export function getTripComposition(id: string) {
   return api.get<TripCompositionEntity>(`/trip-compositions/${id}`);
 }
+
+export interface UpsertAxleConfigurationPayload {
+  totalAxles: number;
+  raisedAxles: number;
+  loweredAxles: number;
+  suspendedAxles: number;
+  steeringAxles: number;
+  tractionAxles: number;
+  billableCategory: string;
+}
+
+export interface CreateTripCompositionPayload {
+  vehicleId: string;
+  trailers?: { trailerId: string; positionOrder: number }[] | undefined;
+  axleConfiguration?: UpsertAxleConfigurationPayload | undefined;
+}
+
+export function createTripComposition(payload: CreateTripCompositionPayload) {
+  return api.post<TripCompositionEntity>('/trip-compositions', payload);
+}

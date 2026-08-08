@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { TollTransactionStatus } from '@prisma/client';
 import { IsDateString, IsEnum, IsIn, IsOptional, IsUUID } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { TOLL_AUDIT_VERDICTS, TollAuditVerdict } from '../utils/toll-calculation.util';
 
 export enum TollTransactionSortField {
   CHARGED_AT = 'chargedAt',
@@ -38,6 +39,16 @@ export class FindTollTransactionsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(TollTransactionStatus)
   status?: TollTransactionStatus;
+
+  @ApiPropertyOptional({
+    enum: TOLL_AUDIT_VERDICTS,
+    description:
+      'Filtra pelo veredito do motor de conferencia (Fase 22) -- CORRECT/OVERCHARGE/' +
+      'UNDERCHARGE/UNVERIFIABLE. Distinto de "status" (enum gravado no banco).',
+  })
+  @IsOptional()
+  @IsIn(TOLL_AUDIT_VERDICTS)
+  auditVerdict?: TollAuditVerdict;
 
   @ApiPropertyOptional({ description: 'Periodo: cobrado a partir de (ISO 8601).' })
   @IsOptional()

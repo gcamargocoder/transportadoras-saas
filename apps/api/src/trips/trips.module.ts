@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { TollRoutesModule } from '../toll-routes/toll-routes.module';
 import { TripExpensesModule } from '../trip-expenses/trip-expenses.module';
 import { TripSettlementsModule } from '../trip-settlements/trip-settlements.module';
 import { CustomersController } from './controllers/customers.controller';
@@ -12,7 +13,7 @@ import { TripMetricsService } from './services/trip-metrics.service';
 import { TripsService } from './services/trips.service';
 
 @Module({
-  imports: [TripExpensesModule, TripSettlementsModule],
+  imports: [TripExpensesModule, TripSettlementsModule, TollRoutesModule],
   controllers: [TripsController, CustomersController, LocationsController],
   providers: [
     TripsService,

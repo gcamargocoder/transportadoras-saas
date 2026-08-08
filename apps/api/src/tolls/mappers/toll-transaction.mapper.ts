@@ -1,6 +1,7 @@
 import { Driver, TagProvider, TollPlaza, TollTransaction, Vehicle } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { TollTransactionEntity } from '../entities/toll-transaction.entity';
+import { computeAuditVerdict } from '../utils/toll-calculation.util';
 
 export type TollTransactionWithRelations = TollTransaction & {
   vehicle: Vehicle;
@@ -29,6 +30,15 @@ export function toTollTransactionEntity(
   entity.chargedAmount = toNumberOrNull(transaction.chargedAmount) ?? 0;
   entity.discrepancyAmount = toNumberOrNull(transaction.discrepancyAmount) ?? 0;
   entity.status = transaction.status;
+
+  const auditVerdict = computeAuditVerdict(
+    transaction.tollPlaza.pricePerAxle !== null,
+    entity.chargedAmount,
+    entity.discrepancyAmount,
+  );
+  entity.auditVerdict = auditVerdict.verdict;
+  entity.auditMessage = auditVerdict.message;
+
   entity.chargedAt = transaction.chargedAt;
   entity.source = transaction.source;
   entity.createdAt = transaction.createdAt;

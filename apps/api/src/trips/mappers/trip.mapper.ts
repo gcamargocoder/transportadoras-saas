@@ -1,4 +1,12 @@
-import { Customer, Driver, Location, Trip, TripComposition, Vehicle } from '@prisma/client';
+import {
+  Customer,
+  Driver,
+  Location,
+  TollRoute,
+  Trip,
+  TripComposition,
+  Vehicle,
+} from '@prisma/client';
 import { TripEntity } from '../entities/trip.entity';
 
 export type TripWithRelations = Trip & {
@@ -7,6 +15,7 @@ export type TripWithRelations = Trip & {
   origin: Location;
   destination: Location;
   composition: (TripComposition & { vehicle: Vehicle }) | null;
+  tollRoute: TollRoute | null;
 };
 
 export function toTripEntity(trip: TripWithRelations): TripEntity {
@@ -23,6 +32,8 @@ export function toTripEntity(trip: TripWithRelations): TripEntity {
   entity.destinationName = trip.destination.name;
   entity.compositionId = trip.composition?.id ?? null;
   entity.vehiclePlate = trip.composition?.vehicle.plate ?? null;
+  entity.tollRouteId = trip.tollRouteId;
+  entity.tollRouteName = trip.tollRoute?.name ?? null;
   entity.status = trip.status;
   entity.priority = trip.priority;
   entity.notes = trip.notes;

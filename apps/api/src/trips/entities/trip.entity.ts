@@ -38,6 +38,12 @@ export class TripEntity {
   @ApiProperty({ nullable: true, description: 'Placa do cavalo mecanico da composicao vinculada.' })
   vehiclePlate!: string | null;
 
+  @ApiProperty({ format: 'uuid', nullable: true })
+  tollRouteId!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'Nome da rota de pedagio vinculada.' })
+  tollRouteName!: string | null;
+
   @ApiProperty({ enum: TripStatus })
   status!: TripStatus;
 

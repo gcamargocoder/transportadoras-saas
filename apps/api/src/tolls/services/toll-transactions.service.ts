@@ -21,6 +21,8 @@ import {
   classifyTollTransaction,
   computeDiscrepancy,
   computeExpectedAmount,
+  DIVERGENCE_TOLERANCE,
+  TollAuditVerdict,
 } from '../utils/toll-calculation.util';
 
 const TRANSACTION_INCLUDE = {
@@ -221,7 +223,18 @@ export class TollTransactionsService {
   ): Promise<TollDashboardEntity> {
     const where = this.buildWhere(tenantId, query);
 
-    const [totals, byStatus, byProvider, byVehicle, byDriver, byPlaza] = await Promise.all([
+    const [
+      totals,
+      byStatus,
+      byProvider,
+      byVehicle,
+      byDriver,
+      byPlaza,
+      unverifiableCount,
+      correctCount,
+      overchargeCount,
+      underchargeCount,
+    ] = await Promise.all([
       this.prisma.tollTransaction.aggregate({
         where,
         _count: { _all: true },
@@ -256,6 +269,18 @@ export class TollTransactionsService {
         where,
         _count: { _all: true },
         _sum: { chargedAmount: true },
+      }),
+      this.prisma.tollTransaction.count({
+        where: { ...where, ...this.buildAuditVerdictWhere('UNVERIFIABLE') },
+      }),
+      this.prisma.tollTransaction.count({
+        where: { ...where, ...this.buildAuditVerdictWhere('CORRECT') },
+      }),
+      this.prisma.tollTransaction.count({
+        where: { ...where, ...this.buildAuditVerdictWhere('OVERCHARGE') },
+      }),
+      this.prisma.tollTransaction.count({
+        where: { ...where, ...this.buildAuditVerdictWhere('UNDERCHARGE') },
       }),
     ]);
 
@@ -309,6 +334,14 @@ export class TollTransactionsService {
       totalChargedAmount: Number(g._sum.chargedAmount ?? 0),
     }));
 
+    entity.unverifiableCount = unverifiableCount;
+    entity.correctCount = correctCount;
+    entity.overchargeCount = overchargeCount;
+    entity.underchargeCount = underchargeCount;
+    entity.conferredCount = correctCount + overchargeCount + underchargeCount;
+    entity.conformityPercentage =
+      entity.conferredCount > 0 ? (correctCount / entity.conferredCount) * 100 : 0;
+
     return entity;
   }
 
@@ -324,6 +357,7 @@ export class TollTransactionsService {
       ...(query.tagProviderId ? { tagProviderId: query.tagProviderId } : {}),
       ...(query.tollPlazaId ? { tollPlazaId: query.tollPlazaId } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.auditVerdict ? this.buildAuditVerdictWhere(query.auditVerdict) : {}),
       ...(query.chargedFrom || query.chargedTo
         ? {
             chargedAt: {
@@ -332,6 +366,43 @@ export class TollTransactionsService {
             },
           }
         : {}),
+    };
+  }
+
+  // Espelha computeAuditVerdict() (toll-calculation.util.ts) como filtro
+  // Prisma -- mesma logica, aplicada no banco em vez de por transacao.
+  // pricePerAxle e sempre lido do estado ATUAL da praca (relation filter),
+  // nunca de expectedAmount/status ja gravados (ver comentario no util).
+  private buildAuditVerdictWhere(verdict: TollAuditVerdict): Prisma.TollTransactionWhereInput {
+    if (verdict === 'UNVERIFIABLE') {
+      return { tollPlaza: { pricePerAxle: null } };
+    }
+
+    const priceKnown: Prisma.TollTransactionWhereInput = {
+      tollPlaza: { pricePerAxle: { not: null } },
+    };
+
+    if (verdict === 'OVERCHARGE') {
+      return {
+        ...priceKnown,
+        chargedAmount: { not: 0 },
+        discrepancyAmount: { gt: DIVERGENCE_TOLERANCE },
+      };
+    }
+    if (verdict === 'UNDERCHARGE') {
+      return {
+        ...priceKnown,
+        chargedAmount: { not: 0 },
+        discrepancyAmount: { lt: -DIVERGENCE_TOLERANCE },
+      };
+    }
+    // CORRECT: isento (chargedAmount = 0) OU dentro da tolerancia.
+    return {
+      ...priceKnown,
+      OR: [
+        { chargedAmount: 0 },
+        { discrepancyAmount: { gte: -DIVERGENCE_TOLERANCE, lte: DIVERGENCE_TOLERANCE } },
+      ],
     };
   }
 

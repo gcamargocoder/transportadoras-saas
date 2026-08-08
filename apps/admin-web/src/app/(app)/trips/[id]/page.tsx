@@ -14,13 +14,21 @@ import { AdvancesTab } from '../../../../features/trips/tabs/advances-tab';
 import { ExpensesTab } from '../../../../features/trips/tabs/expenses-tab';
 import { FinancialTab } from '../../../../features/trips/tabs/financial-tab';
 import { OverviewTab } from '../../../../features/trips/tabs/overview-tab';
+import { ReconciliationTab } from '../../../../features/trips/tabs/reconciliation-tab';
 import { RevenuesTab } from '../../../../features/trips/tabs/revenues-tab';
 import { TimelineTab } from '../../../../features/trips/tabs/timeline-tab';
 import { TollsTab } from '../../../../features/trips/tabs/tolls-tab';
 import { TRIP_STATUS_LABELS } from '../../../../lib/labels';
 
 type TabValue =
-  'overview' | 'timeline' | 'tolls' | 'expenses' | 'revenues' | 'advances' | 'financial';
+  | 'overview'
+  | 'timeline'
+  | 'tolls'
+  | 'reconciliation'
+  | 'expenses'
+  | 'revenues'
+  | 'advances'
+  | 'financial';
 
 export default function TripDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
@@ -54,6 +62,7 @@ export default function TripDetailPage(): JSX.Element {
           { value: 'overview', label: 'Visão geral' },
           { value: 'timeline', label: 'Linha do tempo' },
           { value: 'tolls', label: 'Pedágios' },
+          { value: 'reconciliation', label: 'Conciliação de Pedágios' },
           { value: 'expenses', label: 'Despesas' },
           { value: 'revenues', label: 'Receitas' },
           { value: 'advances', label: 'Adiantamentos' },
@@ -67,6 +76,7 @@ export default function TripDetailPage(): JSX.Element {
         {tab === 'overview' && <OverviewTab trip={trip} />}
         {tab === 'timeline' && <TimelineTab tripId={trip.id} />}
         {tab === 'tolls' && <TollsTab tripId={trip.id} />}
+        {tab === 'reconciliation' && <ReconciliationTab tripId={trip.id} />}
         {tab === 'expenses' && <ExpensesTab tripId={trip.id} />}
         {tab === 'revenues' && <RevenuesTab tripId={trip.id} />}
         {tab === 'advances' && <AdvancesTab tripId={trip.id} />}

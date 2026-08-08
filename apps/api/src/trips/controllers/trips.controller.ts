@@ -37,6 +37,8 @@ import { CloseTripSettlementDto } from '../../trip-settlements/dto/close-trip-se
 import { TripFinancialDashboardEntity } from '../../trip-settlements/entities/trip-financial-dashboard.entity';
 import { TripSettlementEntity } from '../../trip-settlements/entities/trip-settlement.entity';
 import { TripSettlementsService } from '../../trip-settlements/services/trip-settlements.service';
+import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
+import { TollReconciliationEntity } from '../../toll-routes/entities/toll-reconciliation.entity';
 import { TRIP_READ_ROLES, TRIP_WRITE_ROLES } from '../constants/trip-roles.constants';
 import { CreateRouteEventDto } from '../dto/create-route-event.dto';
 import { CreateTripDto } from '../dto/create-trip.dto';
@@ -67,6 +69,7 @@ export class TripsController {
     private readonly tripMetricsService: TripMetricsService,
     private readonly tripExpensesService: TripExpensesService,
     private readonly tripSettlementsService: TripSettlementsService,
+    private readonly tollReconciliationService: TollReconciliationService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -459,6 +462,29 @@ export class TripsController {
     @Param('id', ParseUUIDPipe) tripId: string,
   ): Promise<TripFinancialDashboardEntity> {
     return this.tripSettlementsService.getFinancialDashboard(
+      this.tenantContext.requireTenantId(),
+      tripId,
+    );
+  }
+
+  // ==========================================================================
+  // CONCILIACAO DE PEDAGIO (Fase 23) -- compara as pracas ESPERADAS pela rota
+  // de pedagio vinculada com os pedagios efetivamente REGISTRADOS na viagem.
+  // ==========================================================================
+  @Get(':id/toll-reconciliation')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Concilia a rota de pedagio da viagem com os pedagios registrados: pracas esperadas x ' +
+      'registradas, divergencias de valor, pracas nao registradas e pedagios nao previstos. ' +
+      'Quando a viagem nao tem rota vinculada, retorna hasRoute=false.',
+  })
+  @ApiOkResponse({ type: TollReconciliationEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findTollReconciliation(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<TollReconciliationEntity> {
+    return this.tollReconciliationService.getReconciliation(
       this.tenantContext.requireTenantId(),
       tripId,
     );

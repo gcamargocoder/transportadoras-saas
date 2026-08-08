@@ -2,18 +2,25 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardBody, CardHeader } from '../../../components/ui/card';
+import { EntitySelect } from '../../../components/ui/entity-select';
 import { ErrorState } from '../../../components/ui/error-state';
 import { LoadingState } from '../../../components/ui/loading-state';
 import { Select } from '../../../components/ui/select';
 import { useToast } from '../../../components/ui/toast';
 import { useAuth } from '../../../hooks/use-auth';
 import { toFriendlyMessage } from '../../../lib/api/errors';
-import { getTripMetrics, getTripSummary, updateTripStatus } from '../../../lib/api/trips.api';
+import {
+  getTripMetrics,
+  getTripSummary,
+  updateTrip,
+  updateTripStatus,
+} from '../../../lib/api/trips.api';
+import { listTollRoutes } from '../../../lib/api/toll-routes.api';
 import { TRIP_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { TRIP_STATUS_OPTIONS } from '../status';
 import { TRIP_STATUS_LABELS } from '../../../lib/labels';
 import type { TripEntity } from '../../../types/entities';
-import type { TripStatus } from '../../../types/enums';
+import { TripStatus } from '../../../types/enums';
 import { formatCurrency, formatDateTime, formatNumber } from '../../../utils/format';
 
 export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
@@ -41,7 +48,21 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
       toast.error('Não foi possível atualizar o status.', toFriendlyMessage(error)),
   });
 
+  const tollRouteMutation = useMutation({
+    mutationFn: (tollRouteId: string | null) => updateTrip(trip.id, { tollRouteId }),
+    onSuccess: () => {
+      toast.success('Rota de pedágio atualizada.');
+      queryClient.invalidateQueries({ queryKey: ['trips', trip.id] });
+      queryClient.invalidateQueries({ queryKey: ['trips', trip.id, 'toll-reconciliation'] });
+    },
+    onError: (error) =>
+      toast.error('Não foi possível atualizar a rota de pedágio.', toFriendlyMessage(error)),
+  });
+
   const canWrite = hasRole(user?.role, TRIP_WRITE_ROLES);
+  // Mesma regra do backend: so e possivel editar o planejamento (inclusive
+  // a rota de pedagio) enquanto a viagem esta em PLANNED.
+  const canEditRoute = canWrite && trip.status === TripStatus.PLANNED;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -75,6 +96,28 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
             <Field label="Saída real" value={formatDateTime(trip.actualDeparture)} />
             <Field label="Chegada real" value={formatDateTime(trip.actualArrival)} />
           </div>
+
+          <div className="mt-4">
+            <p className="text-xs text-ink-subtle">Rota de pedágio</p>
+            {canEditRoute ? (
+              <div className="mt-1 max-w-sm">
+                <EntitySelect
+                  id="tollRouteId"
+                  queryKey={['toll-routes', 'select']}
+                  queryFn={() => listTollRoutes({ pageSize: 100, isActive: true })}
+                  getOptionValue={(r) => r.id}
+                  getOptionLabel={(r) => `${r.name} (${r.originLabel} → ${r.destinationLabel})`}
+                  value={trip.tollRouteId ?? ''}
+                  onChange={(value) => tollRouteMutation.mutate(value || null)}
+                  disabled={tollRouteMutation.isPending}
+                  placeholder="Nenhuma"
+                />
+              </div>
+            ) : (
+              <p className="mt-0.5 text-sm font-medium text-ink">{trip.tollRouteName ?? '-'}</p>
+            )}
+          </div>
+
           {trip.notes && <p className="mt-4 text-sm text-ink-muted">{trip.notes}</p>}
         </CardBody>
       </Card>

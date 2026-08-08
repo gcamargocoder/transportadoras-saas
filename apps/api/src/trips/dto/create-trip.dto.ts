@@ -39,6 +39,16 @@ export class CreateTripDto {
   @IsUUID('4', { message: 'compositionId deve ser um UUID valido.' })
   compositionId!: string;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Rota de pedagio (Fase 23, ver POST /toll-routes) -- determina as pracas esperadas ' +
+      'para a conciliacao. Opcional: a viagem funciona normalmente sem rota vinculada.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'tollRouteId deve ser um UUID valido.' })
+  tollRouteId?: string;
+
   @ApiProperty({ example: '2026-03-10T08:00:00.000Z' })
   @IsDateString({}, { message: 'plannedDeparture deve ser uma data valida (ISO 8601).' })
   plannedDeparture!: string;

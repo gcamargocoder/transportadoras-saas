@@ -18,6 +18,7 @@ import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { TollImportModule } from './toll-import/toll-import.module';
+import { TollRoutesModule } from './toll-routes/toll-routes.module';
 import { TollsModule } from './tolls/tolls.module';
 import { TripAdvancesModule } from './trip-advances/trip-advances.module';
 import { TripExpensesModule } from './trip-expenses/trip-expenses.module';
@@ -59,6 +60,7 @@ import { UsersModule } from './users/users.module';
     TripsModule,
     TollsModule,
     TollImportModule,
+    TollRoutesModule,
     TripExpensesModule,
     TripRevenuesModule,
     TripAdvancesModule,

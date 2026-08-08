@@ -6,6 +6,7 @@ export const createTripSchema = z.object({
   destinationLocationId: z.string().uuid('Selecione o destino.'),
   driverId: z.string().uuid('Selecione o motorista.'),
   compositionId: z.string().uuid('Selecione a composição (veículo + carretas).'),
+  tollRouteId: z.union([z.string().uuid(), z.literal('')]).optional(),
   plannedDeparture: z.string().min(1, 'Informe a data/hora de saída prevista.'),
   plannedArrival: z.string().min(1, 'Informe a data/hora de chegada prevista.'),
   priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']),

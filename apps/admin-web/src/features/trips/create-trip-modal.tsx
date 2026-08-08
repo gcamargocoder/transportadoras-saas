@@ -15,6 +15,7 @@ import { listTripCompositions } from '../../lib/api/fleet.api';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { TRIP_PRIORITY_LABELS } from '../../lib/labels';
 import { createTrip, listCustomers, listLocations } from '../../lib/api/trips.api';
+import { listTollRoutes } from '../../lib/api/toll-routes.api';
 import { listDrivers } from '../../lib/api/drivers.api';
 import { createTripSchema, type CreateTripFormValues } from './create-trip-schema';
 
@@ -45,6 +46,7 @@ export function CreateTripModal({
       createTrip({
         ...values,
         customerId: values.customerId || undefined,
+        tollRouteId: values.tollRouteId || undefined,
         plannedDeparture: new Date(values.plannedDeparture).toISOString(),
         plannedArrival: new Date(values.plannedArrival).toISOString(),
       }),
@@ -195,6 +197,30 @@ export function CreateTripModal({
                 value={field.value ?? ''}
                 onChange={field.onChange}
                 invalid={Boolean(errors.compositionId)}
+              />
+            )}
+          />
+        </FormField>
+
+        <FormField
+          label="Rota de pedágio"
+          htmlFor="tollRouteId"
+          hint="Opcional — define as praças esperadas para a conciliação de pedágio."
+          className="sm:col-span-2"
+        >
+          <Controller
+            control={control}
+            name="tollRouteId"
+            render={({ field }) => (
+              <EntitySelect
+                id="tollRouteId"
+                queryKey={['toll-routes', 'select']}
+                queryFn={() => listTollRoutes({ pageSize: 100, isActive: true })}
+                getOptionValue={(r) => r.id}
+                getOptionLabel={(r) => `${r.name} (${r.originLabel} → ${r.destinationLabel})`}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+                placeholder="Nenhuma"
               />
             )}
           />

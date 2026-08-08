@@ -492,6 +492,8 @@ model Tenant {
   driverShifts            DriverShift[]
   tollTransactions        TollTransaction[]
   tollAudits              TollAudit[]
+  tollRoutes              TollRoute[]
+  tollRouteStops          TollRouteStop[]
   importJobs              ImportJob[]
   importJobErrors         ImportJobError[]
   fuelStations            FuelStation[]
@@ -557,7 +559,7 @@ model UserAccount {
   tripRevenuesUpdated            TripRevenue[]        @relation("TripRevenueUpdater")
   tripAdvancesCreated            TripAdvance[]        @relation("TripAdvanceCreator")
   tripAdvancesUpdated            TripAdvance[]        @relation("TripAdvanceUpdater")
-  tripSettlementsClosed          TripSettlement[]      @relation("TripSettlementCloser")
+  tripSettlementsClosed          TripSettlement[]     @relation("TripSettlementCloser")
   fuelSuppliesCreated            FuelSupply[]         @relation("FuelSupplyCreator")
   fuelSuppliesUpdated            FuelSupply[]         @relation("FuelSupplyUpdater")
   tiresCreated                   Tire[]               @relation("TireCreator")
@@ -683,18 +685,18 @@ model Vehicle {
   createdAt             DateTime         @default(now()) @map("created_at")
   updatedAt             DateTime         @updatedAt @map("updated_at")
 
-  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  fleet            Fleet?               @relation(fields: [fleetId], references: [id], onDelete: SetNull)
-  tripCompositions TripComposition[]
-  tags             VehicleTag[]
-  telemetry        Telemetry[]
-  maintenances     VehicleMaintenance[]
-  tollTransactions TollTransaction[]
-  tripExpenses     TripExpense[]
-  fuelSupplies     FuelSupply[]
-  tires                    Tire[]         @relation("TireCurrentVehicle")
-  tireMovementsAsPrevious  TireMovement[] @relation("TireMovementPreviousVehicle")
-  tireMovementsAsNew       TireMovement[] @relation("TireMovementNewVehicle")
+  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleet                   Fleet?               @relation(fields: [fleetId], references: [id], onDelete: SetNull)
+  tripCompositions        TripComposition[]
+  tags                    VehicleTag[]
+  telemetry               Telemetry[]
+  maintenances            VehicleMaintenance[]
+  tollTransactions        TollTransaction[]
+  tripExpenses            TripExpense[]
+  fuelSupplies            FuelSupply[]
+  tires                   Tire[]               @relation("TireCurrentVehicle")
+  tireMovementsAsPrevious TireMovement[]       @relation("TireMovementPreviousVehicle")
+  tireMovementsAsNew      TireMovement[]       @relation("TireMovementNewVehicle")
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -757,30 +759,30 @@ model VehicleMaintenance {
 /// ONDE o pneu esta fisicamente AGORA (sempre um snapshot atual -- o
 /// historico de cada troca fica em TireMovement, nunca sobrescrito).
 model Tire {
-  id                  String            @id @default(uuid()) @db.Uuid
-  tenantId            String            @map("tenant_id") @db.Uuid
-  fireNumber          String            @map("fire_number")
+  id                  String           @id @default(uuid()) @db.Uuid
+  tenantId            String           @map("tenant_id") @db.Uuid
+  fireNumber          String           @map("fire_number")
   manufacturer        String
   model               String
   size                String
   dot                 String?
-  serialNumber        String?           @map("serial_number")
-  purchaseDate        DateTime?         @map("purchase_date")
-  purchasePrice       Decimal?          @map("purchase_price") @db.Decimal(10, 2)
-  expectedLifespanKm  Decimal?          @map("expected_lifespan_km") @db.Decimal(10, 2)
-  initialTreadDepthMm Decimal?          @map("initial_tread_depth_mm") @db.Decimal(5, 2)
+  serialNumber        String?          @map("serial_number")
+  purchaseDate        DateTime?        @map("purchase_date")
+  purchasePrice       Decimal?         @map("purchase_price") @db.Decimal(10, 2)
+  expectedLifespanKm  Decimal?         @map("expected_lifespan_km") @db.Decimal(10, 2)
+  initialTreadDepthMm Decimal?         @map("initial_tread_depth_mm") @db.Decimal(5, 2)
   /// Atualizado automaticamente pela inspecao mais recente (ver
   /// TiresService.createInspection).
-  currentTreadDepthMm Decimal?          @map("current_tread_depth_mm") @db.Decimal(5, 2)
-  status              TireStatus        @default(STOCK)
-  locationType        TireLocationType  @default(STOCK) @map("location_type")
-  vehicleId           String?           @map("vehicle_id") @db.Uuid
-  trailerId           String?           @map("trailer_id") @db.Uuid
+  currentTreadDepthMm Decimal?         @map("current_tread_depth_mm") @db.Decimal(5, 2)
+  status              TireStatus       @default(STOCK)
+  locationType        TireLocationType @default(STOCK) @map("location_type")
+  vehicleId           String?          @map("vehicle_id") @db.Uuid
+  trailerId           String?          @map("trailer_id") @db.Uuid
   position            String?
-  createdBy           String            @map("created_by") @db.Uuid
-  updatedBy           String?           @map("updated_by") @db.Uuid
-  createdAt           DateTime          @default(now()) @map("created_at")
-  updatedAt           DateTime          @updatedAt @map("updated_at")
+  createdBy           String           @map("created_by") @db.Uuid
+  updatedBy           String?          @map("updated_by") @db.Uuid
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
 
   tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   vehicle     Vehicle?         @relation("TireCurrentVehicle", fields: [vehicleId], references: [id], onDelete: SetNull)
@@ -823,13 +825,13 @@ model TireMovement {
   createdBy            String            @map("created_by") @db.Uuid
   createdAt            DateTime          @default(now()) @map("created_at")
 
-  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tire            Tire         @relation(fields: [tireId], references: [id], onDelete: Cascade)
-  previousVehicle Vehicle?     @relation("TireMovementPreviousVehicle", fields: [previousVehicleId], references: [id], onDelete: SetNull)
-  newVehicle      Vehicle?     @relation("TireMovementNewVehicle", fields: [newVehicleId], references: [id], onDelete: SetNull)
-  previousTrailer Trailer?     @relation("TireMovementPreviousTrailer", fields: [previousTrailerId], references: [id], onDelete: SetNull)
-  newTrailer      Trailer?     @relation("TireMovementNewTrailer", fields: [newTrailerId], references: [id], onDelete: SetNull)
-  creator         UserAccount  @relation("TireMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tire            Tire        @relation(fields: [tireId], references: [id], onDelete: Cascade)
+  previousVehicle Vehicle?    @relation("TireMovementPreviousVehicle", fields: [previousVehicleId], references: [id], onDelete: SetNull)
+  newVehicle      Vehicle?    @relation("TireMovementNewVehicle", fields: [newVehicleId], references: [id], onDelete: SetNull)
+  previousTrailer Trailer?    @relation("TireMovementPreviousTrailer", fields: [previousTrailerId], references: [id], onDelete: SetNull)
+  newTrailer      Trailer?    @relation("TireMovementNewTrailer", fields: [newTrailerId], references: [id], onDelete: SetNull)
+  creator         UserAccount @relation("TireMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([tenantId, tireId])
@@ -990,9 +992,9 @@ model Trailer {
 
   tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   tripCompositionTrailers TripCompositionTrailer[]
-  tires                   Tire[]         @relation("TireCurrentTrailer")
-  tireMovementsAsPrevious TireMovement[] @relation("TireMovementPreviousTrailer")
-  tireMovementsAsNew      TireMovement[] @relation("TireMovementNewTrailer")
+  tires                   Tire[]                   @relation("TireCurrentTrailer")
+  tireMovementsAsPrevious TireMovement[]           @relation("TireMovementPreviousTrailer")
+  tireMovementsAsNew      TireMovement[]           @relation("TireMovementNewTrailer")
 
   @@unique([tenantId, plate])
   @@index([tenantId])
@@ -1261,6 +1263,12 @@ model Trip {
   driverId              String?      @map("driver_id") @db.Uuid
   originLocationId      String       @map("origin_location_id") @db.Uuid
   destinationLocationId String       @map("destination_location_id") @db.Uuid
+  /// Rota de pedagio (Fase 23) -- corredor operacional conhecido, usado
+  /// para determinar deterministicamente as pracas esperadas na viagem.
+  /// Opcional: viagens sem rota continuam funcionando normalmente (nao
+  /// entram na conciliacao, mas seguem operando e podendo ter pedagios
+  /// registrados manualmente como antes da Fase 23).
+  tollRouteId           String?      @map("toll_route_id") @db.Uuid
   status                TripStatus   @default(PLANNED)
   priority              TripPriority @default(NORMAL)
   notes                 String?
@@ -1274,11 +1282,12 @@ model Trip {
   createdAt             DateTime     @default(now()) @map("created_at")
   updatedAt             DateTime     @updatedAt @map("updated_at")
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  driver      Driver?   @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  origin      Location  @relation("TripOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
-  destination Location  @relation("TripDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  driver      Driver?    @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  origin      Location   @relation("TripOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
+  destination Location   @relation("TripDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+  tollRoute   TollRoute? @relation(fields: [tollRouteId], references: [id], onDelete: SetNull)
 
   composition      TripComposition?
   routeVersions    RouteVersion[]
@@ -1468,8 +1477,62 @@ model TollPlaza {
   rates        TollRate[]
   predictions  TollPrediction[]
   transactions TollTransaction[]
+  routeStops   TollRouteStop[]
 
   @@map("toll_plazas")
+}
+
+/// Rota de pedagio (Fase 23) -- corredor operacional conhecido pela
+/// transportadora (ex: "Sao Jose do Rio Preto -> Sao Paulo"), usado para
+/// determinar deterministicamente quais pracas sao esperadas numa viagem,
+/// SEM depender de geolocalizacao/roteirizacao automatica (fora de escopo
+/// desta fase -- ver TollPrediction/RouteVersion para a abordagem
+/// geografica, ainda nao usada por nenhum codigo). originLabel/
+/// destinationLabel sao texto livre (nome de cidade/regiao), distintos de
+/// Location (que representa um endereco operacional especifico de
+/// embarque/descarga) -- um corredor de pedagio e um conceito de rodovia,
+/// nao de endereco.
+model TollRoute {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  name             String
+  originLabel      String   @map("origin_label")
+  destinationLabel String   @map("destination_label")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stops  TollRouteStop[]
+  trips  Trip[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("toll_routes")
+}
+
+/// Parada (praca esperada) de uma TollRoute, em ordem. A mesma TollPlaza
+/// pode participar de varias rotas; uma rota nao pode repetir a mesma praca
+/// duas vezes (ver @@unique abaixo) -- TollPlaza continua sendo a unica
+/// fonte de verdade da praca, esta tabela so guarda a ORDEM dela dentro de
+/// uma rota especifica.
+model TollRouteStop {
+  id          String @id @default(uuid()) @db.Uuid
+  tenantId    String @map("tenant_id") @db.Uuid
+  tollRouteId String @map("toll_route_id") @db.Uuid
+  tollPlazaId String @map("toll_plaza_id") @db.Uuid
+  /// Posicao da praca na rota (1 = primeira praca esperada).
+  sequence    Int
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tollRoute TollRoute @relation(fields: [tollRouteId], references: [id], onDelete: Cascade)
+  tollPlaza TollPlaza @relation(fields: [tollPlazaId], references: [id], onDelete: Restrict)
+
+  @@unique([tollRouteId, sequence])
+  @@unique([tollRouteId, tollPlazaId])
+  @@index([tenantId])
+  @@index([tollPlazaId])
+  @@map("toll_route_stops")
 }
 
 /// Tarifa por praca e categoria de eixos, versionada no tempo (effectiveFrom)
@@ -1786,25 +1849,25 @@ model TripMetrics {
 /// reabrir (REOPENED) altera apenas o status, nunca apaga o snapshot
 /// anterior -- fechar novamente depois de reaberto recalcula os totais.
 model TripSettlement {
-  id             String           @id @default(uuid()) @db.Uuid
-  tenantId       String           @map("tenant_id") @db.Uuid
-  tripId         String           @unique @map("trip_id") @db.Uuid
-  totalRevenue   Decimal          @default(0) @map("total_revenue") @db.Decimal(12, 2)
-  totalExpenses  Decimal          @default(0) @map("total_expenses") @db.Decimal(12, 2)
-  totalAdvances  Decimal          @default(0) @map("total_advances") @db.Decimal(12, 2)
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @map("tenant_id") @db.Uuid
+  tripId        String           @unique @map("trip_id") @db.Uuid
+  totalRevenue  Decimal          @default(0) @map("total_revenue") @db.Decimal(12, 2)
+  totalExpenses Decimal          @default(0) @map("total_expenses") @db.Decimal(12, 2)
+  totalAdvances Decimal          @default(0) @map("total_advances") @db.Decimal(12, 2)
   /// totalRevenue - totalExpenses - totalAdvances -- pode ser negativo
   /// (prejuizo); nunca bloqueia o fechamento.
-  netResult      Decimal          @default(0) @map("net_result") @db.Decimal(12, 2)
-  status         SettlementStatus @default(OPEN)
-  closedBy       String?          @map("closed_by") @db.Uuid
-  closedAt       DateTime?        @map("closed_at")
-  notes          String?
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
+  netResult     Decimal          @default(0) @map("net_result") @db.Decimal(12, 2)
+  status        SettlementStatus @default(OPEN)
+  closedBy      String?          @map("closed_by") @db.Uuid
+  closedAt      DateTime?        @map("closed_at")
+  notes         String?
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
 
-  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip    Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  closer  UserAccount? @relation("TripSettlementCloser", fields: [closedBy], references: [id], onDelete: SetNull)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip   Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  closer UserAccount? @relation("TripSettlementCloser", fields: [closedBy], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([tenantId, status])

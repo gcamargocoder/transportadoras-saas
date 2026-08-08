@@ -8,11 +8,10 @@ import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
 import { DataTable } from '../../../components/ui/data-table';
 import { useAuth } from '../../../hooks/use-auth';
+import { AUDIT_VERDICT_LABELS, AUDIT_VERDICT_TONE } from '../../tolls/audit-verdict';
 import { CreateTollModal } from '../../tolls/create-toll-modal';
-import { TOLL_STATUS_TONE } from '../../tolls/status';
 import { listTollTransactions } from '../../../lib/api/tolls.api';
 import { TOLL_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
-import { TOLL_STATUS_LABELS } from '../../../lib/labels';
 import type { TollTransactionEntity } from '../../../types/entities';
 import { formatCurrency, formatDateTime } from '../../../utils/format';
 
@@ -30,12 +29,18 @@ export function TollsTab({ tripId }: { tripId: string }): JSX.Element {
       { header: 'Praça', accessorFn: (row) => row.tollPlazaName },
       { header: 'Data', cell: ({ row }) => formatDateTime(row.original.chargedAt) },
       { header: 'Cobrado', cell: ({ row }) => formatCurrency(row.original.chargedAmount) },
-      { header: 'Esperado', cell: ({ row }) => formatCurrency(row.original.expectedAmount) },
       {
-        header: 'Status',
+        header: 'Esperado',
+        cell: ({ row }) =>
+          row.original.auditVerdict === 'UNVERIFIABLE'
+            ? '-'
+            : formatCurrency(row.original.expectedAmount),
+      },
+      {
+        header: 'Conferência',
         cell: ({ row }) => (
-          <Badge tone={TOLL_STATUS_TONE[row.original.status]}>
-            {TOLL_STATUS_LABELS[row.original.status]}
+          <Badge tone={AUDIT_VERDICT_TONE[row.original.auditVerdict]}>
+            {AUDIT_VERDICT_LABELS[row.original.auditVerdict]}
           </Badge>
         ),
       },

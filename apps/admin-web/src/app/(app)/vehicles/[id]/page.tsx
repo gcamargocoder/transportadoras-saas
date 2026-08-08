@@ -2,22 +2,27 @@
 
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
+import { Pencil } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../../components/ui/badge';
+import { Button } from '../../../../components/ui/button';
 import { Card, CardBody } from '../../../../components/ui/card';
 import { DataTable } from '../../../../components/ui/data-table';
 import { ErrorState } from '../../../../components/ui/error-state';
 import { LoadingState } from '../../../../components/ui/loading-state';
 import { PageHeader } from '../../../../components/ui/page-header';
 import { Tabs } from '../../../../components/ui/tabs';
+import { useAuth } from '../../../../hooks/use-auth';
 import {
   getVehicle,
   getVehicleFuelHistory,
   getVehicleMaintenances,
   getVehicleTags,
 } from '../../../../lib/api/fleet.api';
+import { FLEET_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { MAINTENANCE_STATUS_TONE, VEHICLE_STATUS_TONE } from '../../../../features/fleet/status';
+import { UpdateVehicleModal } from '../../../../features/fleet/update-vehicle-modal';
 import {
   MAINTENANCE_STATUS_LABELS,
   MAINTENANCE_TYPE_LABELS,
@@ -37,7 +42,9 @@ type TabValue = 'overview' | 'maintenances' | 'fuel' | 'tags';
 export default function VehicleDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
   const vehicleId = params.id;
+  const { user } = useAuth();
   const [tab, setTab] = useState<TabValue>('overview');
+  const [editOpen, setEditOpen] = useState(false);
 
   const vehicleQuery = useQuery({
     queryKey: ['vehicles', vehicleId],
@@ -113,9 +120,17 @@ export default function VehicleDetailPage(): JSX.Element {
         description={`${vehicle.brand} ${vehicle.model} · ${VEHICLE_TYPE_LABELS[vehicle.type]}`}
         breadcrumb={[{ label: 'Veículos', href: '/vehicles' }, { label: vehicle.plate }]}
         actions={
-          <Badge tone={VEHICLE_STATUS_TONE[vehicle.status]}>
-            {VEHICLE_STATUS_LABELS[vehicle.status]}
-          </Badge>
+          <>
+            <Badge tone={VEHICLE_STATUS_TONE[vehicle.status]}>
+              {VEHICLE_STATUS_LABELS[vehicle.status]}
+            </Badge>
+            {hasRole(user?.role, FLEET_WRITE_ROLES) && (
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                <Pencil size={14} />
+                Editar
+              </Button>
+            )}
+          </>
         }
       />
 
@@ -199,6 +214,8 @@ export default function VehicleDetailPage(): JSX.Element {
           />
         )}
       </div>
+
+      <UpdateVehicleModal open={editOpen} onClose={() => setEditOpen(false)} vehicle={vehicle} />
     </div>
   );
 }

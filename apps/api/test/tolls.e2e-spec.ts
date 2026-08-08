@@ -403,6 +403,204 @@ describe('Tolls (e2e)', () => {
     });
   });
 
+  describe('motor de conferencia (auditVerdict) -- Fase 22', () => {
+    it('retorna UNVERIFIABLE com mensagem explicita quando a praca nao tem pricePerAxle cadastrado, mesmo com discrepancyAmount != 0 gravado', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('AuditUnverifiable');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plazaId = await createTollPlaza({ pricePerAxle: undefined });
+      const { tripId } = await setupTripWithTaggedVehicle(auth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          tollPlazaId: plazaId,
+          axleCount: 6,
+          chargedAmount: 60,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      // status legado (gravado) ainda reflete o calculo antigo -- e o
+      // auditVerdict (novo, calculado em tempo de leitura) que corrige o
+      // falso positivo, sem alterar o contrato existente.
+      expect(res.body.data.auditVerdict).toBe('UNVERIFIABLE');
+      expect(res.body.data.auditMessage).toMatch(/nao foi possivel calcular/i);
+    });
+
+    it('retorna OVERCHARGE quando cobrado > esperado com tarifa conhecida', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('AuditOvercharge');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plazaId = await createTollPlaza({ pricePerAxle: 10 });
+      const { tripId } = await setupTripWithTaggedVehicle(auth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          tollPlazaId: plazaId,
+          axleCount: 6,
+          chargedAmount: 90,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      expect(res.body.data.auditVerdict).toBe('OVERCHARGE');
+      expect(res.body.data.auditMessage).toBeNull();
+    });
+
+    it('retorna UNDERCHARGE quando cobrado < esperado com tarifa conhecida', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('AuditUndercharge');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plazaId = await createTollPlaza({ pricePerAxle: 10 });
+      const { tripId } = await setupTripWithTaggedVehicle(auth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          tollPlazaId: plazaId,
+          axleCount: 6,
+          chargedAmount: 30,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      expect(res.body.data.auditVerdict).toBe('UNDERCHARGE');
+    });
+
+    it('retorna CORRECT quando cobrado == esperado', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('AuditCorrect');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plazaId = await createTollPlaza({ pricePerAxle: 10 });
+      const { tripId } = await setupTripWithTaggedVehicle(auth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          tollPlazaId: plazaId,
+          axleCount: 6,
+          chargedAmount: 60,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      expect(res.body.data.auditVerdict).toBe('CORRECT');
+    });
+
+    it('filtra a listagem por auditVerdict', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('AuditFilter');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plazaKnown = await createTollPlaza({ pricePerAxle: 10 });
+      const plazaUnknown = await createTollPlaza({ pricePerAxle: undefined });
+      const setupOver = await setupTripWithTaggedVehicle(auth);
+      const setupUnverifiable = await setupTripWithTaggedVehicle(auth);
+
+      const overRes = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId: setupOver.tripId,
+          tollPlazaId: plazaKnown,
+          axleCount: 6,
+          chargedAmount: 90,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId: setupUnverifiable.tripId,
+          tollPlazaId: plazaUnknown,
+          axleCount: 6,
+          chargedAmount: 60,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      const overchargeOnly = await request(app.getHttpServer())
+        .get('/api/v1/toll-transactions?auditVerdict=OVERCHARGE')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(overchargeOnly.body.data.items).toHaveLength(1);
+      expect(overchargeOnly.body.data.items[0].id).toBe(overRes.body.data.id);
+
+      const unverifiableOnly = await request(app.getHttpServer())
+        .get('/api/v1/toll-transactions?auditVerdict=UNVERIFIABLE')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(unverifiableOnly.body.data.items).toHaveLength(1);
+      expect(unverifiableOnly.body.data.items[0].auditVerdict).toBe('UNVERIFIABLE');
+    });
+
+    it('contabiliza corretamente conferredCount/unverifiableCount/conformityPercentage no dashboard', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('AuditDashboard');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plazaKnown = await createTollPlaza({ pricePerAxle: 10 });
+      const plazaUnknown = await createTollPlaza({ pricePerAxle: undefined });
+      const setupCorrect = await setupTripWithTaggedVehicle(auth);
+      const setupOver = await setupTripWithTaggedVehicle(auth);
+      const setupUnverifiable = await setupTripWithTaggedVehicle(auth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId: setupCorrect.tripId,
+          tollPlazaId: plazaKnown,
+          axleCount: 6,
+          chargedAmount: 60,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId: setupOver.tripId,
+          tollPlazaId: plazaKnown,
+          axleCount: 6,
+          chargedAmount: 90,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({
+          tripId: setupUnverifiable.tripId,
+          tollPlazaId: plazaUnknown,
+          axleCount: 6,
+          chargedAmount: 60,
+          chargedAt: '2026-09-01T10:00:00.000Z',
+        })
+        .expect(201);
+
+      const dashboardRes = await request(app.getHttpServer())
+        .get('/api/v1/toll-transactions/dashboard')
+        .set('Authorization', auth)
+        .expect(200);
+
+      const dashboard = dashboardRes.body.data;
+      expect(dashboard.totalCount).toBe(3);
+      expect(dashboard.unverifiableCount).toBe(1);
+      expect(dashboard.correctCount).toBe(1);
+      expect(dashboard.overchargeCount).toBe(1);
+      expect(dashboard.underchargeCount).toBe(0);
+      expect(dashboard.conferredCount).toBe(2);
+      expect(dashboard.conformityPercentage).toBeCloseTo(50, 5);
+    });
+  });
+
   describe('validacoes', () => {
     it('rejeita viagem inexistente e praca inexistente com 404', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('Missing');

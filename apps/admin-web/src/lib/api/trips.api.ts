@@ -4,6 +4,7 @@ import type {
   LocationEntity,
   RouteEventEntity,
   RouteVersionEntity,
+  TollReconciliationEntity,
   TripEntity,
   TripFinancialDashboardEntity,
   TripFinancialSummaryEntity,
@@ -34,13 +35,18 @@ export interface CreateTripPayload {
   destinationLocationId: string;
   driverId: string;
   compositionId: string;
+  tollRouteId?: string | undefined;
   plannedDeparture: string;
   plannedArrival: string;
   priority?: TripPriority | undefined;
   notes?: string | undefined;
 }
 
-export type UpdateTripPayload = Partial<CreateTripPayload>;
+// tollRouteId aceita null (para desvincular a rota) alem de string/undefined
+// -- Partial<CreateTripPayload> sozinho nao permitiria expressar "limpar".
+export type UpdateTripPayload = Partial<Omit<CreateTripPayload, 'tollRouteId'>> & {
+  tollRouteId?: string | null | undefined;
+};
 
 export function listTrips(query: FindTripsQuery, signal?: AbortSignal) {
   return api.get<Paginated<TripEntity>>('/trips', query, signal);
@@ -114,6 +120,12 @@ export function reopenTripSettlement(id: string, notes?: string) {
 
 export function getTripFinancialDashboard(id: string) {
   return api.get<TripFinancialDashboardEntity>(`/trips/${id}/financial-dashboard`);
+}
+
+// Conciliacao de pedagio (Fase 23) -- compara as pracas esperadas pela rota
+// vinculada com os pedagios efetivamente registrados na viagem.
+export function getTripTollReconciliation(id: string) {
+  return api.get<TollReconciliationEntity>(`/trips/${id}/toll-reconciliation`);
 }
 
 // --- Customers (cadastro de referencia usado por viagens/receitas) ---

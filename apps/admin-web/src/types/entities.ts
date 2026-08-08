@@ -263,6 +263,8 @@ export interface TripEntity {
   destinationName: string;
   compositionId: string | null;
   vehiclePlate: string | null;
+  tollRouteId: string | null;
+  tollRouteName: string | null;
   status: TripStatus;
   priority: TripPriority;
   notes: string | null;
@@ -343,6 +345,13 @@ export interface TollPlazaEntity {
   updatedAt: string;
 }
 
+// Motor de conferencia (Fase 22) -- espelha
+// apps/api/src/tolls/utils/toll-calculation.util.ts (TOLL_AUDIT_VERDICTS).
+// Calculado em tempo de leitura pelo backend a partir do estado ATUAL de
+// TollPlaza.pricePerAxle -- distinto de TollTransactionEntity.status (enum
+// gravado no banco).
+export type TollAuditVerdict = 'CORRECT' | 'OVERCHARGE' | 'UNDERCHARGE' | 'UNVERIFIABLE';
+
 export interface TollTransactionEntity {
   id: string;
   tenantId: string;
@@ -360,6 +369,8 @@ export interface TollTransactionEntity {
   chargedAmount: number;
   discrepancyAmount: number;
   status: TollTransactionStatus;
+  auditVerdict: TollAuditVerdict;
+  auditMessage: string | null;
   chargedAt: string;
   source: TollTransactionSource;
   createdAt: string;
@@ -389,6 +400,97 @@ export interface TollDashboardEntity {
   countByVehicle: TollDashboardGroupEntity[];
   countByDriver: TollDashboardGroupEntity[];
   countByPlaza: TollDashboardGroupEntity[];
+  conferredCount: number;
+  unverifiableCount: number;
+  correctCount: number;
+  overchargeCount: number;
+  underchargeCount: number;
+  conformityPercentage: number;
+}
+
+// Rota de pedagio (Fase 23) -- corredor operacional do tenant (distinto de
+// TollPlaza, que e dado global). Usado para determinar as pracas ESPERADAS
+// de uma viagem, na conciliacao.
+export interface TollRouteStopEntity {
+  sequence: number;
+  tollPlazaId: string;
+  tollPlazaName: string;
+  highway: string | null;
+  pricePerAxle: number | null;
+}
+
+export interface TollRouteEntity {
+  id: string;
+  tenantId: string;
+  name: string;
+  originLabel: string;
+  destinationLabel: string;
+  isActive: boolean;
+  stops: TollRouteStopEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Camada de conciliacao (Fase 23) -- espelha
+// apps/api/src/toll-routes/utils/toll-reconciliation.util.ts. NOT_REGISTERED
+// e o unico veredito novo em relacao ao TollAuditVerdict (Fase 22).
+export type TollReconciliationStopVerdict = TollAuditVerdict | 'NOT_REGISTERED';
+
+export interface TollReconciliationStopEntity {
+  sequence: number;
+  tollPlazaId: string;
+  tollPlazaName: string;
+  highway: string | null;
+  transactionId: string | null;
+  axleCount: number | null;
+  expectedAmount: number | null;
+  chargedAmount: number | null;
+  discrepancyAmount: number | null;
+  verdict: TollReconciliationStopVerdict;
+  message: string | null;
+}
+
+export interface TollReconciliationUnplannedEntity {
+  transactionId: string;
+  tollPlazaId: string;
+  tollPlazaName: string;
+  chargedAmount: number;
+  chargedAt: string;
+}
+
+export interface TollReconciliationEntity {
+  tripId: string;
+  hasRoute: boolean;
+  tollRouteId: string | null;
+  tollRouteName: string | null;
+  originLabel: string | null;
+  destinationLabel: string | null;
+  stops: TollReconciliationStopEntity[];
+  unplannedTransactions: TollReconciliationUnplannedEntity[];
+  expectedStopsCount: number;
+  registeredStopsCount: number;
+  reconciledStopsCount: number;
+  expectedTotalAmount: number;
+  chargedTotalAmount: number;
+  divergenceAmount: number;
+  unplannedTotalAmount: number;
+  conformityPercentage: number;
+  isFullyReconciled: boolean;
+}
+
+export interface TollReconciliationDashboardEntity {
+  totalTripsWithRoute: number;
+  reconciledTripsCount: number;
+  nonReconciledTripsCount: number;
+  totalExpectedStops: number;
+  totalRegisteredStops: number;
+  totalNotRegisteredStops: number;
+  totalUnplannedTransactions: number;
+  totalUnplannedAmount: number;
+  totalExpectedAmount: number;
+  totalChargedAmount: number;
+  totalDivergenceAmount: number;
+  conformityPercentage: number;
 }
 
 export interface ImportJobEntity {
