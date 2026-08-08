@@ -15,6 +15,8 @@
 //   registrada (NOT_REGISTERED) e praca D sem tarifa cadastrada
 //   (UNVERIFIABLE). As 2 transacoes do Fase 22 (numa praca fora da rota)
 //   passam a demonstrar "pedagio nao previsto" de graca, sem duplicar dado.
+// - (Fase 24) uma 5a praca (E) na mesma rota demo, cobrada ABAIXO do
+//   esperado (UNDERCHARGE) -- unico veredito que faltava no seed.
 // Idempotente: upsert onde ha chave unica no schema; nos modelos sem chave
 // unica de negocio (Driver/Vehicle/Trip/TollTransaction/TollPlaza/TollRoute)
 // usa find-or-create por um identificador fixo e reconhecivel (ex: placa
@@ -64,6 +66,7 @@ const DEV_ROUTE_PLAZA_A_NAME = 'Praça Demo A (Fase 23)';
 const DEV_ROUTE_PLAZA_B_NAME = 'Praça Demo B (Fase 23)';
 const DEV_ROUTE_PLAZA_C_NAME = 'Praça Demo C (Fase 23)';
 const DEV_ROUTE_PLAZA_D_NAME = 'Praça Demo D — Sem Tarifa (Fase 23)';
+const DEV_ROUTE_PLAZA_E_NAME = 'Praça Demo E — Abaixo do Esperado (Fase 24)';
 const DEV_ROUTE_NAME = 'São José do Rio Preto → São Paulo (Demo)';
 const DEV_ROUTE_PRICE_PER_AXLE = 10;
 
@@ -335,13 +338,14 @@ async function seedDevTollTransactions(
   );
 }
 
-// Fase 23 -- rota de pedagio demo (4 pracas) vinculada a mesma viagem demo,
-// com transacoes que cobrem os 4 vereditos de conciliacao: praca A
+// Fase 23/24 -- rota de pedagio demo (5 pracas) vinculada a mesma viagem
+// demo, com transacoes que cobrem os 5 vereditos de conciliacao: praca A
 // (CORRECT), praca B (OVERCHARGE, +R$15), praca C (nunca registrada ->
 // NOT_REGISTERED), praca D (registrada mas sem pricePerAxle cadastrado ->
-// UNVERIFIABLE). As 2 transacoes ja criadas por seedDevTollTransactions
-// ficam numa praca FORA desta rota -- passam a demonstrar "pedagio nao
-// previsto" na conciliacao, sem duplicar dado nem criar uma 3a viagem.
+// UNVERIFIABLE), praca E (UNDERCHARGE, -R$20, Fase 24). As 2 transacoes ja
+// criadas por seedDevTollTransactions ficam numa praca FORA desta rota --
+// passam a demonstrar "pedagio nao previsto" na conciliacao, sem duplicar
+// dado nem criar uma 3a viagem.
 async function seedDevTollRouteReconciliationDemo(
   tenantId: string,
   tripId: string,
@@ -352,6 +356,7 @@ async function seedDevTollRouteReconciliationDemo(
   const plazaB = await findOrCreateTollPlaza(DEV_ROUTE_PLAZA_B_NAME, DEV_ROUTE_PRICE_PER_AXLE);
   const plazaC = await findOrCreateTollPlaza(DEV_ROUTE_PLAZA_C_NAME, DEV_ROUTE_PRICE_PER_AXLE);
   const plazaD = await findOrCreateTollPlaza(DEV_ROUTE_PLAZA_D_NAME, null);
+  const plazaE = await findOrCreateTollPlaza(DEV_ROUTE_PLAZA_E_NAME, DEV_ROUTE_PRICE_PER_AXLE);
 
   let route = await prisma.tollRoute.findFirst({ where: { tenantId, name: DEV_ROUTE_NAME } });
   if (!route) {
@@ -368,7 +373,7 @@ async function seedDevTollRouteReconciliationDemo(
   const stopCount = await prisma.tollRouteStop.count({ where: { tollRouteId: route.id } });
   if (stopCount === 0) {
     await prisma.tollRouteStop.createMany({
-      data: [plazaA, plazaB, plazaC, plazaD].map((plaza, index) => ({
+      data: [plazaA, plazaB, plazaC, plazaD, plazaE].map((plaza, index) => ({
         tenantId,
         tollRouteId: route!.id,
         tollPlazaId: plaza.id,
@@ -384,7 +389,7 @@ async function seedDevTollRouteReconciliationDemo(
 
   const expectedAmount = DEV_ROUTE_PRICE_PER_AXLE * axleCount;
   const alreadyRegistered = await prisma.tollTransaction.count({
-    where: { tenantId, tripId, tollPlazaId: { in: [plazaA.id, plazaB.id, plazaD.id] } },
+    where: { tenantId, tripId, tollPlazaId: { in: [plazaA.id, plazaB.id, plazaD.id, plazaE.id] } },
   });
   if (alreadyRegistered === 0) {
     await prisma.tollTransaction.create({
@@ -440,12 +445,30 @@ async function seedDevTollRouteReconciliationDemo(
       },
     });
 
+    const underchargedE = expectedAmount - 20;
+    await prisma.tollTransaction.create({
+      data: {
+        tenantId,
+        tripId,
+        vehicleId,
+        tollPlazaId: plazaE.id,
+        axleCount,
+        expectedAmount,
+        chargedAmount: underchargedE,
+        discrepancyAmount: underchargedE - expectedAmount,
+        status: 'DIVERGENT',
+        chargedAt: new Date('2026-09-01T15:00:00.000Z'),
+        source: TollTransactionSource.MANUAL,
+      },
+    });
+
     // Praca C fica deliberadamente SEM transacao -- demonstra
     // NOT_REGISTERED na conciliacao (praca esperada pela rota, nunca
     // registrada nesta viagem).
     console.log(
-      `- Rota de pedágio demo "${route.name}" (4 praças) vinculada à viagem demo: ` +
-        `A=CORRECT, B=OVERCHARGE (+R$15), C=NOT_REGISTERED, D=UNVERIFIABLE (sem tarifa).`,
+      `- Rota de pedágio demo "${route.name}" (5 praças) vinculada à viagem demo: ` +
+        `A=CORRECT, B=OVERCHARGE (+R$15), C=NOT_REGISTERED, D=UNVERIFIABLE (sem tarifa), ` +
+        `E=UNDERCHARGE (-R$20).`,
     );
   }
 }

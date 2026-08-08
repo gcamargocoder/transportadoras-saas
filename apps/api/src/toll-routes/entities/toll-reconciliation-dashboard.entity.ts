@@ -17,6 +17,41 @@ export class TollReconciliationDashboardEntity {
   nonReconciledTripsCount!: number;
 
   @ApiProperty({
+    description:
+      'Viagens com status PENDING -- rota vinculada mas ainda sem nenhum pedagio registrado.',
+  })
+  pendingTripsCount!: number;
+
+  @ApiProperty({ description: 'Viagens com status CONFORM (identico a reconciledTripsCount).' })
+  conformTripsCount!: number;
+
+  @ApiProperty({
+    description:
+      'Viagens com status ATTENTION -- um unico problema de presenca, sem divergencia financeira.',
+  })
+  attentionTripsCount!: number;
+
+  @ApiProperty({
+    description: 'Viagens com status CRITICAL -- divergencia financeira ou multiplos problemas.',
+  })
+  criticalTripsCount!: number;
+
+  @ApiProperty({
+    description: 'Viagens com status UNVERIFIABLE -- nenhuma parada pode ser confirmada.',
+  })
+  unverifiableTripsCount!: number;
+
+  @ApiProperty({
+    description: 'Viagens com pelo menos uma praca esperada nunca registrada (NOT_REGISTERED).',
+  })
+  tripsWithNotRegisteredCount!: number;
+
+  @ApiProperty({
+    description: 'Viagens com pelo menos um pedagio registrado fora da rota (nao previsto).',
+  })
+  tripsWithUnplannedCount!: number;
+
+  @ApiProperty({
     description: 'Soma das paradas esperadas (praca x viagem) em todas as viagens com rota.',
   })
   totalExpectedStops!: number;

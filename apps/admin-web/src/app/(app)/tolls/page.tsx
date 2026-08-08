@@ -5,6 +5,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
   HelpCircle,
   MapPinOff,
   Milestone,
@@ -37,6 +38,7 @@ import { listVehicles } from '../../../lib/api/fleet.api';
 import { getTollDashboard, listTollTransactions } from '../../../lib/api/tolls.api';
 import { getTollReconciliationDashboard } from '../../../lib/api/toll-routes.api';
 import { hasRole, TOLL_IMPORT_WRITE_ROLES, TOLL_WRITE_ROLES } from '../../../lib/auth/roles';
+import { RECONCILIATION_STATUS_LABELS } from '../../../features/tolls/reconciliation-verdict';
 import type { TollPlazaEntity, TollTransactionEntity, TripEntity } from '../../../types/entities';
 import type { TollAuditVerdict } from '../../../types/entities';
 import { formatCurrency, formatDateTime, formatPercent } from '../../../utils/format';
@@ -273,6 +275,48 @@ export default function TollsPage(): JSX.Element {
                   reconciliationDashboardQuery.data.totalUnplannedTransactions > 0
                     ? 'danger'
                     : 'success'
+                }
+              />
+            </div>
+
+            <p className="mb-2 mt-4 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+              Status geral das viagens (conciliação automática — Fase 24)
+            </p>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              <StatCard
+                label={RECONCILIATION_STATUS_LABELS.PENDING}
+                value={String(reconciliationDashboardQuery.data.pendingTripsCount)}
+                icon={Clock}
+                tone="brand"
+              />
+              <StatCard
+                label={RECONCILIATION_STATUS_LABELS.CONFORM}
+                value={String(reconciliationDashboardQuery.data.conformTripsCount)}
+                icon={CheckCircle2}
+                tone="success"
+              />
+              <StatCard
+                label={RECONCILIATION_STATUS_LABELS.ATTENTION}
+                value={String(reconciliationDashboardQuery.data.attentionTripsCount)}
+                icon={AlertTriangle}
+                tone={
+                  reconciliationDashboardQuery.data.attentionTripsCount > 0 ? 'warning' : 'success'
+                }
+              />
+              <StatCard
+                label={RECONCILIATION_STATUS_LABELS.CRITICAL}
+                value={String(reconciliationDashboardQuery.data.criticalTripsCount)}
+                icon={ShieldAlert}
+                tone={
+                  reconciliationDashboardQuery.data.criticalTripsCount > 0 ? 'danger' : 'success'
+                }
+              />
+              <StatCard
+                label={RECONCILIATION_STATUS_LABELS.UNVERIFIABLE}
+                value={String(reconciliationDashboardQuery.data.unverifiableTripsCount)}
+                icon={HelpCircle}
+                tone={
+                  reconciliationDashboardQuery.data.unverifiableTripsCount > 0 ? 'info' : 'success'
                 }
               />
             </div>

@@ -81,6 +81,13 @@ export class TollReconciliationService {
     dashboard.totalTripsWithRoute = results.length;
     dashboard.reconciledTripsCount = results.filter((r) => r.isFullyReconciled).length;
     dashboard.nonReconciledTripsCount = results.filter((r) => !r.isFullyReconciled).length;
+    dashboard.pendingTripsCount = results.filter((r) => r.status === 'PENDING').length;
+    dashboard.conformTripsCount = results.filter((r) => r.status === 'CONFORM').length;
+    dashboard.attentionTripsCount = results.filter((r) => r.status === 'ATTENTION').length;
+    dashboard.criticalTripsCount = results.filter((r) => r.status === 'CRITICAL').length;
+    dashboard.unverifiableTripsCount = results.filter((r) => r.status === 'UNVERIFIABLE').length;
+    dashboard.tripsWithNotRegisteredCount = results.filter((r) => r.notRegisteredCount > 0).length;
+    dashboard.tripsWithUnplannedCount = results.filter((r) => r.unplannedCount > 0).length;
     dashboard.totalExpectedStops = sum(results.map((r) => r.expectedStopsCount));
     dashboard.totalRegisteredStops = sum(results.map((r) => r.registeredStopsCount));
     dashboard.totalNotRegisteredStops = sum(
@@ -122,12 +129,21 @@ export class TollReconciliationService {
       entity.expectedStopsCount = 0;
       entity.registeredStopsCount = 0;
       entity.reconciledStopsCount = 0;
+      entity.correctCount = 0;
+      entity.overchargeCount = 0;
+      entity.underchargeCount = 0;
+      entity.notRegisteredCount = 0;
+      entity.unverifiableCount = 0;
+      entity.unplannedCount = 0;
       entity.expectedTotalAmount = 0;
       entity.chargedTotalAmount = 0;
       entity.divergenceAmount = 0;
       entity.unplannedTotalAmount = 0;
       entity.conformityPercentage = 0;
       entity.isFullyReconciled = false;
+      // Sem rota vinculada nao ha o que classificar -- PENDING junto dos
+      // demais campos zerados (ver doc do campo na entity).
+      entity.status = 'PENDING';
       return entity;
     }
 
@@ -143,12 +159,19 @@ export class TollReconciliationService {
     entity.expectedStopsCount = result.expectedStopsCount;
     entity.registeredStopsCount = result.registeredStopsCount;
     entity.reconciledStopsCount = result.reconciledStopsCount;
+    entity.correctCount = result.correctCount;
+    entity.overchargeCount = result.overchargeCount;
+    entity.underchargeCount = result.underchargeCount;
+    entity.notRegisteredCount = result.notRegisteredCount;
+    entity.unverifiableCount = result.unverifiableCount;
+    entity.unplannedCount = result.unplannedCount;
     entity.expectedTotalAmount = result.expectedTotalAmount;
     entity.chargedTotalAmount = result.chargedTotalAmount;
     entity.divergenceAmount = result.divergenceAmount;
     entity.unplannedTotalAmount = result.unplannedTotalAmount;
     entity.conformityPercentage = result.conformityPercentage;
     entity.isFullyReconciled = result.isFullyReconciled;
+    entity.status = result.status;
 
     return entity;
   }

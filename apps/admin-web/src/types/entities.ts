@@ -436,6 +436,11 @@ export interface TollRouteEntity {
 // e o unico veredito novo em relacao ao TollAuditVerdict (Fase 22).
 export type TollReconciliationStopVerdict = TollAuditVerdict | 'NOT_REGISTERED';
 
+// Status geral da conciliacao (Fase 24) -- espelha RECONCILIATION_STATUSES
+// em apps/api/src/toll-routes/utils/toll-reconciliation.util.ts.
+export type ReconciliationStatus =
+  'PENDING' | 'CONFORM' | 'ATTENTION' | 'CRITICAL' | 'UNVERIFIABLE';
+
 export interface TollReconciliationStopEntity {
   sequence: number;
   tollPlazaId: string;
@@ -470,18 +475,32 @@ export interface TollReconciliationEntity {
   expectedStopsCount: number;
   registeredStopsCount: number;
   reconciledStopsCount: number;
+  correctCount: number;
+  overchargeCount: number;
+  underchargeCount: number;
+  notRegisteredCount: number;
+  unverifiableCount: number;
+  unplannedCount: number;
   expectedTotalAmount: number;
   chargedTotalAmount: number;
   divergenceAmount: number;
   unplannedTotalAmount: number;
   conformityPercentage: number;
   isFullyReconciled: boolean;
+  status: ReconciliationStatus;
 }
 
 export interface TollReconciliationDashboardEntity {
   totalTripsWithRoute: number;
   reconciledTripsCount: number;
   nonReconciledTripsCount: number;
+  pendingTripsCount: number;
+  conformTripsCount: number;
+  attentionTripsCount: number;
+  criticalTripsCount: number;
+  unverifiableTripsCount: number;
+  tripsWithNotRegisteredCount: number;
+  tripsWithUnplannedCount: number;
   totalExpectedStops: number;
   totalRegisteredStops: number;
   totalNotRegisteredStops: number;

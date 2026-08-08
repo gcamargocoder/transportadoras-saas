@@ -511,6 +511,13 @@ describe('Toll Routes + Conciliacao (e2e)', () => {
       expect(recon.unplannedTransactions[0].tollPlazaId).toBe(plazaX);
       expect(recon.unplannedTotalAmount).toBe(20);
       expect(recon.isFullyReconciled).toBe(false);
+      // divergencia financeira real (OVERCHARGE em B) -- CRITICAL, mesmo com
+      // NOT_REGISTERED e pedagio nao previsto tambem presentes.
+      expect(recon.status).toBe('CRITICAL');
+      expect(recon.overchargeCount).toBe(1);
+      expect(recon.notRegisteredCount).toBe(1);
+      expect(recon.unplannedCount).toBe(1);
+      expect(recon.correctCount).toBe(2);
     });
 
     it('viagem nao encontrada retorna 404', async () => {
@@ -519,6 +526,110 @@ describe('Toll Routes + Conciliacao (e2e)', () => {
       await request(app.getHttpServer())
         .get(`/api/v1/trips/${randomUUID()}/toll-reconciliation`)
         .set('Authorization', auth)
+        .expect(404);
+    });
+  });
+
+  describe('POST /trips/:id/toll-reconciliation/run', () => {
+    it('executa a conciliacao agora e retorna o mesmo resultado do GET', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ReconRun');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const plazaA = await createTollPlaza({ pricePerAxle: 15 });
+      const routeId = await createRoute(auth);
+      await replaceStops(auth, routeId, [plazaA]).expect(200);
+      const { tripId } = await setupTrip(auth, { tollRouteId: routeId, totalAxles: 4 });
+      await registerToll(auth, tripId, plazaA, 60);
+
+      const runRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/toll-reconciliation/run`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(runRes.body.data.status).toBe('CONFORM');
+      expect(runRes.body.data.isFullyReconciled).toBe(true);
+
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/toll-reconciliation`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(getRes.body.data).toEqual(runRes.body.data);
+    });
+
+    it('nao altera nenhuma transacao historica ao rodar novamente', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ReconRunIdempotent');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const plazaA = await createTollPlaza({ pricePerAxle: 15 });
+      const routeId = await createRoute(auth);
+      await replaceStops(auth, routeId, [plazaA]).expect(200);
+      const { tripId } = await setupTrip(auth, { tollRouteId: routeId, totalAxles: 4 });
+      const txRes = await registerToll(auth, tripId, plazaA, 75);
+      const txId = txRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/toll-reconciliation/run`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      const txAfter = await request(app.getHttpServer())
+        .get(`/api/v1/toll-transactions/${txId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(txAfter.body.data.chargedAmount).toBe(75);
+    });
+
+    it('AUDITOR (somente leitura) nao pode executar a conciliacao (403)', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('ReconRunAuditor');
+      const auth = `Bearer ${adminAccessToken}`;
+      const { tripId } = await setupTrip(auth);
+
+      const auditorEmail = `auditor-run-${randomUUID()}@teste.com`;
+      await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', auth)
+        .send({
+          name: 'Auditor',
+          email: auditorEmail,
+          password: 'SenhaForte123!',
+          role: 'AUDITOR',
+        })
+        .expect(201);
+      const auditorLogin = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: auditorEmail, password: 'SenhaForte123!' })
+        .expect(200);
+      const auditorAuth = `Bearer ${auditorLogin.body.data.accessToken}`;
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/toll-reconciliation`)
+        .set('Authorization', auditorAuth)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/toll-reconciliation/run`)
+        .set('Authorization', auditorAuth)
+        .expect(403);
+    });
+
+    it('viagem nao encontrada retorna 404', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ReconRunMissing');
+      const auth = `Bearer ${adminAccessToken}`;
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${randomUUID()}/toll-reconciliation/run`)
+        .set('Authorization', auth)
+        .expect(404);
+    });
+
+    it('nunca executa conciliacao de viagem de outro tenant (404)', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('ReconRunIsolA');
+      const tenantB = await createTenantAndLoginAsAdmin('ReconRunIsolB');
+      const authA = `Bearer ${tenantA.adminAccessToken}`;
+      const authB = `Bearer ${tenantB.adminAccessToken}`;
+      const { tripId } = await setupTrip(authA);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/toll-reconciliation/run`)
+        .set('Authorization', authB)
         .expect(404);
     });
   });
@@ -557,6 +668,15 @@ describe('Toll Routes + Conciliacao (e2e)', () => {
       expect(dashboard.totalRegisteredStops).toBe(1);
       expect(dashboard.totalNotRegisteredStops).toBe(1);
       expect(dashboard.totalUnplannedTransactions).toBe(0);
+      // plazaA=CORRECT, plazaB=NOT_REGISTERED -> exatamente 1 problema de
+      // presenca, sem divergencia financeira -> ATTENTION.
+      expect(dashboard.attentionTripsCount).toBe(1);
+      expect(dashboard.conformTripsCount).toBe(0);
+      expect(dashboard.criticalTripsCount).toBe(0);
+      expect(dashboard.pendingTripsCount).toBe(0);
+      expect(dashboard.unverifiableTripsCount).toBe(0);
+      expect(dashboard.tripsWithNotRegisteredCount).toBe(1);
+      expect(dashboard.tripsWithUnplannedCount).toBe(0);
     });
 
     it('nunca mistura dados de tenants diferentes', async () => {

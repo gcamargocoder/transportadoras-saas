@@ -1,17 +1,24 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { useMemo } from 'react';
 import { Badge } from '../../../components/ui/badge';
+import { Button } from '../../../components/ui/button';
 import { Card, CardBody, CardHeader } from '../../../components/ui/card';
 import { DataTable } from '../../../components/ui/data-table';
 import { EmptyState } from '../../../components/ui/empty-state';
 import { ErrorState } from '../../../components/ui/error-state';
 import { LoadingState } from '../../../components/ui/loading-state';
-import { getTripTollReconciliation } from '../../../lib/api/trips.api';
+import { useToast } from '../../../components/ui/toast';
+import { useAuth } from '../../../hooks/use-auth';
+import { toFriendlyMessage } from '../../../lib/api/errors';
+import { getTripTollReconciliation, runTripTollReconciliation } from '../../../lib/api/trips.api';
+import { TRIP_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import {
+  RECONCILIATION_STATUS_LABELS,
+  RECONCILIATION_STATUS_TONE,
   RECONCILIATION_VERDICT_LABELS,
   RECONCILIATION_VERDICT_TONE,
 } from '../../tolls/reconciliation-verdict';
@@ -21,13 +28,28 @@ import type {
 } from '../../../types/entities';
 import { formatCurrency, formatDateTime, formatNumber } from '../../../utils/format';
 
-// Conciliacao de pedagio (Fase 23): compara, praca a praca e na ordem da
+// Conciliacao de pedagio (Fase 23/24): compara, praca a praca e na ordem da
 // rota, o que era ESPERADO com o que foi REGISTRADO na viagem. So existe
-// quando a viagem tem uma rota vinculada (ver aba "Visao geral").
+// quando a viagem tem uma rota vinculada (ver aba "Visao geral"). O botao
+// "Conciliar agora" (Fase 24) dispara POST .../toll-reconciliation/run --
+// mesmo calculo do GET, apenas formalizado como acao explicita.
 export function ReconciliationTab({ tripId }: { tripId: string }): JSX.Element {
+  const { user } = useAuth();
+  const toast = useToast();
+  const queryClient = useQueryClient();
+
   const query = useQuery({
     queryKey: ['trips', tripId, 'toll-reconciliation'],
     queryFn: () => getTripTollReconciliation(tripId),
+  });
+
+  const runMutation = useMutation({
+    mutationFn: () => runTripTollReconciliation(tripId),
+    onSuccess: (data) => {
+      toast.success('Conciliação executada.');
+      queryClient.setQueryData(['trips', tripId, 'toll-reconciliation'], data);
+    },
+    onError: (error) => toast.error('Não foi possível conciliar agora.', toFriendlyMessage(error)),
   });
 
   const stopColumns = useMemo<ColumnDef<TollReconciliationStopEntity, unknown>[]>(
@@ -86,6 +108,8 @@ export function ReconciliationTab({ tripId }: { tripId: string }): JSX.Element {
     );
   }
 
+  const canRun = hasRole(user?.role, TRIP_WRITE_ROLES);
+
   return (
     <div className="flex flex-col gap-4 p-4">
       <Card>
@@ -93,19 +117,28 @@ export function ReconciliationTab({ tripId }: { tripId: string }): JSX.Element {
           title={`Rota: ${recon.tollRouteName}`}
           description={`${recon.originLabel} → ${recon.destinationLabel}`}
           action={
-            <Badge tone={recon.isFullyReconciled ? 'success' : 'warning'} dot>
-              {recon.isFullyReconciled ? (
-                <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={RECONCILIATION_STATUS_TONE[recon.status]} dot>
+                {recon.status === 'CONFORM' ? (
                   <CheckCircle2 size={12} />
-                  100% conciliada
-                </>
-              ) : (
-                <>
+                ) : (
                   <AlertTriangle size={12} />
-                  Com divergências
-                </>
+                )}
+                {RECONCILIATION_STATUS_LABELS[recon.status]}
+              </Badge>
+              {canRun && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => runMutation.mutate()}
+                  loading={runMutation.isPending}
+                  disabled={runMutation.isPending}
+                >
+                  <RefreshCw size={14} />
+                  Conciliar agora
+                </Button>
               )}
-            </Badge>
+            </div>
           }
         />
         <CardBody>

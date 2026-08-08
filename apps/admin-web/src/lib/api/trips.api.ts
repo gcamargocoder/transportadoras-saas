@@ -128,6 +128,12 @@ export function getTripTollReconciliation(id: string) {
   return api.get<TollReconciliationEntity>(`/trips/${id}/toll-reconciliation`);
 }
 
+// Acao explicita "Conciliar agora" (Fase 24) -- mesmo resultado do GET
+// acima, formalizado como acao (nao altera nenhuma transacao historica).
+export function runTripTollReconciliation(id: string) {
+  return api.post<TollReconciliationEntity>(`/trips/${id}/toll-reconciliation/run`);
+}
+
 // --- Customers (cadastro de referencia usado por viagens/receitas) ---
 export interface FindCustomersQuery extends PaginationParams {
   search?: string | undefined;

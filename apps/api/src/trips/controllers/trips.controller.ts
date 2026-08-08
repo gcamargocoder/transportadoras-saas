@@ -489,4 +489,33 @@ export class TripsController {
       tripId,
     );
   }
+
+  // Acao explicita de conciliacao automatica (Fase 24) -- "Conciliar agora".
+  // Delega 100% para o mesmo TollReconciliationService.getReconciliation()
+  // do GET acima (nenhuma logica nova/duplicada): a conciliacao ja e
+  // calculada em tempo real a cada leitura, entao "rodar agora" e apenas
+  // formalizar essa acao como um POST idempotente e sem efeito colateral no
+  // banco (nao altera transacoes historicas). Gated por TRIP_WRITE_ROLES
+  // (nao TRIP_READ_ROLES) para que o botao "Conciliar agora" so fique
+  // disponivel para quem pode agir sobre a viagem -- leitura passiva
+  // continua livre via GET acima.
+  @Post(':id/toll-reconciliation/run')
+  @Roles(...TRIP_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Executa a conciliacao automatica de pedagio da viagem agora ("Conciliar agora"). ' +
+      'Mesmo resultado do GET /trips/:id/toll-reconciliation -- formaliza a acao explicita, ' +
+      'sem alterar nenhuma transacao historica.',
+  })
+  @ApiOkResponse({ type: TollReconciliationEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  runTollReconciliation(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<TollReconciliationEntity> {
+    return this.tollReconciliationService.getReconciliation(
+      this.tenantContext.requireTenantId(),
+      tripId,
+    );
+  }
 }

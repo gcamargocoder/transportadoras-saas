@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { RECONCILIATION_STATUSES, ReconciliationStatus } from '../utils/toll-reconciliation.util';
 import { TollReconciliationStopEntity } from './toll-reconciliation-stop.entity';
 import { TollReconciliationUnplannedEntity } from './toll-reconciliation-unplanned.entity';
 
@@ -51,6 +52,24 @@ export class TollReconciliationEntity {
   })
   reconciledStopsCount!: number;
 
+  @ApiProperty({ description: 'Quantidade de paradas com veredito CORRECT.' })
+  correctCount!: number;
+
+  @ApiProperty({ description: 'Quantidade de paradas com veredito OVERCHARGE.' })
+  overchargeCount!: number;
+
+  @ApiProperty({ description: 'Quantidade de paradas com veredito UNDERCHARGE.' })
+  underchargeCount!: number;
+
+  @ApiProperty({ description: 'Quantidade de paradas com veredito NOT_REGISTERED.' })
+  notRegisteredCount!: number;
+
+  @ApiProperty({ description: 'Quantidade de paradas com veredito UNVERIFIABLE.' })
+  unverifiableCount!: number;
+
+  @ApiProperty({ description: 'Quantidade de pedagios registrados fora da rota.' })
+  unplannedCount!: number;
+
   @ApiProperty({ description: 'Soma dos valores esperados calculaveis.' })
   expectedTotalAmount!: number;
 
@@ -74,4 +93,14 @@ export class TollReconciliationEntity {
       'true quando todas as paradas esperadas foram registradas corretamente e nao ha pedagio nao previsto.',
   })
   isFullyReconciled!: boolean;
+
+  @ApiProperty({
+    enum: RECONCILIATION_STATUSES,
+    description:
+      'Classificacao geral da conciliacao: PENDING (nada registrado ainda), CONFORM (tudo ' +
+      'correto), ATTENTION (um unico problema de presenca), CRITICAL (divergencia financeira ' +
+      'ou multiplos problemas) ou UNVERIFIABLE (nenhuma parada pode ser confirmada). Quando ' +
+      'hasRoute=false, vem como PENDING junto dos demais campos zerados, sem significado proprio.',
+  })
+  status!: ReconciliationStatus;
 }

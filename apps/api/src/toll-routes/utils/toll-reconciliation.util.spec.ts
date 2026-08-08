@@ -1,4 +1,5 @@
 import {
+  computeReconciliationStatus,
   computeTollReconciliation,
   MISSING_AXLE_CONFIG_MESSAGE,
   NOT_REGISTERED_MESSAGE,
@@ -64,6 +65,8 @@ describe('toll-reconciliation.util', () => {
       expect(result.divergenceAmount).toBe(0);
       expect(result.conformityPercentage).toBe(100);
       expect(result.isFullyReconciled).toBe(true);
+      expect(result.correctCount).toBe(4);
+      expect(result.status).toBe('CONFORM');
     });
 
     it('cenario: uma praca cobrada acima do esperado (OVERCHARGE)', () => {
@@ -79,6 +82,8 @@ describe('toll-reconciliation.util', () => {
       expect(result.stops[1]!.discrepancyAmount).toBe(15);
       expect(result.divergenceAmount).toBe(15);
       expect(result.isFullyReconciled).toBe(false);
+      expect(result.overchargeCount).toBe(1);
+      expect(result.status).toBe('CRITICAL');
     });
 
     it('cenario: uma praca cobrada abaixo do esperado (UNDERCHARGE)', () => {
@@ -90,6 +95,8 @@ describe('toll-reconciliation.util', () => {
       expect(result.stops[0]!.verdict).toBe('UNDERCHARGE');
       expect(result.stops[0]!.discrepancyAmount).toBe(-15);
       expect(result.divergenceAmount).toBe(-15);
+      expect(result.underchargeCount).toBe(1);
+      expect(result.status).toBe('CRITICAL');
     });
 
     it('cenario: praca sem tarifa por eixo cadastrada (UNVERIFIABLE)', () => {
@@ -103,6 +110,8 @@ describe('toll-reconciliation.util', () => {
       expect(result.stops[0]!.message).toMatch(/nao foi possivel calcular/i);
       expect(result.reconciledStopsCount).toBe(0);
       expect(result.registeredStopsCount).toBe(1);
+      expect(result.unverifiableCount).toBe(1);
+      expect(result.status).toBe('UNVERIFIABLE');
     });
 
     it('cenario: viagem sem configuracao de eixos (axleCount null) mesmo com tarifa conhecida -> UNVERIFIABLE', () => {
@@ -113,6 +122,7 @@ describe('toll-reconciliation.util', () => {
 
       expect(result.stops[0]!.verdict).toBe('UNVERIFIABLE');
       expect(result.stops[0]!.message).toBe(MISSING_AXLE_CONFIG_MESSAGE);
+      expect(result.status).toBe('UNVERIFIABLE');
     });
 
     it('cenario: praca esperada mas sem pedagio registrado (NOT_REGISTERED)', () => {
@@ -133,6 +143,8 @@ describe('toll-reconciliation.util', () => {
       expect(missing?.message).toBe(NOT_REGISTERED_MESSAGE);
       expect(result.registeredStopsCount).toBe(3);
       expect(result.expectedStopsCount).toBe(4);
+      expect(result.notRegisteredCount).toBe(1);
+      expect(result.status).toBe('ATTENTION');
     });
 
     it('cenario: pedagio registrado em praca fora da rota (PEDAGIO NAO PREVISTO)', () => {
@@ -154,6 +166,8 @@ describe('toll-reconciliation.util', () => {
       expect(result.stops.every((s) => s.tollPlazaId !== 'plaza-x')).toBe(true);
       expect(result.chargedTotalAmount).toBe(180);
       expect(result.isFullyReconciled).toBe(false);
+      expect(result.unplannedCount).toBe(1);
+      expect(result.status).toBe('ATTENTION');
     });
 
     it('cenario: multiplas divergencias combinadas (acima + abaixo + nao registrada + nao prevista)', () => {
@@ -185,6 +199,9 @@ describe('toll-reconciliation.util', () => {
       expect(result.registeredStopsCount).toBe(3);
       expect(result.reconciledStopsCount).toBe(3);
       expect(result.divergenceAmount).toBe(-60);
+      // ha divergencia financeira (over + under) -- CRITICAL prevalece sobre
+      // o NOT_REGISTERED isolado, mesmo com apenas 1 problema de presenca.
+      expect(result.status).toBe('CRITICAL');
     });
 
     it('cenario: rota sem pracas cadastradas', () => {
@@ -195,6 +212,32 @@ describe('toll-reconciliation.util', () => {
       expect(result.registeredStopsCount).toBe(0);
       expect(result.conformityPercentage).toBe(0);
       expect(result.divergenceAmount).toBe(0);
+      expect(result.status).toBe('PENDING');
+    });
+
+    it('cenario: rota com pracas cadastradas mas nenhum pedagio registrado ainda (PENDING)', () => {
+      const stops = [PLAZA_A, PLAZA_B];
+      const result = computeTollReconciliation(stops, [], 4);
+
+      expect(result.registeredStopsCount).toBe(0);
+      expect(result.stops.every((s) => s.verdict === 'NOT_REGISTERED')).toBe(true);
+      expect(result.status).toBe('PENDING');
+    });
+
+    it('cenario: multiplos problemas de presenca sem divergencia financeira (CRITICAL)', () => {
+      const stops = [PLAZA_A, PLAZA_B];
+      const transactions = [
+        tx({ tollPlazaId: 'plaza-a', chargedAmount: 60 }), // CORRECT
+        // plaza-b: NOT_REGISTERED
+        tx({ tollPlazaId: 'plaza-x', chargedAmount: 20 }), // nao previsto
+      ];
+
+      const result = computeTollReconciliation(stops, transactions, 4);
+
+      expect(result.notRegisteredCount).toBe(1);
+      expect(result.unplannedCount).toBe(1);
+      expect(result.overchargeCount + result.underchargeCount).toBe(0);
+      expect(result.status).toBe('CRITICAL');
     });
 
     it('ordena as paradas de saida por sequence, independente da ordem de entrada', () => {
@@ -241,6 +284,83 @@ describe('toll-reconciliation.util', () => {
 
       expect(result.conformityPercentage).toBe(0);
       expect(Number.isNaN(result.conformityPercentage)).toBe(false);
+    });
+  });
+
+  // computeReconciliationStatus isolado -- cobre as bordas de decisao entre
+  // os 5 status sem precisar montar um cenario completo de paradas/transacoes.
+  describe('computeReconciliationStatus', () => {
+    const base = {
+      expectedStopsCount: 1,
+      registeredStopsCount: 1,
+      reconciledStopsCount: 1,
+      overchargeCount: 0,
+      underchargeCount: 0,
+      notRegisteredCount: 0,
+      unverifiableCount: 0,
+      unplannedCount: 0,
+      isFullyReconciled: true,
+    };
+
+    it('PENDING quando nao ha paradas esperadas nem pedagio nao previsto', () => {
+      expect(
+        computeReconciliationStatus({
+          ...base,
+          expectedStopsCount: 0,
+          registeredStopsCount: 0,
+          reconciledStopsCount: 0,
+          isFullyReconciled: true,
+        }),
+      ).toBe('PENDING');
+    });
+
+    it('PENDING quando nada foi registrado ainda (mas ha paradas esperadas)', () => {
+      expect(
+        computeReconciliationStatus({
+          ...base,
+          registeredStopsCount: 0,
+          reconciledStopsCount: 0,
+          isFullyReconciled: false,
+        }),
+      ).toBe('PENDING');
+    });
+
+    it('CONFORM quando isFullyReconciled', () => {
+      expect(computeReconciliationStatus({ ...base, isFullyReconciled: true })).toBe('CONFORM');
+    });
+
+    it('UNVERIFIABLE quando ha registro mas nenhuma parada conclusiva', () => {
+      expect(
+        computeReconciliationStatus({
+          ...base,
+          reconciledStopsCount: 0,
+          unverifiableCount: 1,
+          isFullyReconciled: false,
+        }),
+      ).toBe('UNVERIFIABLE');
+    });
+
+    it('CRITICAL quando ha divergencia financeira (mesmo com um unico problema)', () => {
+      expect(
+        computeReconciliationStatus({ ...base, overchargeCount: 1, isFullyReconciled: false }),
+      ).toBe('CRITICAL');
+    });
+
+    it('CRITICAL quando ha 2+ problemas de presenca, sem divergencia financeira', () => {
+      expect(
+        computeReconciliationStatus({
+          ...base,
+          notRegisteredCount: 1,
+          unplannedCount: 1,
+          isFullyReconciled: false,
+        }),
+      ).toBe('CRITICAL');
+    });
+
+    it('ATTENTION quando ha exatamente 1 problema de presenca, sem divergencia financeira', () => {
+      expect(
+        computeReconciliationStatus({ ...base, notRegisteredCount: 1, isFullyReconciled: false }),
+      ).toBe('ATTENTION');
     });
   });
 });

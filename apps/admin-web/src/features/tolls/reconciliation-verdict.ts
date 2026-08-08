@@ -1,4 +1,4 @@
-import type { TollReconciliationStopVerdict } from '../../types/entities';
+import type { ReconciliationStatus, TollReconciliationStopVerdict } from '../../types/entities';
 import { AUDIT_VERDICT_LABELS, AUDIT_VERDICT_TONE } from './audit-verdict';
 
 // Camada de conciliacao (Fase 23) -- estende os 4 rotulos/tons do motor de
@@ -15,4 +15,25 @@ export const RECONCILIATION_VERDICT_TONE: Record<
 > = {
   ...AUDIT_VERDICT_TONE,
   NOT_REGISTERED: 'warning',
+};
+
+// Status geral da conciliacao (Fase 24) -- espelha
+// computeReconciliationStatus() em toll-reconciliation.util.ts (backend).
+export const RECONCILIATION_STATUS_LABELS: Record<ReconciliationStatus, string> = {
+  PENDING: 'Pendente',
+  CONFORM: 'Conforme',
+  ATTENTION: 'Atenção',
+  CRITICAL: 'Crítica',
+  UNVERIFIABLE: 'Não verificável',
+};
+
+export const RECONCILIATION_STATUS_TONE: Record<
+  ReconciliationStatus,
+  'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'brand'
+> = {
+  PENDING: 'neutral',
+  CONFORM: 'success',
+  ATTENTION: 'warning',
+  CRITICAL: 'danger',
+  UNVERIFIABLE: 'neutral',
 };
