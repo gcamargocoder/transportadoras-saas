@@ -43,6 +43,16 @@ export class UpdateTenantSettingsDto {
   alertDelayThresholdMin?: number;
 
   @ApiPropertyOptional({
+    description:
+      'Minutos consecutivos fora da rota planejada (Fase 26) para confirmar um desvio sustentado.',
+    example: 5,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  routeDeviationMinutes?: number;
+
+  @ApiPropertyOptional({
     type: Object,
     description:
       'Preferencias adicionais em formato livre (JSON), para uso de futuras funcionalidades.',

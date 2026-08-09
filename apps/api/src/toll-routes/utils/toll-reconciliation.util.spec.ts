@@ -44,6 +44,10 @@ function tx(
     tollPlazaName: 'Praca',
     chargedAmount: 0,
     chargedAt: new Date('2026-01-01T10:00:00.000Z'),
+    // Por padrao replica o mesmo axleCount usado nos cenarios existentes
+    // (composicao com 4 eixos, sem excecao) -- testes que exercitam excecao
+    // de eixo (Fase 25) sobrescrevem explicitamente.
+    axleCount: 4,
     ...overrides,
   };
 }
@@ -114,15 +118,27 @@ describe('toll-reconciliation.util', () => {
       expect(result.status).toBe('UNVERIFIABLE');
     });
 
-    it('cenario: viagem sem configuracao de eixos (axleCount null) mesmo com tarifa conhecida -> UNVERIFIABLE', () => {
+    // Fase 25: uma TollTransaction ja casada sempre carrega seu proprio
+    // axleCount (campo obrigatorio) -- o padrao da composicao (defaultAxleCount)
+    // so e necessario para ESTIMAR paradas sem transacao (NOT_REGISTERED).
+    it('cenario: viagem sem configuracao de eixos (defaultAxleCount null) e praca sem pedagio registrado -> NOT_REGISTERED, sem conseguir estimar', () => {
       const stops = [PLAZA_A];
-      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 60 })];
+
+      const result = computeTollReconciliation(stops, [], null);
+
+      expect(result.stops[0]!.verdict).toBe('NOT_REGISTERED');
+      expect(result.stops[0]!.expectedAmount).toBeNull();
+      expect(result.stops[0]!.message).toBe(MISSING_AXLE_CONFIG_MESSAGE);
+    });
+
+    it('cenario: defaultAxleCount null nao afeta parada com transacao ja registrada (axleCount vem da propria transacao)', () => {
+      const stops = [PLAZA_A];
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 60, axleCount: 4 })];
 
       const result = computeTollReconciliation(stops, transactions, null);
 
-      expect(result.stops[0]!.verdict).toBe('UNVERIFIABLE');
-      expect(result.stops[0]!.message).toBe(MISSING_AXLE_CONFIG_MESSAGE);
-      expect(result.status).toBe('UNVERIFIABLE');
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+      expect(result.stops[0]!.axleCount).toBe(4);
     });
 
     it('cenario: praca esperada mas sem pedagio registrado (NOT_REGISTERED)', () => {
@@ -274,6 +290,42 @@ describe('toll-reconciliation.util', () => {
       expect(result.stops[0]!.transactionId).toBe('tx-1');
       expect(result.unplannedTransactions).toHaveLength(1);
       expect(result.unplannedTransactions[0]!.transactionId).toBe('tx-2');
+    });
+
+    // Fase 25 -- excecao de eixo: a passagem com axleCount proprio (registrado
+    // na TollTransaction) deve prevalecer sobre o padrao da composicao no
+    // calculo do expectedAmount daquela parada especifica.
+    it('cenario 20: usa o axleCount da transacao (7) quando houve excecao registrada naquela praca', () => {
+      const stops = [PLAZA_A];
+      // Composicao padrao tem 9 eixos, mas esta transacao foi registrada com
+      // 7 (motorista levantou 2 eixos na praca) -- pricePerAxle 15 * 7 = 105.
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 105, axleCount: 7 })];
+
+      const result = computeTollReconciliation(stops, transactions, 9);
+
+      expect(result.stops[0]!.axleCount).toBe(7);
+      expect(result.stops[0]!.expectedAmount).toBe(105);
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+    });
+
+    it('cenario 21: usa o padrao da composicao (9) quando nao houve excecao (transacao sem eixo alterado)', () => {
+      const stops = [PLAZA_A];
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 135, axleCount: 9 })];
+
+      const result = computeTollReconciliation(stops, transactions, 9);
+
+      expect(result.stops[0]!.axleCount).toBe(9);
+      expect(result.stops[0]!.expectedAmount).toBe(135);
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+    });
+
+    it('praca NOT_REGISTERED continua estimando pelo padrao da composicao (nenhuma transacao para saber o eixo real)', () => {
+      const stops = [PLAZA_A];
+      const result = computeTollReconciliation(stops, [], 9);
+
+      expect(result.stops[0]!.verdict).toBe('NOT_REGISTERED');
+      expect(result.stops[0]!.axleCount).toBe(9);
+      expect(result.stops[0]!.expectedAmount).toBe(135);
     });
 
     it('conformityPercentage nunca e NaN quando nao ha paradas conferiveis', () => {

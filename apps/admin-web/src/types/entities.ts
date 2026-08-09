@@ -2,6 +2,7 @@
 // Datas chegam como string ISO 8601 (serializacao JSON), nunca Date.
 // Nao inventar campos: qualquer campo aqui precisa existir na entity real.
 import type {
+  AxleEventSource,
   DocumentType,
   ExpenseCategory,
   ExpensePaymentMethod,
@@ -14,14 +15,19 @@ import type {
   LocationType,
   PaymentType,
   RevenueCategory,
+  RouteTollEstimateSource,
+  RouteVersionReason,
   SettlementStatus,
+  SyncStatus,
   TireLocationType,
   TireStatus,
+  TollMatchStatus,
   TollTransactionSource,
   TollTransactionStatus,
   TrailerType,
   TripPriority,
   TripStatus,
+  TripStopType,
   UserRole,
   VehicleFuelType,
   VehicleMaintenancePriority,
@@ -898,4 +904,101 @@ export interface DashboardEntity {
   operational: DashboardOperationalEntity;
   fleet: DashboardFleetEntity;
   charts: DashboardChartsEntity;
+}
+
+// Fase 25 -- operacao da viagem (app do motorista), visibilidade
+// administrativa somente leitura.
+export interface TrackingPointEntity {
+  id: string;
+  tripId: string;
+  latitude: number;
+  longitude: number;
+  speedKmh: number | null;
+  headingDeg: number | null;
+  recordedAt: string;
+}
+
+export interface TripStopEntity {
+  id: string;
+  tripId: string;
+  vehicleId: string;
+  driverId: string;
+  type: TripStopType;
+  latitude: number;
+  longitude: number;
+  startedAt: string;
+  endedAt: string | null;
+  durationMinutes: number | null;
+  locationLabel: string | null;
+  syncStatus: SyncStatus;
+  createdAt: string;
+}
+
+export interface AxleEventEntity {
+  id: string;
+  tripId: string;
+  tollPlazaId: string | null;
+  tollPlazaName: string | null;
+  defaultAxles: number;
+  declaredAxles: number;
+  suspendedAxles: number;
+  source: AxleEventSource;
+  startedAt: string;
+  endedAt: string | null;
+  syncStatus: SyncStatus;
+  createdAt: string;
+}
+
+// Fase 26 -- roteirizacao geografica (RoutePlan/RoutePlanToll).
+export interface RoutePlanTollEntity {
+  id: string;
+  tollPlazaId: string | null;
+  sequence: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  distanceFromOriginMeters: number;
+  estimatedAmount: number | null;
+  currency: string;
+  axleCountUsed: number | null;
+  matchStatus: TollMatchStatus;
+  matchConfidence: number | null;
+  source: string;
+}
+
+export interface RoutePlanEntity {
+  id: string;
+  tripId: string;
+  originLabel: string;
+  destinationLabel: string;
+  originLatitude: number;
+  originLongitude: number;
+  destinationLatitude: number;
+  destinationLongitude: number;
+  distanceMeters: number;
+  durationSeconds: number;
+  totalTollAmount: number | null;
+  tollEstimateSource: RouteTollEstimateSource;
+  currency: string;
+  axleCountUsed: number | null;
+  reason: RouteVersionReason;
+  provider: string;
+  providerRouteId: string | null;
+  isCurrent: boolean;
+  tolls: RoutePlanTollEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RouteComparisonEntity {
+  distanceMetersDiff: number;
+  durationSecondsDiff: number;
+  tollCountDiff: number;
+  totalTollAmountDiff: number | null;
+}
+
+export interface RoutePlanComparisonEntity {
+  previous: RoutePlanEntity | null;
+  next: RoutePlanEntity;
+  difference: RouteComparisonEntity | null;
 }

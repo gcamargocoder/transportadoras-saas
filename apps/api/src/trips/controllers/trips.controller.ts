@@ -39,6 +39,12 @@ import { TripSettlementEntity } from '../../trip-settlements/entities/trip-settl
 import { TripSettlementsService } from '../../trip-settlements/services/trip-settlements.service';
 import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
 import { TollReconciliationEntity } from '../../toll-routes/entities/toll-reconciliation.entity';
+import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entity';
+import { TrackingPointEntity } from '../../trip-operations/entities/tracking-point.entity';
+import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
+import { AxleEventsService } from '../../trip-operations/services/axle-events.service';
+import { TrackingPointsService } from '../../trip-operations/services/tracking-points.service';
+import { TripStopsService } from '../../trip-operations/services/trip-stops.service';
 import { TRIP_READ_ROLES, TRIP_WRITE_ROLES } from '../constants/trip-roles.constants';
 import { CreateRouteEventDto } from '../dto/create-route-event.dto';
 import { CreateTripDto } from '../dto/create-trip.dto';
@@ -70,6 +76,9 @@ export class TripsController {
     private readonly tripExpensesService: TripExpensesService,
     private readonly tripSettlementsService: TripSettlementsService,
     private readonly tollReconciliationService: TollReconciliationService,
+    private readonly tripStopsService: TripStopsService,
+    private readonly axleEventsService: AxleEventsService,
+    private readonly trackingPointsService: TrackingPointsService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -517,5 +526,44 @@ export class TripsController {
       this.tenantContext.requireTenantId(),
       tripId,
     );
+  }
+
+  // ==========================================================================
+  // OPERACAO DA VIAGEM (Fase 25) -- visibilidade administrativa somente
+  // leitura sobre o que o app do motorista registrou (localizacao, paradas,
+  // excecoes de eixo). Escrita fica exclusivamente em DriverTripsController.
+  // ==========================================================================
+  @Get(':id/locations')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Historico recente de posicoes GPS da viagem (mais recente primeiro -- o primeiro item ' +
+      'e a ultima posicao conhecida). Sem mapa nesta fase.',
+  })
+  @ApiOkResponse({ type: TrackingPointEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findLocations(@Param('id', ParseUUIDPipe) tripId: string): Promise<TrackingPointEntity[]> {
+    return this.trackingPointsService.findRecent(this.tenantContext.requireTenantId(), tripId);
+  }
+
+  @Get(':id/stops')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({ summary: 'Lista as paradas operacionais registradas pelo app do motorista nesta viagem.' })
+  @ApiOkResponse({ type: TripStopEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findStops(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripStopEntity[]> {
+    return this.tripStopsService.findAll(this.tenantContext.requireTenantId(), tripId);
+  }
+
+  @Get(':id/axle-events')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Lista as excecoes de eixo (praca, padrao x declarado, suspensos) registradas nesta viagem.',
+  })
+  @ApiOkResponse({ type: AxleEventEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findAxleEvents(@Param('id', ParseUUIDPipe) tripId: string): Promise<AxleEventEntity[]> {
+    return this.axleEventsService.findAll(this.tenantContext.requireTenantId(), tripId);
   }
 }

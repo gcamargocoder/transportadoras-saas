@@ -2,6 +2,7 @@ import { plainToInstance, Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
+  IsOptional,
   IsString,
   Matches,
   Max,
@@ -74,6 +75,26 @@ class EnvironmentVariables {
   @Min(1)
   @Max(100)
   TOLL_IMPORT_MAX_FILE_SIZE_MB = 10;
+
+  // Fase 26 -- provider de roteirizacao (Google Routes API). OPCIONAL: sem
+  // chave, o modulo de routing fica estruturalmente pronto mas responde com
+  // erro claro de "nao configurado" em vez de simular dados (ver
+  // NotConfiguredRoutingProvider) -- nunca bloqueia o boot da aplicacao.
+  @IsOptional()
+  @IsString()
+  GOOGLE_ROUTES_API_KEY?: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(10)
+  @Max(5000)
+  ROUTING_TOLL_MATCH_RADIUS_METERS = 300;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  @Max(60000)
+  ROUTING_REQUEST_TIMEOUT_MS = 8000;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

@@ -1,12 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
-import { View } from 'react-native';
+import React from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider } from './src/auth/AuthContext';
+import { RootNavigator } from './src/navigation/RootNavigator';
 
-// Entry point minimo do app. Nenhuma tela de negocio (login, mapa,
-// viagem ativa etc.) foi implementada nesta etapa.
-export default function App() {
+// App do motorista (Fase 25) -- login, retomada de viagem, GPS, paradas,
+// abastecimento e excecoes de eixo. Ver src/navigation/RootNavigator.tsx
+// para a arvore de telas.
+export default function App(): React.JSX.Element {
   return (
-    <View>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+      <StatusBar style="light" />
+    </SafeAreaProvider>
   );
 }

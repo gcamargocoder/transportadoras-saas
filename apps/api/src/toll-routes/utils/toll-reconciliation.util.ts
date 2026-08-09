@@ -49,6 +49,10 @@ export interface ReconciliationTransactionInput {
   tollPlazaName: string;
   chargedAmount: number;
   chargedAt: Date;
+  /** Quantidade de eixos efetivamente registrada nesta passagem (Fase 25) --
+   *  usada no calculo do expectedAmount desta parada em vez do padrao da
+   *  composicao, quando a transacao existe. */
+  axleCount: number;
 }
 
 export interface ReconciliationStopResult {
@@ -109,7 +113,7 @@ export interface TollReconciliationResult {
 export function computeTollReconciliation(
   routeStops: ReconciliationRouteStopInput[],
   transactions: ReconciliationTransactionInput[],
-  axleCount: number | null,
+  defaultAxleCount: number | null,
 ): TollReconciliationResult {
   const orderedStops = routeStops.slice().sort((a, b) => a.sequence - b.sequence);
 
@@ -129,24 +133,37 @@ export function computeTollReconciliation(
     const candidates = remainingByPlaza.get(stop.tollPlazaId) ?? [];
     const transaction = candidates.shift();
 
-    const canCompute = stop.pricePerAxle !== null && axleCount !== null;
+    // Quando ja existe uma transacao casada, o eixo REALMENTE tarifado
+    // naquela passagem (TollTransaction.axleCount) e o que vale para o
+    // calculo do expectedAmount -- pode divergir do padrao da composicao por
+    // causa de uma excecao de eixo (AxleEvent, Fase 25). So cai no padrao da
+    // composicao quando nao ha transacao (NOT_REGISTERED), unico caso em que
+    // so resta estimar.
+    const stopAxleCount = transaction ? transaction.axleCount : defaultAxleCount;
+    const canCompute = stop.pricePerAxle !== null && stopAxleCount !== null;
     const expectedAmount = canCompute
-      ? (stop.pricePerAxle as number) * (axleCount as number)
+      ? (stop.pricePerAxle as number) * (stopAxleCount as number)
       : null;
 
     if (!transaction) {
+      // Sem transacao, o fato mais importante e "nao registrado" -- mas
+      // quando alem disso nao ha como nem estimar o valor esperado (eixo
+      // padrao da composicao desconhecido), reaproveita a mesma mensagem de
+      // configuracao ausente usada no caso de transacao sem tarifa conhecida.
+      const message =
+        !canCompute && stop.pricePerAxle !== null ? MISSING_AXLE_CONFIG_MESSAGE : NOT_REGISTERED_MESSAGE;
       return {
         sequence: stop.sequence,
         tollPlazaId: stop.tollPlazaId,
         tollPlazaName: stop.tollPlazaName,
         highway: stop.highway,
         transactionId: null,
-        axleCount,
+        axleCount: stopAxleCount,
         expectedAmount,
         chargedAmount: null,
         discrepancyAmount: null,
         verdict: 'NOT_REGISTERED',
-        message: NOT_REGISTERED_MESSAGE,
+        message,
       };
     }
 
@@ -176,7 +193,7 @@ export function computeTollReconciliation(
       tollPlazaName: stop.tollPlazaName,
       highway: stop.highway,
       transactionId: transaction.id,
-      axleCount,
+      axleCount: stopAxleCount,
       expectedAmount,
       chargedAmount: transaction.chargedAmount,
       discrepancyAmount,

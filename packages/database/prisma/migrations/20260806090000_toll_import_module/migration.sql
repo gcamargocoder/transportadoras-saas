@@ -7,9 +7,6 @@ CREATE TYPE "import_job_status" AS ENUM ('PENDING', 'PROCESSING', 'COMPLETED', '
 -- CreateEnum
 CREATE TYPE "import_row_issue_type" AS ENUM ('VALIDATION_ERROR', 'DUPLICATE');
 
--- AlterTable
-ALTER TABLE "tag_providers" ALTER COLUMN "updated_at" DROP DEFAULT;
-
 -- CreateTable
 CREATE TABLE "import_jobs" (
     "id" UUID NOT NULL,

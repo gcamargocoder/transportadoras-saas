@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Vehicle } from '@prisma/client';
+import { FuelType, Prisma, Vehicle } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
@@ -19,6 +19,7 @@ import {
 } from '../../common/utils/fuel-consumption.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CreateDriverFuelSupplyDto } from '../dto/create-driver-fuel-supply.dto';
 import { CreateFuelSupplyDto } from '../dto/create-fuel-supply.dto';
 import { FindFuelSuppliesQueryDto } from '../dto/find-fuel-supplies-query.dto';
 import { FuelHistoryQueryDto } from '../dto/fuel-history-query.dto';
@@ -152,6 +153,86 @@ export class FuelSuppliesService {
         tripId: supply.tripId,
         liters: supply.liters,
         totalAmount: supply.totalAmount,
+      }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toFuelSupplyEntity(supply);
+  }
+
+  // POST /driver/trips/:id/fuel-supplies (Fase 25) -- tela do app do
+  // motorista tem so KM+litros; vehicleId/driverId SEMPRE derivados da trip
+  // (nunca aceitos do cliente, mesmo principio de create()) e fuelStationId
+  // nunca e exigido/inventado -- so a localizacao (lat/lng), quando
+  // disponivel. Idempotente por deviceEventId: reenvio (ex: apos reconexao)
+  // devolve o registro ja criado em vez de duplicar ou lancar erro.
+  async createFromDriverApp(
+    tenantId: string,
+    tripId: string,
+    dto: CreateDriverFuelSupplyDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<FuelSupplyEntity> {
+    const existing = await this.prisma.fuelSupply.findFirst({
+      where: { tenantId, deviceEventId: dto.deviceEventId },
+      include: SUPPLY_INCLUDE,
+    });
+    if (existing) {
+      return toFuelSupplyEntity(existing);
+    }
+
+    const trip = await this.findTripOrThrow(tenantId, tripId);
+    if (!trip.composition?.vehicleId) {
+      throw new ConflictException('Esta viagem nao possui veiculo (composicao) vinculado.');
+    }
+    if (!trip.driverId) {
+      throw new ConflictException('Esta viagem nao possui motorista vinculado.');
+    }
+    const vehicleId = trip.composition.vehicleId;
+    const driverId = trip.driverId;
+
+    const vehicle = await this.assertVehicleExists(tenantId, vehicleId);
+    this.assertOdometerNotBelowCurrent(vehicle, dto.odometerKm);
+
+    const pricePerLiter = dto.pricePerLiter ?? 0;
+    const totalAmount = computeTotalAmount(dto.liters, pricePerLiter);
+
+    const supply = await this.prisma.fuelSupply.create({
+      data: {
+        tenantId,
+        vehicleId,
+        driverId,
+        tripId,
+        fuelType: dto.fuelType ?? FuelType.OUTRO,
+        liters: dto.liters,
+        pricePerLiter,
+        totalAmount,
+        odometerKm: dto.odometerKm,
+        supplyDate: dto.supplyDate ? new Date(dto.supplyDate) : new Date(),
+        deviceEventId: dto.deviceEventId,
+        syncedAt: new Date(),
+        createdBy: actor.userId,
+        ...compact({ latitude: dto.latitude, longitude: dto.longitude }),
+      },
+      include: SUPPLY_INCLUDE,
+    });
+
+    await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm);
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'fuel_supply.created',
+      entityName: 'FuelSupply',
+      entityId: supply.id,
+      newValue: toJsonSafe({
+        vehicleId: supply.vehicleId,
+        driverId: supply.driverId,
+        tripId: supply.tripId,
+        liters: supply.liters,
+        totalAmount: supply.totalAmount,
+        source: 'driver-app',
       }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
@@ -369,7 +450,12 @@ export class FuelSuppliesService {
       totalLitersBetweenSupplies > 0 ? totalDistanceKm / totalLitersBetweenSupplies : null;
     entity.costPerKm = totalDistanceKm > 0 ? entity.totalAmount / totalDistanceKm : null;
 
-    const topStation = this.pickTop(byStation, 'fuelStationId');
+    // fuelStationId pode ser nulo (abastecimento so com localizacao, Fase 25)
+    // -- nao entra na disputa de "posto mais usado".
+    const byStationKnown = byStation.filter(
+      (g): g is typeof g & { fuelStationId: string } => g.fuelStationId !== null,
+    );
+    const topStation = this.pickTop(byStationKnown, 'fuelStationId');
     const topVehicle = this.pickTop(byVehicle, 'vehicleId');
     const topDriver = this.pickTop(byDriver, 'driverId');
 

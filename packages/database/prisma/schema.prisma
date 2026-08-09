@@ -436,6 +436,52 @@ enum ExternalSystem {
   @@map("external_system")
 }
 
+/// Classificacao da parada operacional (Fase 25). UNKNOWN e o padrao quando o
+/// app apenas detecta "veiculo parado" via GPS -- a classificacao real pode
+/// ser feita pelo motorista depois, sem bloquear o registro da parada.
+enum TripStopType {
+  UNKNOWN
+  FUEL
+  REST
+  MEAL
+  MAINTENANCE
+  OTHER
+
+  @@map("trip_stop_type")
+}
+
+/// Origem do numero de eixos DECLARADO num AxleEvent -- DRIVER_INPUT quando o
+/// motorista respondeu ao alerta de pedagio, TIMEOUT_DEFAULT quando nao
+/// respondeu e o sistema assumiu a configuracao padrao automaticamente.
+enum AxleEventSource {
+  DRIVER_INPUT
+  TIMEOUT_DEFAULT
+
+  @@map("axle_event_source")
+}
+
+/// Estado de sincronizacao de um evento operacional gerado pelo app do
+/// motorista (Fase 25). Registros so existem no backend depois de
+/// sincronizados -- PENDING/FAILED sao principalmente estados do lado do
+/// dispositivo (fila local), mantidos aqui para o campo nunca ficar
+/// inconsistente com o que a fase pede.
+enum SyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+
+  @@map("sync_status")
+}
+
+/// Estado da carga no inicio da viagem (Fase 27) -- informado uma vez pelo
+/// motorista na tela de largada, nunca inferido/alterado automaticamente.
+enum TripLoadStatus {
+  LOADED
+  EMPTY
+
+  @@map("trip_load_status")
+}
+
 // ============================================================================
 // PLATAFORMA — tenant, usuarios, configuracoes, auditoria geral
 // ============================================================================
@@ -480,7 +526,11 @@ model Tenant {
   axleConfigurations      AxleConfiguration[]
   routeVersions           RouteVersion[]
   routeEvents             RouteEvent[]
+  routePlans              RoutePlan[]
+  routePlanTolls          RoutePlanToll[]
   trackingPoints          TrackingPoint[]
+  tripStops               TripStop[]
+  axleEvents              AxleEvent[]
   alerts                  Alert[]
   notifications           Notification[]
   telemetry               Telemetry[]
@@ -510,17 +560,30 @@ model Tenant {
 /// Configuracoes operacionais da transportadora. 1:1 com Tenant, separado
 /// para nao poluir a tabela principal com colunas de configuracao.
 model TenantSettings {
-  id                     String   @id @default(uuid()) @db.Uuid
-  tenantId               String   @unique @map("tenant_id") @db.Uuid
-  maxDeviationMeters     Int      @default(500) @map("max_deviation_meters")
-  gpsPingIntervalSeconds Int      @default(30) @map("gps_ping_interval_seconds")
-  alertDelayThresholdMin Int      @default(15) @map("alert_delay_threshold_min")
-  timezone               String   @default("America/Sao_Paulo")
-  currency               String   @default("BRL") @db.VarChar(3)
-  language               String   @default("pt-BR") @map("language")
-  preferences            Json?    @default("{}")
-  createdAt              DateTime @default(now()) @map("created_at")
-  updatedAt              DateTime @updatedAt @map("updated_at")
+  id                        String   @id @default(uuid()) @db.Uuid
+  tenantId                  String   @unique @map("tenant_id") @db.Uuid
+  maxDeviationMeters        Int      @default(500) @map("max_deviation_meters")
+  gpsPingIntervalSeconds    Int      @default(30) @map("gps_ping_interval_seconds")
+  alertDelayThresholdMin    Int      @default(15) @map("alert_delay_threshold_min")
+  /// Minutos parado (dentro de stopRadiusMeters) para o app do motorista
+  /// considerar "parada detectada" (Fase 25) -- configuravel por tenant.
+  stopDetectionMinutes      Int      @default(10) @map("stop_detection_minutes")
+  /// Raio (metros) considerado "mesma regiao" para deteccao de parada.
+  stopRadiusMeters          Int      @default(150) @map("stop_radius_meters")
+  /// Raio (metros) a partir do qual o app do motorista mostra o alerta de
+  /// praca de pedagio proxima (Fase 25).
+  tollProximityRadiusMeters Int      @default(3000) @map("toll_proximity_radius_meters")
+  /// Minutos consecutivos fora da rota planejada (alem de maxDeviationMeters)
+  /// para confirmar um desvio sustentado (Fase 26) -- evita alertar por um
+  /// unico ponto de GPS ruidoso. Reaproveita maxDeviationMeters (ja existente,
+  /// ate entao nao consumido por nenhum codigo) para o limite de distancia.
+  routeDeviationMinutes     Int      @default(5) @map("route_deviation_minutes")
+  timezone                  String   @default("America/Sao_Paulo")
+  currency                  String   @default("BRL") @db.VarChar(3)
+  language                  String   @default("pt-BR") @map("language")
+  preferences               Json?    @default("{}")
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -694,6 +757,9 @@ model Vehicle {
   tollTransactions        TollTransaction[]
   tripExpenses            TripExpense[]
   fuelSupplies            FuelSupply[]
+  tripStops               TripStop[]
+  axleEvents              AxleEvent[]
+  routePlans              RoutePlan[]
   tires                   Tire[]               @relation("TireCurrentVehicle")
   tireMovementsAsPrevious TireMovement[]       @relation("TireMovementPreviousVehicle")
   tireMovementsAsNew      TireMovement[]       @relation("TireMovementNewVehicle")
@@ -932,13 +998,17 @@ model FuelStation {
 /// do cliente); quando ausente, vehicleId/driverId sao informados
 /// diretamente (e validados). totalAmount e SEMPRE calculado
 /// (liters * pricePerLiter), nunca aceito do cliente.
+/// fuelStationId e OPCIONAL (Fase 25): o app do motorista registra apenas
+/// KM+litros e a localizacao (latitude/longitude) -- sem escolher/inventar um
+/// posto. O fluxo administrativo (Fase 18) continua exigindo fuelStationId no
+/// DTO de criacao manual.
 model FuelSupply {
   id            String       @id @default(uuid()) @db.Uuid
   tenantId      String       @map("tenant_id") @db.Uuid
   vehicleId     String       @map("vehicle_id") @db.Uuid
   driverId      String       @map("driver_id") @db.Uuid
   tripId        String?      @map("trip_id") @db.Uuid
-  fuelStationId String       @map("fuel_station_id") @db.Uuid
+  fuelStationId String?      @map("fuel_station_id") @db.Uuid
   attachmentId  String?      @map("attachment_id") @db.Uuid
   fuelType      FuelType     @map("fuel_type")
   liters        Decimal      @db.Decimal(10, 3)
@@ -952,6 +1022,13 @@ model FuelSupply {
   paymentType   PaymentType? @map("payment_type")
   invoiceNumber String?      @map("invoice_number")
   notes         String?
+  /// Localizacao do abastecimento (Fase 25) -- preenchida pelo app do
+  /// motorista quando nao ha fuelStationId conhecido.
+  latitude      Decimal?     @db.Decimal(9, 6)
+  longitude     Decimal?     @db.Decimal(9, 6)
+  deviceEventId String?      @unique @map("device_event_id")
+  syncedAt      DateTime?    @map("synced_at")
+  syncStatus    SyncStatus   @default(SYNCED) @map("sync_status")
   createdBy     String       @map("created_by") @db.Uuid
   updatedBy     String?      @map("updated_by") @db.Uuid
   createdAt     DateTime     @default(now()) @map("created_at")
@@ -961,7 +1038,7 @@ model FuelSupply {
   vehicle     Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   driver      Driver       @relation(fields: [driverId], references: [id], onDelete: Restrict)
   trip        Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  fuelStation FuelStation  @relation(fields: [fuelStationId], references: [id], onDelete: Restrict)
+  fuelStation FuelStation? @relation(fields: [fuelStationId], references: [id], onDelete: Restrict)
   attachment  Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
   creator     UserAccount  @relation("FuelSupplyCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   updater     UserAccount? @relation("FuelSupplyUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
@@ -1090,6 +1167,8 @@ model Driver {
   tripExpenses     TripExpense[]
   tripAdvances     TripAdvance[]
   fuelSupplies     FuelSupply[]
+  tripStops        TripStop[]
+  axleEvents       AxleEvent[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
@@ -1199,6 +1278,7 @@ model TripComposition {
   vehicle           Vehicle                  @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   trailers          TripCompositionTrailer[]
   axleConfiguration AxleConfiguration?
+  axleEvents        AxleEvent[]
 
   @@index([tenantId])
   @@index([vehicleId])
@@ -1269,8 +1349,22 @@ model Trip {
   /// entram na conciliacao, mas seguem operando e podendo ter pedagios
   /// registrados manualmente como antes da Fase 23).
   tollRouteId           String?      @map("toll_route_id") @db.Uuid
+  /// Rota GEOGRAFICA planejada (Fase 26), calculada por um provider externo
+  /// (ver RoutePlan) -- distinta de tollRouteId (corredor operacional
+  /// manual da Fase 23; os dois convivem, nenhum substitui o outro).
+  /// Aponta para qual das RoutePlan desta viagem (podem existir varias:
+  /// alternativas + recalculos historicos) e a atualmente selecionada/ativa.
+  routePlanId           String?      @unique @map("route_plan_id") @db.Uuid
   status                TripStatus   @default(PLANNED)
   priority              TripPriority @default(NORMAL)
+  /// Carregado ou vazio, informado pelo motorista na largada (Fase 27) --
+  /// nulo em viagens antigas/nao iniciadas por este fluxo.
+  loadStatus            TripLoadStatus? @map("load_status")
+  /// Odometro do veiculo no momento da largada, informado pelo motorista
+  /// (Fase 27) -- distinto de Vehicle.odometerKm (que reflete a leitura MAIS
+  /// RECENTE do veiculo, atualizada a cada abastecimento/conclusao). Gravado
+  /// uma unica vez (primeiro start nunca e sobrescrito por retomadas).
+  initialOdometerKm     Decimal?     @map("initial_odometer_km") @db.Decimal(10, 1)
   notes                 String?
   plannedDeparture      DateTime?    @map("planned_departure")
   plannedArrival        DateTime?    @map("planned_arrival")
@@ -1282,16 +1376,22 @@ model Trip {
   createdAt             DateTime     @default(now()) @map("created_at")
   updatedAt             DateTime     @updatedAt @map("updated_at")
 
-  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  driver      Driver?    @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  origin      Location   @relation("TripOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
-  destination Location   @relation("TripDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
-  tollRoute   TollRoute? @relation(fields: [tollRouteId], references: [id], onDelete: SetNull)
+  tenant           Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer         Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  driver           Driver?    @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  origin           Location   @relation("TripOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
+  destination      Location   @relation("TripDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+  tollRoute        TollRoute? @relation(fields: [tollRouteId], references: [id], onDelete: SetNull)
+  // routePlanId aponta para a RoutePlan ATUAL entre as varias que a viagem
+  // pode acumular (relation nomeada "CurrentRoutePlan", distinta da relation
+  // 1:N "TripRoutePlans" abaixo, que e o historico completo via
+  // RoutePlan.tripId) -- ver comentario em RoutePlan.
+  currentRoutePlan RoutePlan? @relation("CurrentRoutePlan", fields: [routePlanId], references: [id], onDelete: SetNull)
 
   composition      TripComposition?
   routeVersions    RouteVersion[]
   routeEvents      RouteEvent[]
+  routePlans       RoutePlan[]       @relation("TripRoutePlans")
   trackingPoints   TrackingPoint[]
   alerts           Alert[]
   tollTransactions TollTransaction[]
@@ -1303,6 +1403,8 @@ model Trip {
   metrics          TripMetrics?
   driverShifts     DriverShift[]
   telemetry        Telemetry[]
+  tripStops        TripStop[]
+  axleEvents       AxleEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -1341,10 +1443,17 @@ model RouteEvent {
   detectedAt              DateTime       @default(now()) @map("detected_at")
   resolvedAt              DateTime?      @map("resolved_at")
   resultingRouteVersionId String?        @unique @map("resulting_route_version_id") @db.Uuid
+  /// Fase 26 -- quando o evento (tipicamente DEVIATION, detectado
+  /// automaticamente a partir de TrackingPoint x RoutePlan.encodedPolyline)
+  /// resulta num recalculo de rota geografica, aponta para o RoutePlan
+  /// gerado. Mesma convencao de resultingRouteVersionId (FK opcional/unica),
+  /// mas para o novo conceito de rota (RoutePlan), nao a rota operacional.
+  resultingRoutePlanId    String?        @unique @map("resulting_route_plan_id") @db.Uuid
 
   tenant                Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   trip                  Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
   resultingRouteVersion RouteVersion? @relation("RouteEventResult", fields: [resultingRouteVersionId], references: [id], onDelete: SetNull)
+  resultingRoutePlan    RoutePlan?    @relation("RouteEventRoutePlanResult", fields: [resultingRoutePlanId], references: [id], onDelete: SetNull)
   alerts                Alert[]
 
   @@index([tenantId])
@@ -1352,18 +1461,165 @@ model RouteEvent {
   @@map("route_events")
 }
 
+/// Origem da estimativa de pedagio de uma RoutePlan (Fase 26). MATCHED_PLAZAS
+/// = soma das RoutePlanToll casadas com TollPlaza (fonte preferida, mais
+/// precisa); PROVIDER_AGGREGATE = a API de rotas informou que ha pedagio na
+/// rota e devolveu um valor agregado, mas nenhuma praca individual pode ser
+/// identificada com confianca no catalogo (nunca inventamos uma praca so
+/// para "explicar" esse valor); NONE = sem qualquer informacao de pedagio.
+enum RouteTollEstimateSource {
+  MATCHED_PLAZAS
+  PROVIDER_AGGREGATE
+  NONE
+
+  @@map("route_toll_estimate_source")
+}
+
+/// Confianca da correspondencia entre uma praca descoberta na rota e uma
+/// TollPlaza do catalogo (Fase 26). MATCHED = dentro da tolerancia
+/// configurada; UNMATCHED = candidato identificado (coordenadas de um
+/// provider futuro que devolva pracas nomeadas), mas sem correspondencia
+/// confiavel -- nunca vira uma TollPlaza nova automaticamente.
+enum TollMatchStatus {
+  MATCHED
+  UNMATCHED
+
+  @@map("toll_match_status")
+}
+
+/// Rota GEOGRAFICA planejada (Fase 26), calculada por um RoutingProvider
+/// externo (ver apps/api/src/routing). DISTINTA de TollRoute (Fase 23,
+/// corredor operacional manual por nome/praca, sem geolocalizacao) -- as
+/// duas convivem, nenhuma substitui a outra (ver Trip.tollRouteId x
+/// Trip.routePlanId). Uma Trip pode acumular varias RoutePlan ao longo do
+/// tempo (alternativas oferecidas + recalculos apos desvio) -- a relation
+/// "TripRoutePlans" (via tripId) e o historico completo; Trip.routePlanId
+/// ("CurrentRoutePlan") aponta para qual delas esta ativa agora. Nunca
+/// editada apos criada (mesmo espirito de imutabilidade de RouteVersion) --
+/// um recalculo sempre cria uma RoutePlan nova, nunca atualiza uma existente.
+model RoutePlan {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  tenantId             String                  @map("tenant_id") @db.Uuid
+  tripId               String                  @map("trip_id") @db.Uuid
+  /// Composicao/veiculo cujo AxleConfiguration.totalAxles foi usado para
+  /// estimar o pedagio (snapshot -- ver axleCountUsed). Nao duplica dados do
+  /// veiculo, so referencia.
+  vehicleId            String?                 @map("vehicle_id") @db.Uuid
+  originLabel          String                  @map("origin_label")
+  destinationLabel     String                  @map("destination_label")
+  originLatitude       Decimal                 @map("origin_latitude") @db.Decimal(10, 7)
+  originLongitude      Decimal                 @map("origin_longitude") @db.Decimal(10, 7)
+  destinationLatitude  Decimal                 @map("destination_latitude") @db.Decimal(10, 7)
+  destinationLongitude Decimal                 @map("destination_longitude") @db.Decimal(10, 7)
+  distanceMeters       Int                     @map("distance_meters")
+  durationSeconds      Int                     @map("duration_seconds")
+  /// Geometria codificada no formato "encoded polyline" do Google (algoritmo
+  /// publico, reaproveitavel por qualquer provider) -- evita depender de
+  /// PostGIS/SQL bruto (Unsupported() no Prisma) para o caso de uso desta
+  /// fase. Decodificada sob demanda (ver routing/utils/polyline.util.ts).
+  encodedPolyline      String                  @map("encoded_polyline") @db.Text
+  /// Soma das RoutePlanToll.estimatedAmount conhecidas, OU o valor agregado
+  /// do provider quando nao ha nenhuma praca casada (ver tollEstimateSource).
+  /// Sempre uma PREVISAO -- nunca confundir com cobranca real (TollTransaction).
+  totalTollAmount      Decimal?                @map("total_toll_amount") @db.Decimal(10, 2)
+  tollEstimateSource   RouteTollEstimateSource @default(NONE) @map("toll_estimate_source")
+  currency             String                  @default("BRL") @db.VarChar(3)
+  /// Quantidade de eixos usada para estimar pedagio (padrao da composicao no
+  /// momento do calculo) -- NUNCA altera AxleConfiguration.totalAxles.
+  axleCountUsed        Int?                    @map("axle_count_used")
+  /// Motivo desta versao existir -- reaproveita o enum ja criado para
+  /// RouteVersion (Fase 23/roadmap), mesmo significado semantico.
+  reason               RouteVersionReason      @default(INITIAL)
+  /// Identificador do provider usado (ex: "GOOGLE") -- string livre, nao
+  /// enum, de proposito: novos providers nao devem exigir migration.
+  provider             String
+  /// Id da rota no provider, quando ele expuser um (nem todo provider tem).
+  providerRouteId      String?                 @map("provider_route_id")
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip           Trip            @relation("TripRoutePlans", fields: [tripId], references: [id], onDelete: Cascade)
+  vehicle        Vehicle?        @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  currentForTrip Trip?           @relation("CurrentRoutePlan")
+  tolls          RoutePlanToll[]
+  deviationEvent RouteEvent?     @relation("RouteEventRoutePlanResult")
+
+  @@index([tenantId])
+  @@index([tripId])
+  @@map("route_plans")
+}
+
+/// Praca de pedagio descoberta ao longo de uma RoutePlan (Fase 26).
+/// Descoberta cruzando a geometria da rota (RoutePlan.encodedPolyline) com o
+/// catalogo de TollPlaza (nao o inverso -- a API de rotas usada nesta fase
+/// nao devolve uma lista confiavel de pracas nomeadas, so geometria + valor
+/// agregado, ver GoogleRoutingProvider). Por isso, nesta implementacao, toda
+/// linha aqui criada ja nasce com tollPlazaId preenchido (MATCHED); o campo
+/// matchStatus/matchConfidence fica modelado para quando um provider futuro
+/// devolver candidatos nomeados que precisem de correspondencia por
+/// coordenadas/distancia (ver routing/utils/toll-matching.util.ts).
+model RoutePlanToll {
+  id                       String          @id @default(uuid()) @db.Uuid
+  tenantId                 String          @map("tenant_id") @db.Uuid
+  routePlanId              String          @map("route_plan_id") @db.Uuid
+  /// Nulo somente quando matchStatus = UNMATCHED.
+  tollPlazaId              String?         @map("toll_plaza_id") @db.Uuid
+  /// Posicao da praca ao longo da rota (1 = mais proxima da origem).
+  sequence                 Int
+  latitude                 Decimal         @db.Decimal(10, 7)
+  longitude                Decimal         @db.Decimal(10, 7)
+  /// Nome exibido -- vem da TollPlaza casada quando houver (nunca inventado
+  /// quando UNMATCHED; nesse caso fica um rotulo generico "Praca N").
+  name                     String
+  distanceFromOriginMeters Int             @map("distance_from_origin_meters")
+  /// Sempre uma PREVISAO (TOLL ESTIMATED) -- nulo quando TollPlaza.pricePerAxle
+  /// e desconhecido (nunca assumir zero como tarifa valida, mesmo principio
+  /// da Fase 22/computeAuditVerdict).
+  estimatedAmount          Decimal?        @map("estimated_amount") @db.Decimal(10, 2)
+  currency                 String          @default("BRL") @db.VarChar(3)
+  axleCountUsed            Int?            @map("axle_count_used")
+  matchStatus              TollMatchStatus @default(UNMATCHED) @map("match_status")
+  /// Score 0..1 de confianca da correspondencia (1 = distancia zero da
+  /// rota). Nulo quando UNMATCHED.
+  matchConfidence          Decimal?        @map("match_confidence") @db.Decimal(4, 3)
+  /// Fonte da descoberta (ex: "TOLL_PLAZA_MATCH") -- distingue de futuras
+  /// fontes (ex: candidato nomeado devolvido por outro provider).
+  source                   String
+  /// Dados brutos do provider/calculo, quando uteis para auditoria futura
+  /// (ex: distancia calculada ate a rota, indice no polyline).
+  metadata                 Json?
+  createdAt                DateTime        @default(now()) @map("created_at")
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  routePlan RoutePlan  @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+  tollPlaza TollPlaza? @relation(fields: [tollPlazaId], references: [id], onDelete: SetNull)
+
+  @@unique([routePlanId, sequence])
+  @@index([tenantId])
+  @@index([routePlanId])
+  @@index([tollPlazaId])
+  @@map("route_plan_tolls")
+}
+
 /// Ponto de GPS -- alto volume, granularidade de segundos. Fonte tanto do
 /// rastreamento ao vivo (via WebSocket) quanto do replay de viagem.
 /// Recomenda-se particionamento por tempo (ex: mensal) em producao.
 model TrackingPoint {
-  id         String   @id @default(uuid()) @db.Uuid
-  tenantId   String   @map("tenant_id") @db.Uuid
-  tripId     String   @map("trip_id") @db.Uuid
-  latitude   Decimal  @db.Decimal(9, 6)
-  longitude  Decimal  @db.Decimal(9, 6)
-  speedKmh   Decimal? @map("speed_kmh") @db.Decimal(5, 2)
-  headingDeg Decimal? @map("heading_deg") @db.Decimal(5, 2)
-  recordedAt DateTime @map("recorded_at")
+  id            String     @id @default(uuid()) @db.Uuid
+  tenantId      String     @map("tenant_id") @db.Uuid
+  tripId        String     @map("trip_id") @db.Uuid
+  latitude      Decimal    @db.Decimal(9, 6)
+  longitude     Decimal    @db.Decimal(9, 6)
+  speedKmh      Decimal?   @map("speed_kmh") @db.Decimal(5, 2)
+  headingDeg    Decimal?   @map("heading_deg") @db.Decimal(5, 2)
+  recordedAt    DateTime   @map("recorded_at")
+  /// Id gerado pelo dispositivo (app do motorista, Fase 25) -- garante
+  /// idempotencia quando o mesmo ponto e reenviado apos reconexao. Nulo para
+  /// pontos que venham a ser gerados por outra origem (ex: replay/importacao).
+  deviceEventId String?    @unique @map("device_event_id")
+  syncedAt      DateTime   @default(now()) @map("synced_at")
+  syncStatus    SyncStatus @default(SYNCED) @map("sync_status")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
@@ -1371,6 +1627,94 @@ model TrackingPoint {
   @@index([tenantId])
   @@index([tripId, recordedAt])
   @@map("tracking_points")
+}
+
+/// Parada operacional da viagem (Fase 25) -- distinta de TollRouteStop (praca
+/// de pedagio ESPERADA pela rota). Detectada pelo app do motorista (veiculo
+/// parado na mesma regiao por tempo acima do limite configuravel em
+/// TenantSettings) e classificada inicialmente como UNKNOWN; o motorista pode
+/// reclassificar depois (FUEL/REST/MEAL/MAINTENANCE/OTHER) sem precisar
+/// reabrir a parada.
+model TripStop {
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @map("tenant_id") @db.Uuid
+  tripId          String       @map("trip_id") @db.Uuid
+  vehicleId       String       @map("vehicle_id") @db.Uuid
+  driverId        String       @map("driver_id") @db.Uuid
+  type            TripStopType @default(UNKNOWN)
+  latitude        Decimal      @db.Decimal(9, 6)
+  longitude       Decimal      @db.Decimal(9, 6)
+  startedAt       DateTime     @map("started_at")
+  endedAt         DateTime?    @map("ended_at")
+  /// Sempre calculado (endedAt - startedAt) no fechamento -- nunca aceito do
+  /// cliente.
+  durationMinutes Int?         @map("duration_minutes")
+  /// Nome/local do posto ou ponto identificado -- nulo quando nao for
+  /// possivel identificar (nunca inventado, ver regra da Fase 25).
+  locationLabel   String?      @map("location_label")
+  deviceEventId   String       @unique @map("device_event_id")
+  syncedAt        DateTime     @default(now()) @map("synced_at")
+  syncStatus      SyncStatus   @default(SYNCED) @map("sync_status")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip    Trip    @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  driver  Driver  @relation(fields: [driverId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, tripId])
+  @@map("trip_stops")
+}
+
+/// Excecao TEMPORARIA de eixos numa praca especifica (Fase 25) -- NUNCA alta
+/// AxleConfiguration.totalAxles (que continua sendo o padrao permanente da
+/// composicao). Cada passagem com quantidade diferente do padrao gera um
+/// registro aqui; o retorno ao padrao apos a praca e implicito (fechamento do
+/// evento), sem exigir nenhuma acao do motorista. Serve de historico/consulta
+/// para quem lanca a TollTransaction real saber quantos eixos foram usados
+/// naquela passagem -- nao gera a transacao sozinho (sem leitura automatica
+/// de tag nesta fase).
+model AxleEvent {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @map("tenant_id") @db.Uuid
+  tripId            String          @map("trip_id") @db.Uuid
+  tripCompositionId String          @map("trip_composition_id") @db.Uuid
+  vehicleId         String          @map("vehicle_id") @db.Uuid
+  driverId          String          @map("driver_id") @db.Uuid
+  /// Praca de pedagio identificada por proximidade GPS -- nulo quando o app
+  /// nao conseguiu identificar a praca com seguranca.
+  tollPlazaId       String?         @map("toll_plaza_id") @db.Uuid
+  /// Snapshot de AxleConfiguration.totalAxles no momento do evento.
+  defaultAxles      Int             @map("default_axles")
+  /// Quantidade efetivamente informada (pelo motorista) ou assumida
+  /// (timeout) para esta passagem.
+  declaredAxles     Int             @map("declared_axles")
+  /// Sempre max(defaultAxles - declaredAxles, 0) -- nunca aceito do cliente.
+  suspendedAxles    Int             @map("suspended_axles")
+  source            AxleEventSource
+  startedAt         DateTime        @map("started_at")
+  endedAt           DateTime?       @map("ended_at")
+  latitude          Decimal         @db.Decimal(9, 6)
+  longitude         Decimal         @db.Decimal(9, 6)
+  deviceEventId     String          @unique @map("device_event_id")
+  syncedAt          DateTime        @default(now()) @map("synced_at")
+  syncStatus        SyncStatus      @default(SYNCED) @map("sync_status")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip            Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripComposition TripComposition @relation(fields: [tripCompositionId], references: [id], onDelete: Cascade)
+  vehicle         Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  driver          Driver          @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  tollPlaza       TollPlaza?      @relation(fields: [tollPlazaId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, tripId])
+  @@index([tollPlazaId])
+  @@map("axle_events")
 }
 
 /// Evento de sistema (desvio, discrepancia de pedagio, atraso, documento
@@ -1474,10 +1818,12 @@ model TollPlaza {
   createdAt    DateTime                              @default(now()) @map("created_at")
   updatedAt    DateTime                              @updatedAt @map("updated_at")
 
-  rates        TollRate[]
-  predictions  TollPrediction[]
-  transactions TollTransaction[]
-  routeStops   TollRouteStop[]
+  rates          TollRate[]
+  predictions    TollPrediction[]
+  transactions   TollTransaction[]
+  routeStops     TollRouteStop[]
+  axleEvents     AxleEvent[]
+  routePlanTolls RoutePlanToll[]
 
   @@map("toll_plazas")
 }

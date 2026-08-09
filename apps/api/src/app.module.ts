@@ -10,12 +10,14 @@ import { AppConfig } from './config/configuration';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { DriverTripsModule } from './driver-trips/driver-trips.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RoutingModule } from './routing/routing.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { TollImportModule } from './toll-import/toll-import.module';
 import { TollRoutesModule } from './toll-routes/toll-routes.module';
@@ -68,6 +70,8 @@ import { UsersModule } from './users/users.module';
     FuelSuppliesModule,
     DashboardModule,
     TiresModule,
+    RoutingModule,
+    DriverTripsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { FuelType, PaymentType } from '@prisma/client';
+import { FuelType, PaymentType, SyncStatus } from '@prisma/client';
 
 export class FuelSupplyEntity {
   @ApiProperty({ format: 'uuid' })
@@ -23,8 +23,12 @@ export class FuelSupplyEntity {
   @ApiProperty({ format: 'uuid', nullable: true })
   tripId!: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  fuelStationId!: string;
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description: 'Nulo quando o abastecimento foi registrado apenas com localizacao (app do motorista, sem posto identificado).',
+  })
+  fuelStationId!: string | null;
 
   @ApiProperty({ nullable: true })
   fuelStationName!: string | null;
@@ -58,6 +62,18 @@ export class FuelSupplyEntity {
 
   @ApiProperty({ nullable: true })
   notes!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Localizacao do abastecimento (Fase 25) -- preenchida pelo app do motorista.',
+  })
+  latitude!: number | null;
+
+  @ApiProperty({ nullable: true })
+  longitude!: number | null;
+
+  @ApiProperty({ enum: SyncStatus })
+  syncStatus!: SyncStatus;
 
   @ApiProperty({ format: 'uuid' })
   createdBy!: string;

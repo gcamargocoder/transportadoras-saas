@@ -5,13 +5,26 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.transportadoras.driverapp"
     },
     "android": {
       "package": "com.transportadoras.driverapp"
-    }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Permita o acesso a localizacao para o app registrar sua posicao durante a viagem.",
+          "locationWhenInUsePermission": "Permita o acesso a localizacao para o app registrar sua posicao durante a viagem.",
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ]
+    ]
   }
 }

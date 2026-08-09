@@ -155,6 +155,28 @@ export const RouteEventType = {
 } as const;
 export type RouteEventType = (typeof RouteEventType)[keyof typeof RouteEventType];
 
+export const RouteVersionReason = {
+  INITIAL: 'INITIAL',
+  DEVIATION: 'DEVIATION',
+  ACCIDENT: 'ACCIDENT',
+  ROADWORK: 'ROADWORK',
+  INTERDICTION: 'INTERDICTION',
+  DESTINATION_CHANGE: 'DESTINATION_CHANGE',
+} as const;
+export type RouteVersionReason = (typeof RouteVersionReason)[keyof typeof RouteVersionReason];
+
+// Fase 26 -- roteirizacao geografica.
+export const RouteTollEstimateSource = {
+  MATCHED_PLAZAS: 'MATCHED_PLAZAS',
+  PROVIDER_AGGREGATE: 'PROVIDER_AGGREGATE',
+  NONE: 'NONE',
+} as const;
+export type RouteTollEstimateSource =
+  (typeof RouteTollEstimateSource)[keyof typeof RouteTollEstimateSource];
+
+export const TollMatchStatus = { MATCHED: 'MATCHED', UNMATCHED: 'UNMATCHED' } as const;
+export type TollMatchStatus = (typeof TollMatchStatus)[keyof typeof TollMatchStatus];
+
 export const TollTransactionSource = { INTEGRATION: 'INTEGRATION', MANUAL: 'MANUAL' } as const;
 export type TollTransactionSource =
   (typeof TollTransactionSource)[keyof typeof TollTransactionSource];
@@ -259,3 +281,27 @@ export const DocumentType = {
   OTHER: 'OTHER',
 } as const;
 export type DocumentType = (typeof DocumentType)[keyof typeof DocumentType];
+
+// Fase 25 -- operacao da viagem (app do motorista).
+export const TripStopType = {
+  UNKNOWN: 'UNKNOWN',
+  FUEL: 'FUEL',
+  REST: 'REST',
+  MEAL: 'MEAL',
+  MAINTENANCE: 'MAINTENANCE',
+  OTHER: 'OTHER',
+} as const;
+export type TripStopType = (typeof TripStopType)[keyof typeof TripStopType];
+
+export const AxleEventSource = {
+  DRIVER_INPUT: 'DRIVER_INPUT',
+  TIMEOUT_DEFAULT: 'TIMEOUT_DEFAULT',
+} as const;
+export type AxleEventSource = (typeof AxleEventSource)[keyof typeof AxleEventSource];
+
+export const SyncStatus = {
+  PENDING: 'PENDING',
+  SYNCED: 'SYNCED',
+  FAILED: 'FAILED',
+} as const;
+export type SyncStatus = (typeof SyncStatus)[keyof typeof SyncStatus];

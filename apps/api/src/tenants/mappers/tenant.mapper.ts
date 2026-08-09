@@ -12,6 +12,7 @@ export function toTenantSettingsEntity(settings: TenantSettings): TenantSettings
   entity.gpsPingIntervalSeconds = settings.gpsPingIntervalSeconds;
   entity.maxDeviationMeters = settings.maxDeviationMeters;
   entity.alertDelayThresholdMin = settings.alertDelayThresholdMin;
+  entity.routeDeviationMinutes = settings.routeDeviationMinutes;
   entity.preferences = (settings.preferences as Record<string, unknown> | null) ?? null;
   return entity;
 }

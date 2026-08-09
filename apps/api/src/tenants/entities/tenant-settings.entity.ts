@@ -19,6 +19,12 @@ export class TenantSettingsEntity {
   @ApiProperty()
   alertDelayThresholdMin!: number;
 
+  @ApiProperty({
+    description:
+      'Minutos consecutivos fora da rota planejada para confirmar um desvio sustentado (Fase 26).',
+  })
+  routeDeviationMinutes!: number;
+
   @ApiProperty({ type: Object, nullable: true })
   preferences!: Record<string, unknown> | null;
 }

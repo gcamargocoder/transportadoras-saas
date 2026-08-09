@@ -6,14 +6,27 @@ import { TollReconciliationDashboardEntity } from '../entities/toll-reconciliati
 import { TollReconciliationEntity } from '../entities/toll-reconciliation.entity';
 import {
   computeTollReconciliation,
+  ReconciliationRouteStopInput,
   TollReconciliationResult,
 } from '../utils/toll-reconciliation.util';
 
+// Fase 26 -- alem da rota operacional manual (tollRoute, Fase 23), uma Trip
+// pode ter uma rota GEOGRAFICA planejada (currentRoutePlan). Quando ha
+// tollRoute, ele continua tendo prioridade (zero mudanca de comportamento
+// para viagens ja existentes); RoutePlan.tolls so alimenta a conciliacao
+// quando NAO ha tollRoute vinculado -- ver buildRouteStopInputs(). Nenhuma
+// logica de calculo e duplicada: os dois caminhos convergem no mesmo
+// computeTollReconciliation() ja existente (Fase 23).
 const RECONCILIATION_TRIP_INCLUDE = {
   composition: { include: { axleConfiguration: true } },
   tollRoute: {
     include: {
       stops: { include: { tollPlaza: true }, orderBy: { sequence: 'asc' } },
+    },
+  },
+  currentRoutePlan: {
+    include: {
+      tolls: { include: { tollPlaza: true }, orderBy: { sequence: 'asc' } },
     },
   },
 } satisfies Prisma.TripInclude;
@@ -39,7 +52,7 @@ export class TollReconciliationService {
       throw new NotFoundException('Viagem nao encontrada nesta empresa.');
     }
 
-    const transactions = trip.tollRoute
+    const transactions = trip.tollRoute || trip.currentRoutePlan
       ? await this.prisma.tollTransaction.findMany({
           where: { tenantId, tripId },
           include: { tollPlaza: true },
@@ -118,7 +131,7 @@ export class TollReconciliationService {
     const entity = new TollReconciliationEntity();
     entity.tripId = trip.id;
 
-    if (!trip.tollRoute) {
+    if (!trip.tollRoute && !trip.currentRoutePlan) {
       entity.hasRoute = false;
       entity.tollRouteId = null;
       entity.tollRouteName = null;
@@ -149,11 +162,16 @@ export class TollReconciliationService {
 
     const result = this.computeResult(trip, transactions);
 
+    // originLabel/destinationLabel refletem a fonte ativa (tollRoute tem
+    // prioridade); quando a viagem so tem RoutePlan, tollRouteId/tollRouteName
+    // ficam null (nao existe TollRoute nenhum) mas o restante da conciliacao
+    // funciona igual -- o motor nao diferencia a origem dos dados.
     entity.hasRoute = true;
-    entity.tollRouteId = trip.tollRoute.id;
-    entity.tollRouteName = trip.tollRoute.name;
-    entity.originLabel = trip.tollRoute.originLabel;
-    entity.destinationLabel = trip.tollRoute.destinationLabel;
+    entity.tollRouteId = trip.tollRoute?.id ?? null;
+    entity.tollRouteName = trip.tollRoute?.name ?? null;
+    entity.originLabel = trip.tollRoute?.originLabel ?? trip.currentRoutePlan?.originLabel ?? null;
+    entity.destinationLabel =
+      trip.tollRoute?.destinationLabel ?? trip.currentRoutePlan?.destinationLabel ?? null;
     entity.stops = result.stops;
     entity.unplannedTransactions = result.unplannedTransactions;
     entity.expectedStopsCount = result.expectedStopsCount;
@@ -182,22 +200,51 @@ export class TollReconciliationService {
   ): TollReconciliationResult {
     const axleCount = trip.composition?.axleConfiguration?.totalAxles ?? null;
     return computeTollReconciliation(
-      (trip.tollRoute?.stops ?? []).map((stop) => ({
-        sequence: stop.sequence,
-        tollPlazaId: stop.tollPlaza.id,
-        tollPlazaName: stop.tollPlaza.name,
-        highway: stop.tollPlaza.highway,
-        pricePerAxle: toNumberOrNull(stop.tollPlaza.pricePerAxle),
-      })),
+      this.buildRouteStopInputs(trip),
       transactions.map((tx) => ({
         id: tx.id,
         tollPlazaId: tx.tollPlazaId,
         tollPlazaName: tx.tollPlaza.name,
         chargedAmount: toNumberOrNull(tx.chargedAmount) ?? 0,
         chargedAt: tx.chargedAt,
+        axleCount: tx.axleCount,
       })),
       axleCount,
     );
+  }
+
+  // Fase 26 -- tollRoute (Fase 23, corredor manual) continua com prioridade
+  // absoluta quando presente (zero mudanca de comportamento para viagens
+  // que ja usam TollRoute). So cai para RoutePlan.tolls (rota geografica
+  // calculada, ver RoutingService) quando NAO ha tollRoute vinculado --
+  // "ou ambas" da Fase 26 significa que tollRoute nunca e substituido por
+  // engano. Pracas descobertas sem correspondencia confiavel (tollPlazaId
+  // nulo) sao ignoradas aqui -- nao existe ainda uma TollPlaza real para
+  // conciliar contra transacoes por identidade de praca.
+  private buildRouteStopInputs(trip: ReconciliationTrip): ReconciliationRouteStopInput[] {
+    if (trip.tollRoute) {
+      return trip.tollRoute.stops.map((stop) => ({
+        sequence: stop.sequence,
+        tollPlazaId: stop.tollPlaza.id,
+        tollPlazaName: stop.tollPlaza.name,
+        highway: stop.tollPlaza.highway,
+        pricePerAxle: toNumberOrNull(stop.tollPlaza.pricePerAxle),
+      }));
+    }
+
+    if (trip.currentRoutePlan) {
+      return trip.currentRoutePlan.tolls
+        .filter((toll) => toll.tollPlazaId !== null && toll.tollPlaza !== null)
+        .map((toll) => ({
+          sequence: toll.sequence,
+          tollPlazaId: toll.tollPlazaId as string,
+          tollPlazaName: toll.name,
+          highway: toll.tollPlaza?.highway ?? null,
+          pricePerAxle: toNumberOrNull(toll.tollPlaza?.pricePerAxle),
+        }));
+    }
+
+    return [];
   }
 }
 

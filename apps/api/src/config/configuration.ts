@@ -24,6 +24,20 @@ export interface AppConfig {
     storageDir: string;
     maxFileSizeMb: number;
   };
+  routing: {
+    // Nunca logar/expor esta chave (nem para o frontend, nem em erro) -- ver
+    // GoogleRoutingProvider. Ausente = feature desabilitada (ver
+    // NotConfiguredRoutingProvider), nunca um erro de boot: rotas de
+    // pedagio/rota geografica sao um adicional sobre o TMS, nao um
+    // requisito para o resto do sistema funcionar.
+    googleRoutesApiKey: string | undefined;
+    // Raio (metros) de tolerancia para casar uma praca descoberta na rota
+    // com uma TollPlaza do catalogo (Fase 26) -- parametro tecnico/geometrico
+    // (nao uma politica de negocio por tenant), por isso fica aqui e nao em
+    // TenantSettings.
+    tollMatchRadiusMeters: number;
+    requestTimeoutMs: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -47,5 +61,10 @@ export default (): AppConfig => ({
   tollImport: {
     storageDir: process.env.TOLL_IMPORT_STORAGE_DIR ?? './storage/toll-imports',
     maxFileSizeMb: parseInt(process.env.TOLL_IMPORT_MAX_FILE_SIZE_MB ?? '10', 10),
+  },
+  routing: {
+    googleRoutesApiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,
+    tollMatchRadiusMeters: parseInt(process.env.ROUTING_TOLL_MATCH_RADIUS_METERS ?? '300', 10),
+    requestTimeoutMs: parseInt(process.env.ROUTING_REQUEST_TIMEOUT_MS ?? '8000', 10),
   },
 });

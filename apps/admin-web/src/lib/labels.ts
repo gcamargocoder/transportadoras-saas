@@ -2,6 +2,7 @@
 // selects de filtro, formularios). Mantido centralizado para nao duplicar
 // strings por tela.
 import {
+  AxleEventSource,
   DocumentType,
   ExpenseCategory,
   ExpensePaymentMethod,
@@ -12,13 +13,17 @@ import {
   LocationType,
   PaymentType,
   RevenueCategory,
+  RouteTollEstimateSource,
   SettlementStatus,
+  SyncStatus,
   TireLocationType,
   TireStatus,
+  TollMatchStatus,
   TollTransactionStatus,
   TrailerType,
   TripPriority,
   TripStatus,
+  TripStopType,
   UserRole,
   VehicleFuelType,
   VehicleMaintenancePriority,
@@ -46,6 +51,37 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
   PAUSED: 'Pausada',
   COMPLETED: 'Concluída',
   CANCELLED: 'Cancelada',
+};
+
+export const TRIP_STOP_TYPE_LABELS: Record<TripStopType, string> = {
+  UNKNOWN: 'Não classificada',
+  FUEL: 'Abastecimento',
+  REST: 'Descanso',
+  MEAL: 'Refeição',
+  MAINTENANCE: 'Manutenção',
+  OTHER: 'Outro',
+};
+
+export const AXLE_EVENT_SOURCE_LABELS: Record<AxleEventSource, string> = {
+  DRIVER_INPUT: 'Informado pelo motorista',
+  TIMEOUT_DEFAULT: 'Padrão (sem resposta)',
+};
+
+export const SYNC_STATUS_LABELS: Record<SyncStatus, string> = {
+  PENDING: 'Pendente',
+  SYNCED: 'Sincronizado',
+  FAILED: 'Falha',
+};
+
+export const ROUTE_TOLL_ESTIMATE_SOURCE_LABELS: Record<RouteTollEstimateSource, string> = {
+  MATCHED_PLAZAS: 'Praças identificadas',
+  PROVIDER_AGGREGATE: 'Estimativa do provedor',
+  NONE: 'Sem estimativa',
+};
+
+export const TOLL_MATCH_STATUS_LABELS: Record<TollMatchStatus, string> = {
+  MATCHED: 'Identificada',
+  UNMATCHED: 'Não identificada',
 };
 
 export const TRIP_PRIORITY_LABELS: Record<TripPriority, string> = {

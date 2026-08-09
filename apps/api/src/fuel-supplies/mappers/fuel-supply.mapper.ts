@@ -5,7 +5,7 @@ import { FuelSupplyEntity } from '../entities/fuel-supply.entity';
 export type FuelSupplyWithRelations = FuelSupply & {
   vehicle: Vehicle;
   driver: Driver;
-  fuelStation: FuelStation;
+  fuelStation: FuelStation | null;
   creator: UserAccount;
   updater: UserAccount | null;
 };
@@ -20,7 +20,7 @@ export function toFuelSupplyEntity(supply: FuelSupplyWithRelations): FuelSupplyE
   entity.driverName = supply.driver.name;
   entity.tripId = supply.tripId;
   entity.fuelStationId = supply.fuelStationId;
-  entity.fuelStationName = supply.fuelStation.name;
+  entity.fuelStationName = supply.fuelStation?.name ?? null;
   entity.attachmentId = supply.attachmentId;
   entity.fuelType = supply.fuelType;
   entity.liters = toNumberOrNull(supply.liters) ?? 0;
@@ -31,6 +31,9 @@ export function toFuelSupplyEntity(supply: FuelSupplyWithRelations): FuelSupplyE
   entity.paymentType = supply.paymentType;
   entity.invoiceNumber = supply.invoiceNumber;
   entity.notes = supply.notes;
+  entity.latitude = toNumberOrNull(supply.latitude);
+  entity.longitude = toNumberOrNull(supply.longitude);
+  entity.syncStatus = supply.syncStatus;
   entity.createdBy = supply.createdBy;
   entity.creatorName = supply.creator.name;
   entity.updatedBy = supply.updatedBy;
