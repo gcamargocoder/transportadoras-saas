@@ -25,6 +25,7 @@ import type {
   TollTransactionSource,
   TollTransactionStatus,
   TrailerType,
+  TripLoadStatus,
   TripPriority,
   TripStatus,
   TripStopType,
@@ -278,6 +279,10 @@ export interface TripEntity {
   plannedArrival: string | null;
   actualDeparture: string | null;
   actualArrival: string | null;
+  loadStatus: TripLoadStatus | null;
+  initialOdometerKm: number | null;
+  currentOdometerKm: number | null;
+  defaultAxles: number | null;
   createdAt: string;
   updatedAt: string;
 }

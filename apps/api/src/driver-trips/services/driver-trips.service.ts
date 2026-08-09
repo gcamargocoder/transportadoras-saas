@@ -2,8 +2,10 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { TripStatus } from '@prisma/client';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
+import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { haversineDistanceMeters } from '../../common/utils/geo.util';
+import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TrackingPointsService } from '../../trip-operations/services/tracking-points.service';
 import { TripEntity } from '../../trips/entities/trip.entity';
@@ -12,6 +14,7 @@ import { TripsService } from '../../trips/services/trips.service';
 import { DriverActiveTripEntity } from '../entities/driver-active-trip.entity';
 import { DriverConfigEntity } from '../entities/driver-config.entity';
 import { NearbyTollPlazaEntity } from '../entities/nearby-toll-plaza.entity';
+import { StartTripDto } from '../dto/start-trip.dto';
 
 // Estados que ainda precisam da atencao do motorista (Fase 25, secao 2):
 // alem de ACTIVE/PAUSED (retomada), inclui os estados anteriores ao inicio
@@ -70,14 +73,21 @@ export class DriverTripsService {
 
   // PLANNED/WAITING_DRIVER/WAITING_DEPARTURE -> IN_PROGRESS. Idempotente: se
   // ja estiver IN_PROGRESS, nao ha erro (evita 409 por duplo toque no app).
+  // KM/carga (Fase 27) so sao aplicados na largada de verdade -- um segundo
+  // toque em "iniciar" com a viagem ja ACTIVE nunca sobrescreve o que ja foi
+  // registrado.
   async start(
     tenantId: string,
     driverId: string,
     tripId: string,
+    dto: StartTripDto,
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<TripEntity> {
     const trip = await this.assertOwnedByDriver(tenantId, driverId, tripId);
+    if (trip.status !== TripStatus.IN_PROGRESS) {
+      await this.applyStartDetails(trip, dto);
+    }
     if (trip.status === TripStatus.IN_PROGRESS) {
       return this.tripsService.findOne(tenantId, tripId);
     }
@@ -88,6 +98,38 @@ export class DriverTripsService {
       actor,
       metadata,
     );
+  }
+
+  // Grava loadStatus/initialOdometerKm na Trip (tela "INICIAR VIAGEM", Fase
+  // 27, secao 2) e, quando informado, atualiza Vehicle.odometerKm se o valor
+  // for maior que o atual -- mesma regra ja aplicada a abastecimentos
+  // (common/utils/odometer.util.ts), nunca duplicada aqui.
+  // initialOdometerKm NUNCA e sobrescrito depois de ja gravado (primeira
+  // largada registrada vale para o historico da viagem toda).
+  private async applyStartDetails(trip: TripWithRelations, dto: StartTripDto): Promise<void> {
+    if (dto.odometerKm === undefined && dto.loadStatus === undefined) {
+      return;
+    }
+
+    const vehicle = trip.composition?.vehicle ?? null;
+    if (dto.odometerKm !== undefined && vehicle) {
+      assertOdometerNotBelowVehicle(toNumberOrNull(vehicle.odometerKm), dto.odometerKm);
+    }
+
+    await this.prisma.trip.update({
+      where: { id: trip.id },
+      data: compact({
+        loadStatus: dto.loadStatus,
+        initialOdometerKm: trip.initialOdometerKm === null ? dto.odometerKm : undefined,
+      }),
+    });
+
+    if (dto.odometerKm !== undefined && vehicle) {
+      const bumped = computeBumpedOdometer(toNumberOrNull(vehicle.odometerKm), dto.odometerKm);
+      if (bumped !== null) {
+        await this.prisma.vehicle.update({ where: { id: vehicle.id }, data: { odometerKm: bumped } });
+      }
+    }
   }
 
   async pause(

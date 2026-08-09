@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { TripPriority, TripStatus } from '@prisma/client';
+import { TripLoadStatus, TripPriority, TripStatus } from '@prisma/client';
 
 export class TripEntity {
   @ApiProperty({ format: 'uuid' })
@@ -64,6 +64,31 @@ export class TripEntity {
 
   @ApiProperty({ nullable: true })
   actualArrival!: Date | null;
+
+  @ApiProperty({
+    enum: TripLoadStatus,
+    nullable: true,
+    description: 'Carregado ou vazio, informado pelo motorista na largada (Fase 27).',
+  })
+  loadStatus!: TripLoadStatus | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Odometro (KM) do veiculo no momento da largada, informado pelo motorista.',
+  })
+  initialOdometerKm!: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Ultima leitura conhecida do odometro do veiculo (Vehicle.odometerKm).',
+  })
+  currentOdometerKm!: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Quantidade normal de eixos da composicao vinculada (AxleConfiguration.totalAxles).',
+  })
+  defaultAxles!: number | null;
 
   @ApiProperty()
   createdAt!: Date;

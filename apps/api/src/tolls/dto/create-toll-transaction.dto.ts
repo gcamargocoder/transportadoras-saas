@@ -16,10 +16,20 @@ export class CreateTollTransactionDto {
   @IsUUID('4', { message: 'tollPlazaId deve ser um UUID valido.' })
   tollPlazaId!: string;
 
-  @ApiProperty({ example: 6, description: 'Quantidade de eixos considerada na cobranca.' })
+  // Opcional (Fase 27): quando omitido, o service resolve automaticamente a
+  // partir do AxleEvent mais recente da viagem naquela praca (excecao
+  // declarada pelo motorista) ou, na ausencia de um, do padrao da composicao
+  // (AxleConfiguration.totalAxles) -- nunca inventa um numero.
+  @ApiPropertyOptional({
+    example: 6,
+    description:
+      'Quantidade de eixos considerada na cobranca. Se omitido, resolvido automaticamente ' +
+      '(AxleEvent da viagem/praca, senao o padrao da composicao).',
+  })
+  @IsOptional()
   @IsInt()
   @Min(1, { message: 'axleCount deve ser no minimo 1.' })
-  axleCount!: number;
+  axleCount?: number;
 
   @ApiProperty({ example: 75.0, description: 'Valor efetivamente cobrado.' })
   @IsNumber({ maxDecimalPlaces: 2 })

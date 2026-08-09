@@ -26,6 +26,7 @@ type PendingAction =
       deviceEventId: string;
       odometerKm: number;
       liters: number;
+      pricePerLiter?: number;
       latitude?: number;
       longitude?: number;
     }
@@ -74,7 +75,11 @@ async function runAction(action: PendingAction): Promise<void> {
         deviceEventId: action.deviceEventId,
         odometerKm: action.odometerKm,
         liters: action.liters,
-        ...compact({ latitude: action.latitude, longitude: action.longitude }),
+        ...compact({
+          pricePerLiter: action.pricePerLiter,
+          latitude: action.latitude,
+          longitude: action.longitude,
+        }),
       });
       return;
     case 'axle-event-open':

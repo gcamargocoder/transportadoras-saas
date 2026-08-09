@@ -1,4 +1,5 @@
 import {
+  AxleConfiguration,
   Customer,
   Driver,
   Location,
@@ -7,6 +8,7 @@ import {
   TripComposition,
   Vehicle,
 } from '@prisma/client';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { TripEntity } from '../entities/trip.entity';
 
 export type TripWithRelations = Trip & {
@@ -14,7 +16,9 @@ export type TripWithRelations = Trip & {
   driver: Driver | null;
   origin: Location;
   destination: Location;
-  composition: (TripComposition & { vehicle: Vehicle }) | null;
+  composition:
+    | (TripComposition & { vehicle: Vehicle; axleConfiguration: AxleConfiguration | null })
+    | null;
   tollRoute: TollRoute | null;
 };
 
@@ -41,6 +45,10 @@ export function toTripEntity(trip: TripWithRelations): TripEntity {
   entity.plannedArrival = trip.plannedArrival;
   entity.actualDeparture = trip.actualDeparture;
   entity.actualArrival = trip.actualArrival;
+  entity.loadStatus = trip.loadStatus;
+  entity.initialOdometerKm = toNumberOrNull(trip.initialOdometerKm);
+  entity.currentOdometerKm = toNumberOrNull(trip.composition?.vehicle.odometerKm ?? null);
+  entity.defaultAxles = trip.composition?.axleConfiguration?.totalAxles ?? null;
   entity.createdAt = trip.createdAt;
   entity.updatedAt = trip.updatedAt;
   return entity;

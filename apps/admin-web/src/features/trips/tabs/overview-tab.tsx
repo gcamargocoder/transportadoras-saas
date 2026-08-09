@@ -18,7 +18,7 @@ import {
 import { listTollRoutes } from '../../../lib/api/toll-routes.api';
 import { TRIP_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { TRIP_STATUS_OPTIONS } from '../status';
-import { TRIP_STATUS_LABELS } from '../../../lib/labels';
+import { TRIP_LOAD_STATUS_LABELS, TRIP_STATUS_LABELS } from '../../../lib/labels';
 import type { TripEntity } from '../../../types/entities';
 import { TripStatus } from '../../../types/enums';
 import { formatCurrency, formatDateTime, formatNumber } from '../../../utils/format';
@@ -95,6 +95,22 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
             <Field label="Chegada prevista" value={formatDateTime(trip.plannedArrival)} />
             <Field label="Saída real" value={formatDateTime(trip.actualDeparture)} />
             <Field label="Chegada real" value={formatDateTime(trip.actualArrival)} />
+            <Field
+              label="Carga"
+              value={trip.loadStatus ? TRIP_LOAD_STATUS_LABELS[trip.loadStatus] : '-'}
+            />
+            <Field
+              label="KM inicial"
+              value={trip.initialOdometerKm !== null ? `${formatNumber(trip.initialOdometerKm)} km` : '-'}
+            />
+            <Field
+              label="KM atual"
+              value={trip.currentOdometerKm !== null ? `${formatNumber(trip.currentOdometerKm)} km` : '-'}
+            />
+            <Field
+              label="Eixos padrão"
+              value={trip.defaultAxles !== null ? String(trip.defaultAxles) : '-'}
+            />
           </div>
 
           <div className="mt-4">

@@ -17,6 +17,7 @@ import {
   computeConsumptionTotals,
   computeTotalAmount,
 } from '../../common/utils/fuel-consumption.util';
+import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateDriverFuelSupplyDto } from '../dto/create-driver-fuel-supply.dto';
@@ -524,12 +525,7 @@ export class FuelSuppliesService {
 
   // "odometerKm nao pode ser menor que a quilometragem atual do veiculo."
   private assertOdometerNotBelowCurrent(vehicle: Vehicle, odometerKm: number): void {
-    const current = toNumberOrNull(vehicle.odometerKm);
-    if (current !== null && odometerKm < current) {
-      throw new ConflictException(
-        `odometerKm (${odometerKm}) nao pode ser menor que a quilometragem atual do veiculo (${current} km).`,
-      );
-    }
+    assertOdometerNotBelowVehicle(toNumberOrNull(vehicle.odometerKm), odometerKm);
   }
 
   // "Ao salvar abastecimento, atualizar automaticamente Vehicle.odometerKm
@@ -539,9 +535,9 @@ export class FuelSuppliesService {
     odometerKm: number,
     currentOdometerKm: Prisma.Decimal | null,
   ): Promise<void> {
-    const current = toNumberOrNull(currentOdometerKm);
-    if (current === null || odometerKm > current) {
-      await this.prisma.vehicle.update({ where: { id: vehicleId }, data: { odometerKm } });
+    const bumped = computeBumpedOdometer(toNumberOrNull(currentOdometerKm), odometerKm);
+    if (bumped !== null) {
+      await this.prisma.vehicle.update({ where: { id: vehicleId }, data: { odometerKm: bumped } });
     }
   }
 

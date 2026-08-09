@@ -24,6 +24,7 @@ import {
   DIVERGENCE_TOLERANCE,
   TollAuditVerdict,
 } from '../utils/toll-calculation.util';
+import { resolveAxleCount } from '../utils/axle-count-resolution.util';
 
 const TRANSACTION_INCLUDE = {
   vehicle: true,
@@ -74,7 +75,7 @@ export class TollTransactionsService {
   ): Promise<TollTransactionEntity> {
     const trip = await this.prisma.trip.findFirst({
       where: { id: dto.tripId, tenantId, deletedAt: null },
-      include: { composition: true },
+      include: { composition: { include: { axleConfiguration: true } } },
     });
     if (!trip) {
       throw new NotFoundException('Viagem (tripId) nao encontrada nesta empresa.');
@@ -90,8 +91,9 @@ export class TollTransactionsService {
     }
 
     const tagProviderId = await this.assertVehicleHasValidTag(tenantId, vehicleId);
+    const axleCount = await this.resolveAxleCountForCreate(tenantId, dto, trip.composition);
 
-    const expectedAmount = computeExpectedAmount(tollPlaza.pricePerAxle, dto.axleCount);
+    const expectedAmount = computeExpectedAmount(tollPlaza.pricePerAxle, axleCount);
     const discrepancyAmount = computeDiscrepancy(dto.chargedAmount, expectedAmount);
     const status = classifyTollTransaction(dto.chargedAmount, discrepancyAmount);
 
@@ -103,7 +105,7 @@ export class TollTransactionsService {
         driverId: trip.driverId,
         tollPlazaId: dto.tollPlazaId,
         tagProviderId,
-        axleCount: dto.axleCount,
+        axleCount,
         expectedAmount,
         chargedAmount: dto.chargedAmount,
         discrepancyAmount,
@@ -439,6 +441,28 @@ export class TollTransactionsService {
       throw new ConflictException('Tag vencida.');
     }
     throw new ConflictException('Tag inativa.');
+  }
+
+  // Fase 27 (secoes 11-13): quando axleCount nao vem no DTO, busca o
+  // AxleEvent mais recente desta viagem NESTA praca (excecao declarada pelo
+  // motorista, ex: 9->7) antes de cair no padrao da composicao. Nunca altera
+  // AxleConfiguration -- so LE o padrao para resolver o valor da transacao.
+  private async resolveAxleCountForCreate(
+    tenantId: string,
+    dto: CreateTollTransactionDto,
+    composition: { axleConfiguration: { totalAxles: number } | null } | null,
+  ): Promise<number> {
+    if (dto.axleCount !== undefined) {
+      return dto.axleCount;
+    }
+    const matchingEvent = await this.prisma.axleEvent.findFirst({
+      where: { tenantId, tripId: dto.tripId, tollPlazaId: dto.tollPlazaId },
+      orderBy: { startedAt: 'desc' },
+    });
+    return resolveAxleCount({
+      matchingAxleEventDeclaredAxles: matchingEvent?.declaredAxles ?? null,
+      defaultAxles: composition?.axleConfiguration?.totalAxles ?? null,
+    });
   }
 
   private compactIds(ids: (string | null)[]): string[] {

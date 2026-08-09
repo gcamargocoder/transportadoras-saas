@@ -33,7 +33,7 @@ const TRIP_INCLUDE = {
   driver: true,
   origin: true,
   destination: true,
-  composition: { include: { vehicle: true } },
+  composition: { include: { vehicle: true, axleConfiguration: true } },
   tollRoute: true,
 } satisfies Prisma.TripInclude;
 

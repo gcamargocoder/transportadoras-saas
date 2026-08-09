@@ -11,6 +11,7 @@ import {
   RouteComparison,
   TrackingPointInput,
   TrackingPointsSyncResult,
+  TripLoadStatus,
   TripStop,
   TripStopType,
 } from './driverTrips.types';
@@ -27,8 +28,17 @@ export function getTrip(tripId: string): Promise<DriverTrip> {
   return apiRequest<DriverTrip>(`/driver/trips/${tripId}`);
 }
 
-export function startTrip(tripId: string): Promise<DriverTrip> {
-  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/start`, { method: 'POST' });
+// Fase 27 -- tela "INICIAR VIAGEM": KM/carga sao opcionais no contrato HTTP
+// (compatibilidade com chamadas antigas sem corpo), mas a tela sempre envia
+// os dois quando o motorista preenche o formulario de largada.
+export function startTrip(
+  tripId: string,
+  input?: { odometerKm?: number; loadStatus?: TripLoadStatus },
+): Promise<DriverTrip> {
+  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/start`, {
+    method: 'POST',
+    body: input ?? {},
+  });
 }
 
 export function pauseTrip(tripId: string): Promise<DriverTrip> {
@@ -91,6 +101,7 @@ export function createFuelSupply(
     deviceEventId: string;
     odometerKm: number;
     liters: number;
+    pricePerLiter?: number;
     latitude?: number;
     longitude?: number;
   },

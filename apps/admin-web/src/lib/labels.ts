@@ -21,6 +21,7 @@ import {
   TollMatchStatus,
   TollTransactionStatus,
   TrailerType,
+  TripLoadStatus,
   TripPriority,
   TripStatus,
   TripStopType,
@@ -51,6 +52,11 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
   PAUSED: 'Pausada',
   COMPLETED: 'Concluída',
   CANCELLED: 'Cancelada',
+};
+
+export const TRIP_LOAD_STATUS_LABELS: Record<TripLoadStatus, string> = {
+  LOADED: 'Carregado',
+  EMPTY: 'Vazio',
 };
 
 export const TRIP_STOP_TYPE_LABELS: Record<TripStopType, string> = {

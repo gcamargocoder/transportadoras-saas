@@ -224,8 +224,7 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
             <Text style={{ color: colors.textMuted }}>Veiculo: {activeTrip.vehiclePlate ?? '-'}</Text>
             <Button
               label="INICIAR VIAGEM"
-              loading={busy}
-              onPress={() => withBusy(() => driverTripsApi.startTrip(activeTrip.id).then(() => undefined))}
+              onPress={() => navigation.navigate('StartTrip', { tripId: activeTrip.id })}
             />
           </Card>
         )}

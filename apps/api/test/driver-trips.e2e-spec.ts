@@ -369,6 +369,88 @@ describe('Driver Trips (e2e)', () => {
   });
 
   // ==========================================================================
+  // Fase 27 -- tela "INICIAR VIAGEM" (KM/carga na largada)
+  // ==========================================================================
+  describe('inicio de viagem (Fase 27)', () => {
+    it('start com KM e carga grava Trip.initialOdometerKm/loadStatus e atualiza Vehicle.odometerKm', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Start1');
+      const { driverAuth, tripId, vehicleId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const startRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 152340.5, loadStatus: 'LOADED' })
+        .expect(201);
+
+      expect(startRes.body.data.status).toBe('IN_PROGRESS');
+      expect(startRes.body.data.initialOdometerKm).toBe(152340.5);
+      expect(startRes.body.data.currentOdometerKm).toBe(152340.5);
+      expect(startRes.body.data.loadStatus).toBe('LOADED');
+      expect(startRes.body.data.defaultAxles).toBe(9);
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(152340.5);
+    });
+
+    it('start sem corpo continua funcionando (compatibilidade retroativa)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Start2');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const startRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      expect(startRes.body.data.status).toBe('IN_PROGRESS');
+      expect(startRes.body.data.initialOdometerKm).toBeNull();
+      expect(startRes.body.data.loadStatus).toBeNull();
+    });
+
+    it('um segundo "start" (idempotente, ja ACTIVE) nunca sobrescreve o initialOdometerKm ja gravado', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Start3');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'EMPTY' })
+        .expect(201);
+
+      // Segundo toque (app reaberto), com um KM diferente -- nao deve alterar
+      // o que ja foi registrado na largada real.
+      const secondRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 999999, loadStatus: 'LOADED' })
+        .expect(201);
+
+      expect(secondRes.body.data.initialOdometerKm).toBe(100000);
+      expect(secondRes.body.data.loadStatus).toBe('EMPTY');
+    });
+
+    it('abastecimento inicial pode ser registrado ANTES do start (viagem ainda PLANNED)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Start4');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/fuel-supplies`)
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), odometerKm: 100000, liters: 300, pricePerLiter: 6 })
+        .expect(201);
+      expect(res.body.data.tripId).toBe(tripId);
+
+      const tripBefore = await prisma.trip.findUnique({ where: { id: tripId } });
+      expect(tripBefore?.status).toBe('PLANNED');
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+    });
+  });
+
+  // ==========================================================================
   // 7: localizacao GPS (lote, idempotente por deviceEventId)
   // ==========================================================================
   describe('localizacao', () => {
@@ -663,6 +745,73 @@ describe('Driver Trips (e2e)', () => {
       expect(normalStop.axleCount).toBe(9);
       expect(normalStop.expectedAmount).toBe(135);
       expect(normalStop.verdict).toBe('CORRECT');
+    });
+
+    it('TollTransaction sem axleCount resolve automaticamente para o declaredAxles do AxleEvent da praca (Fase 27)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Axle4');
+      const plazaId = await createTollPlaza(adminAuth);
+      const routeId = await createRoute(adminAuth, [plazaId]);
+      const { driverAuth, tripId, vehicleId } = await setupDriverWithTrip(adminAuth, tenantId, {
+        totalAxles: 9,
+        tollRouteId: routeId,
+      });
+      await createVehicleTag(adminAuth, vehicleId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/axle-events`)
+        .set('Authorization', driverAuth)
+        .send({
+          deviceEventId: randomUUID(),
+          tollPlazaId: plazaId,
+          declaredAxles: 7,
+          source: 'DRIVER_INPUT',
+          latitude: -23.55,
+          longitude: -46.63,
+        })
+        .expect(201);
+
+      // axleCount OMITIDO -- deve resolver para 7 (declaredAxles do AxleEvent).
+      const txRes = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', adminAuth)
+        .send({ tripId, tollPlazaId: plazaId, chargedAmount: 105, chargedAt: '2026-09-01T13:00:00.000Z' })
+        .expect(201);
+      expect(txRes.body.data.axleCount).toBe(7);
+      expect(txRes.body.data.expectedAmount).toBe(105);
+
+      // AxleConfiguration (padrao permanente) nunca e alterada por isso.
+      const axleConfig = await prisma.axleConfiguration.findFirst({
+        where: { tripComposition: { tripId } },
+      });
+      expect(axleConfig?.totalAxles).toBe(9);
+    });
+
+    it('TollTransaction sem axleCount e sem AxleEvent resolve para o padrao da composicao (9)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Axle5');
+      const plazaId = await createTollPlaza(adminAuth);
+      const routeId = await createRoute(adminAuth, [plazaId]);
+      const { driverAuth, tripId, vehicleId } = await setupDriverWithTrip(adminAuth, tenantId, {
+        totalAxles: 9,
+        tollRouteId: routeId,
+      });
+      await createVehicleTag(adminAuth, vehicleId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      // Nenhum AxleEvent registrado nesta praca -- deve cair no padrao (9).
+      const txRes = await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', adminAuth)
+        .send({ tripId, tollPlazaId: plazaId, chargedAmount: 135, chargedAt: '2026-09-01T13:00:00.000Z' })
+        .expect(201);
+      expect(txRes.body.data.axleCount).toBe(9);
+      expect(txRes.body.data.expectedAmount).toBe(135);
     });
   });
 

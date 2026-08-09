@@ -12,6 +12,7 @@ export type TripStatus =
 export type TripStopType = 'UNKNOWN' | 'FUEL' | 'REST' | 'MEAL' | 'MAINTENANCE' | 'OTHER';
 export type AxleEventSource = 'DRIVER_INPUT' | 'TIMEOUT_DEFAULT';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
+export type TripLoadStatus = 'LOADED' | 'EMPTY';
 
 export interface LastLocation {
   latitude: number;
@@ -36,6 +37,10 @@ export interface DriverTrip {
   status: TripStatus;
   plannedDeparture: string | null;
   plannedArrival: string | null;
+  loadStatus: TripLoadStatus | null;
+  initialOdometerKm: number | null;
+  currentOdometerKm: number | null;
+  defaultAxles: number | null;
 }
 
 export interface DriverConfig {

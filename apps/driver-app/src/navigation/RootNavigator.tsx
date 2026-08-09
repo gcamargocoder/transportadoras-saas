@@ -7,6 +7,7 @@ import { TripProvider } from '../trip/TripContext';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
+import { StartTripScreen } from '../screens/StartTripScreen';
 import { StopsScreen } from '../screens/StopsScreen';
 import { TollScreen } from '../screens/TollScreen';
 import { colors } from '../theme/colors';
@@ -45,6 +46,11 @@ export function RootNavigator(): React.JSX.Element {
         <TripProvider>
           <Stack.Navigator screenOptions={{ headerShown: false }}>
             <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen
+              name="StartTrip"
+              component={StartTripScreen}
+              options={{ headerShown: true, title: 'Iniciar viagem' }}
+            />
             <Stack.Screen
               name="Fuel"
               component={FuelScreen}

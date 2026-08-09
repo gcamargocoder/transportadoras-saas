@@ -32,6 +32,7 @@ import { TripEntity } from '../../trips/entities/trip.entity';
 import { DRIVER_TRIP_ROLES } from '../constants/driver-trip-roles.constants';
 import { DriverContext } from '../context/driver-context';
 import { NearbyTollPlazasQueryDto } from '../dto/nearby-toll-plazas-query.dto';
+import { StartTripDto } from '../dto/start-trip.dto';
 import { DriverActiveTripEntity } from '../entities/driver-active-trip.entity';
 import { DriverConfigEntity } from '../entities/driver-config.entity';
 import { NearbyTollPlazaEntity } from '../entities/nearby-toll-plaza.entity';
@@ -92,13 +93,21 @@ export class DriverTripsController {
   }
 
   @Post('trips/:id/start')
-  @ApiOperation({ summary: 'Inicia a viagem (idempotente se ja estiver em andamento).' })
+  @ApiOperation({
+    summary:
+      'Inicia a viagem (idempotente se ja estiver em andamento). Aceita opcionalmente KM ' +
+      'inicial e carregado/vazio (Fase 27, tela "INICIAR VIAGEM").',
+  })
   @ApiOkResponse({ type: TripEntity })
-  start(@Param('id', ParseUUIDPipe) id: string): Promise<TripEntity> {
+  start(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: StartTripDto,
+  ): Promise<TripEntity> {
     return this.driverTripsService.start(
       this.tenantContext.requireTenantId(),
       this.driverContext.requireDriverId(),
       id,
+      dto ?? {},
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );

@@ -146,6 +146,13 @@ export const TripPriority = {
 } as const;
 export type TripPriority = (typeof TripPriority)[keyof typeof TripPriority];
 
+// Fase 27 -- carregado/vazio, informado pelo motorista na largada.
+export const TripLoadStatus = {
+  LOADED: 'LOADED',
+  EMPTY: 'EMPTY',
+} as const;
+export type TripLoadStatus = (typeof TripLoadStatus)[keyof typeof TripLoadStatus];
+
 export const RouteEventType = {
   DEVIATION: 'DEVIATION',
   ACCIDENT: 'ACCIDENT',
