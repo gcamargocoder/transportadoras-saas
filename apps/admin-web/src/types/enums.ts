@@ -153,6 +153,26 @@ export const TripLoadStatus = {
 } as const;
 export type TripLoadStatus = (typeof TripLoadStatus)[keyof typeof TripLoadStatus];
 
+// Fase 29 -- Alert passa a ter leitura no admin-web (painel de
+// monitoramento); os dois enums espelham AlertType/AlertSeverity do backend.
+export const AlertType = {
+  ROUTE_DEVIATION: 'ROUTE_DEVIATION',
+  TOLL_DISCREPANCY: 'TOLL_DISCREPANCY',
+  DELAY: 'DELAY',
+  ROUTE_EVENT: 'ROUTE_EVENT',
+  DOCUMENT_EXPIRING: 'DOCUMENT_EXPIRING',
+  OTHER: 'OTHER',
+} as const;
+export type AlertType = (typeof AlertType)[keyof typeof AlertType];
+
+export const AlertSeverity = {
+  LOW: 'LOW',
+  MEDIUM: 'MEDIUM',
+  HIGH: 'HIGH',
+  CRITICAL: 'CRITICAL',
+} as const;
+export type AlertSeverity = (typeof AlertSeverity)[keyof typeof AlertSeverity];
+
 export const RouteEventType = {
   DEVIATION: 'DEVIATION',
   ACCIDENT: 'ACCIDENT',

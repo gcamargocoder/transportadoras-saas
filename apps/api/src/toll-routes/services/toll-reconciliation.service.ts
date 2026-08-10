@@ -124,6 +124,48 @@ export class TollReconciliationService {
     return dashboard;
   }
 
+  // Fase 29 -- versao em lote de getReconciliation(), para o painel de
+  // monitoramento operacional (GET /trips/operations/active): 2 consultas no
+  // total (viagens + transacoes), nunca uma por viagem. Reaproveita
+  // exatamente o mesmo computeResult()/computeTollReconciliation() usado em
+  // getReconciliation()/getDashboard() -- nenhuma formula nova.
+  async getSummaries(
+    tenantId: string,
+    tripIds: string[],
+  ): Promise<Map<string, TollReconciliationResult>> {
+    const summaries = new Map<string, TollReconciliationResult>();
+    if (tripIds.length === 0) {
+      return summaries;
+    }
+
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, id: { in: tripIds }, deletedAt: null },
+      include: RECONCILIATION_TRIP_INCLUDE,
+    });
+    if (trips.length === 0) {
+      return summaries;
+    }
+
+    const transactions = await this.prisma.tollTransaction.findMany({
+      where: { tenantId, tripId: { in: trips.map((trip) => trip.id) } },
+      include: { tollPlaza: true },
+    });
+    const transactionsByTrip = new Map<string, TransactionWithPlaza[]>();
+    for (const tx of transactions) {
+      const list = transactionsByTrip.get(tx.tripId) ?? [];
+      list.push(tx);
+      transactionsByTrip.set(tx.tripId, list);
+    }
+
+    for (const trip of trips) {
+      if (!trip.tollRoute && !trip.currentRoutePlan) {
+        continue;
+      }
+      summaries.set(trip.id, this.computeResult(trip, transactionsByTrip.get(trip.id) ?? []));
+    }
+    return summaries;
+  }
+
   private toReconciliationEntity(
     trip: ReconciliationTrip,
     transactions: TransactionWithPlaza[],

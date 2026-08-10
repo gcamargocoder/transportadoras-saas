@@ -1,4 +1,5 @@
 import {
+  Activity,
   Building2,
   CircleDot,
   Container,
@@ -59,6 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Operação',
     items: [
+      { label: 'Monitoramento', href: '/operations', icon: Activity, roles: TRIP_READ_ROLES },
       { label: 'Viagens', href: '/trips', icon: Route, roles: TRIP_READ_ROLES },
       { label: 'Pedágios', href: '/tolls', icon: Ticket, roles: TOLL_READ_ROLES },
       { label: 'Rotas de pedágio', href: '/toll-routes', icon: Milestone, roles: TOLL_READ_ROLES },

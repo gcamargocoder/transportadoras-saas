@@ -133,7 +133,14 @@ export function useLocationTracker(
       }
       setStatus('granted');
 
-      subscriptionRef.current = await Location.watchPositionAsync(
+      // Fase 32, Parte A -- watchPositionAsync e assincrono; se o efeito for
+      // limpo (unmount/troca de tripId) ENQUANTO esta chamada ainda esta
+      // pendente, a cleanup ja rodou (cancelled=true) e nao vai rodar de novo
+      // para este subscription especifico. Sem este segundo check, a
+      // subscription resolvida tardiamente ficava "vazada" (nunca removida,
+      // ref sobrescrita). Confirmado por teste (useLocationTracker.test.ts,
+      // "condicao de corrida").
+      const subscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
           timeInterval: Math.max(config?.gpsPingIntervalSeconds ?? 30, 10) * 1000,
@@ -143,6 +150,11 @@ export function useLocationTracker(
           void handlePosition(position);
         },
       );
+      if (cancelled) {
+        subscription.remove();
+        return;
+      }
+      subscriptionRef.current = subscription;
     }
 
     void start();

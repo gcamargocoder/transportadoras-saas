@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { TripStatus } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { compact } from '../../common/utils/compact.util';
@@ -7,6 +8,7 @@ import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { haversineDistanceMeters } from '../../common/utils/geo.util';
 import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RoutingService } from '../../routing/services/routing.service';
 import { TrackingPointsService } from '../../trip-operations/services/tracking-points.service';
 import { TripEntity } from '../../trips/entities/trip.entity';
 import { TripWithRelations } from '../../trips/mappers/trip.mapper';
@@ -15,6 +17,9 @@ import { DriverActiveTripEntity } from '../entities/driver-active-trip.entity';
 import { DriverConfigEntity } from '../entities/driver-config.entity';
 import { NearbyTollPlazaEntity } from '../entities/nearby-toll-plaza.entity';
 import { StartTripDto } from '../dto/start-trip.dto';
+import { PauseTripDto } from '../dto/pause-trip.dto';
+import { ResumeTripDto } from '../dto/resume-trip.dto';
+import { CompleteTripDto } from '../dto/complete-trip.dto';
 
 // Estados que ainda precisam da atencao do motorista (Fase 25, secao 2):
 // alem de ACTIVE/PAUSED (retomada), inclui os estados anteriores ao inicio
@@ -36,6 +41,7 @@ export class DriverTripsService {
     private readonly prisma: PrismaService,
     private readonly tripsService: TripsService,
     private readonly trackingPointsService: TrackingPointsService,
+    private readonly routingService: RoutingService,
   ) {}
 
   // GET /driver/trips/active -- unica fonte de verdade ao abrir o app.
@@ -87,6 +93,7 @@ export class DriverTripsService {
     const trip = await this.assertOwnedByDriver(tenantId, driverId, tripId);
     if (trip.status !== TripStatus.IN_PROGRESS) {
       await this.applyStartDetails(trip, dto);
+      await this.autoComputeRoutePlan(tenantId, tripId, trip, actor, metadata);
     }
     if (trip.status === TripStatus.IN_PROGRESS) {
       return this.tripsService.findOne(tenantId, tripId);
@@ -132,10 +139,42 @@ export class DriverTripsService {
     }
   }
 
+  // Fase 30, secao 2 -- "apos iniciar: calcular rota automaticamente". So
+  // dispara quando a viagem ainda nao tem NENHUMA RoutePlan (nunca sobrescreve
+  // uma rota ja calculada manualmente pelo escritorio antes da largada,
+  // mesmo principio de "nunca sobrescrever o que ja foi decidido" do resto
+  // desta classe). Reaproveita RoutingService.computePrimary() (Fase 26) --
+  // nenhum calculo de rota novo. Best-effort: sem provider configurado (ou
+  // qualquer outra falha), a largada NUNCA e bloqueada -- o escritorio ou o
+  // motorista continuam podendo calcular a rota manualmente depois (RotaTab/
+  // botao "Recalcular rota").
+  private async autoComputeRoutePlan(
+    tenantId: string,
+    tripId: string,
+    trip: TripWithRelations,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<void> {
+    if (trip.routePlanId !== null) {
+      return;
+    }
+    try {
+      await this.routingService.computePrimary(tenantId, tripId, actor, metadata);
+    } catch {
+      // best-effort -- ver comentario acima.
+    }
+  }
+
+  // Fase 28, secao 3 -- pausa nao encerra a viagem: RoutePlan/RoutePlanToll/
+  // TrackingPoints/historico permanecem intactos (so a Trip muda de status).
+  // Posicao GPS (quando o app conseguir capturar) e registrada como um
+  // TrackingPoint normal -- mesmo pipeline da Fase 25, nunca um mecanismo
+  // paralelo de "posicao da pausa".
   async pause(
     tenantId: string,
     driverId: string,
     tripId: string,
+    dto: PauseTripDto,
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<TripEntity> {
@@ -143,6 +182,7 @@ export class DriverTripsService {
     if (trip.status === TripStatus.PAUSED) {
       return this.tripsService.findOne(tenantId, tripId);
     }
+    await this.recordPositionIfProvided(tenantId, tripId, dto.latitude, dto.longitude);
     return this.tripsService.updateStatus(
       tenantId,
       tripId,
@@ -154,15 +194,20 @@ export class DriverTripsService {
 
   // Reabrir o app com a viagem ja ACTIVE tambem cai aqui (no-op) -- "retomar"
   // nao e so a transicao PAUSED->IN_PROGRESS, e tambem "continuar de onde
-  // parou" sem exigir nenhuma transicao de estado.
+  // parou" sem exigir nenhuma transicao de estado. Fase 28, secao 5: a
+  // posicao GPS informada aqui entra pelo MESMO TrackingPointsService.createBatch
+  // usado pelo tracking normal, que ja reavalia desvio (Fase 26) sempre que ha
+  // ponto novo -- nenhuma logica de rota duplicada nesta funcao.
   async resume(
     tenantId: string,
     driverId: string,
     tripId: string,
+    dto: ResumeTripDto,
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<TripEntity> {
     const trip = await this.assertOwnedByDriver(tenantId, driverId, tripId);
+    await this.recordPositionIfProvided(tenantId, tripId, dto.latitude, dto.longitude);
     if (trip.status === TripStatus.IN_PROGRESS) {
       return this.tripsService.findOne(tenantId, tripId);
     }
@@ -175,10 +220,15 @@ export class DriverTripsService {
     );
   }
 
+  // Fase 28, secao 11/12 -- finalOdometerKm e validado (nao pode ser menor
+  // que o odometro atual do veiculo) e o bump de Vehicle.odometerKm e feito
+  // dentro de TripsService.updateStatus, reaproveitando common/utils/odometer.util.ts
+  // (mesma regra da Fase 27) -- nunca duplicado aqui.
   async complete(
     tenantId: string,
     driverId: string,
     tripId: string,
+    dto: CompleteTripDto,
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<TripEntity> {
@@ -186,13 +236,41 @@ export class DriverTripsService {
     if (trip.status === TripStatus.COMPLETED) {
       return this.tripsService.findOne(tenantId, tripId);
     }
+    await this.recordPositionIfProvided(tenantId, tripId, dto.latitude, dto.longitude);
     return this.tripsService.updateStatus(
       tenantId,
       tripId,
-      { status: TripStatus.COMPLETED },
+      { status: TripStatus.COMPLETED, ...compact({ finalOdometerKm: dto.finalOdometerKm }) },
       actor,
       metadata,
     );
+  }
+
+  // Registra uma unica posicao GPS "operacional" (pausa/retomada/finalizacao)
+  // reaproveitando TrackingPointsService.createBatch -- mesmo idempotencia por
+  // deviceEventId, mesma deteccao de desvio (Fase 26) do tracking continuo do
+  // app. So grava quando o app conseguiu capturar as duas coordenadas
+  // (latitude/longitude sao independentes no DTO porque HTTP nao valida
+  // "os dois ou nenhum" declarativamente).
+  private async recordPositionIfProvided(
+    tenantId: string,
+    tripId: string,
+    latitude: number | undefined,
+    longitude: number | undefined,
+  ): Promise<void> {
+    if (latitude === undefined || longitude === undefined) {
+      return;
+    }
+    await this.trackingPointsService.createBatch(tenantId, tripId, {
+      points: [
+        {
+          deviceEventId: randomUUID(),
+          latitude,
+          longitude,
+          recordedAt: new Date().toISOString(),
+        },
+      ],
+    });
   }
 
   async getConfig(tenantId: string): Promise<DriverConfigEntity> {

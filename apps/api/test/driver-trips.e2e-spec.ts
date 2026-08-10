@@ -579,6 +579,201 @@ describe('Driver Trips (e2e)', () => {
   });
 
   // ==========================================================================
+  // Fase 28 -- ciclo operacional (pausa/retomada com GPS, abastecimento em
+  // rota com valor pago, finalizacao com KM final validado)
+  // ==========================================================================
+  describe('ciclo operacional (Fase 28)', () => {
+    it('pausa registra a posicao GPS informada como TrackingPoint (RoutePlan/historico preservados)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op1');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      const pauseRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/pause`)
+        .set('Authorization', driverAuth)
+        .send({ latitude: -23.55, longitude: -46.63 })
+        .expect(201);
+      expect(pauseRes.body.data.status).toBe('PAUSED');
+
+      const points = await prisma.trackingPoint.findMany({ where: { tenantId, tripId } });
+      expect(points).toHaveLength(1);
+      expect(Number(points[0]?.latitude)).toBeCloseTo(-23.55, 5);
+    });
+
+    it('retomada tambem registra a posicao GPS informada (mesmo pipeline de TrackingPoint, sem logica de rota paralela)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op2');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/pause`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/resume`)
+        .set('Authorization', driverAuth)
+        .send({ latitude: -23.6, longitude: -46.7 })
+        .expect(201);
+
+      const points = await prisma.trackingPoint.findMany({ where: { tenantId, tripId } });
+      expect(points).toHaveLength(1);
+      expect(Number(points[0]?.longitude)).toBeCloseTo(-46.7, 5);
+    });
+
+    it('pausar/retomar sem posicao (sem sinal GPS) continua funcionando, sem registrar TrackingPoint', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op3');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/pause`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/resume`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      const points = await prisma.trackingPoint.findMany({ where: { tenantId, tripId } });
+      expect(points).toHaveLength(0);
+    });
+
+    it('impede pausar uma viagem PLANNED (transicao invalida) -- 409', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op4');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/pause`)
+        .set('Authorization', driverAuth)
+        .expect(409);
+    });
+
+    it('impede pausar uma viagem ja COMPLETED -- 409', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op5');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/complete`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/pause`)
+        .set('Authorization', driverAuth)
+        .expect(409);
+    });
+
+    it('abastecimento em rota aceita "valor pago" (pricePerLiter) e calcula o total automaticamente', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op6');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/fuel-supplies`)
+        .set('Authorization', driverAuth)
+        .send({
+          deviceEventId: randomUUID(),
+          odometerKm: 100200,
+          liters: 200,
+          pricePerLiter: 6.5,
+        })
+        .expect(201);
+
+      expect(res.body.data.liters).toBe(200);
+      expect(res.body.data.totalAmount).toBe(1300);
+    });
+
+    it('finaliza a viagem com KM final valido: atualiza Vehicle.odometerKm e grava Trip.status COMPLETED', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op7');
+      const { driverAuth, tripId, vehicleId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+
+      const completeRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/complete`)
+        .set('Authorization', driverAuth)
+        .send({ finalOdometerKm: 100850.5, latitude: -23.5, longitude: -46.6 })
+        .expect(201);
+
+      expect(completeRes.body.data.status).toBe('COMPLETED');
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(100850.5);
+
+      const points = await prisma.trackingPoint.findMany({ where: { tenantId, tripId } });
+      expect(points).toHaveLength(1);
+    });
+
+    it('impede finalizar com KM final menor que o odometro atual do veiculo -- 409, nunca aceita silenciosamente', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op8');
+      const { driverAuth, tripId, vehicleId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/complete`)
+        .set('Authorization', driverAuth)
+        .send({ finalOdometerKm: 99000 })
+        .expect(409);
+
+      const trip = await prisma.trip.findUnique({ where: { id: tripId } });
+      expect(trip?.status).toBe('IN_PROGRESS');
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(100000);
+    });
+
+    it('finalizacao e idempotente: reenviar apos ja COMPLETED devolve a viagem concluida sem tentar regravar o odometro', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Op9');
+      const { driverAuth, tripId, vehicleId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/complete`)
+        .set('Authorization', driverAuth)
+        .send({ finalOdometerKm: 100500 })
+        .expect(201);
+
+      // Reenvio (ex: app perdeu a resposta e tenta de novo) com um KM MENOR
+      // do que ja foi gravado -- como a viagem ja esta COMPLETED, e um no-op
+      // (nunca reabre nem tenta revalidar/regravar o odometro).
+      const secondRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/complete`)
+        .set('Authorization', driverAuth)
+        .send({ finalOdometerKm: 1 })
+        .expect(201);
+      expect(secondRes.body.data.status).toBe('COMPLETED');
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(100500);
+    });
+  });
+
+  // ==========================================================================
   // 12-19 + 22-24: eixos (padrao, excecao, retorno, timeout) + conciliacao
   // ==========================================================================
   describe('eixos e conciliacao', () => {

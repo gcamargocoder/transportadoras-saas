@@ -111,6 +111,9 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
               label="Eixos padrão"
               value={trip.defaultAxles !== null ? String(trip.defaultAxles) : '-'}
             />
+            {trip.status === TripStatus.PAUSED && (
+              <Field label="Pausada desde" value={formatDateTime(trip.updatedAt)} />
+            )}
           </div>
 
           <div className="mt-4">

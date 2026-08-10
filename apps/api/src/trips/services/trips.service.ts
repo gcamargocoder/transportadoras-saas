@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, TripStatus, VehicleStatus } from '@prisma/client';
+import { Alert, Prisma, RouteEventType, TrackingPoint, TripStatus, VehicleStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
 import { toAuditLogEntity } from '../../audit/mappers/audit-log.mapper';
@@ -13,6 +13,8 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { compact } from '../../common/utils/compact.util';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
+import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTripDto } from '../dto/create-trip.dto';
@@ -22,9 +24,24 @@ import { UpdateTripDto } from '../dto/update-trip.dto';
 import { PaginatedTripsEntity } from '../entities/paginated-trips.entity';
 import { TripEntity } from '../entities/trip.entity';
 import { TripSummaryEntity } from '../entities/trip-summary.entity';
+import {
+  TripOperationAlertEntity,
+  TripOperationEntity,
+  TripOperationPositionEntity,
+  TripOperationTollSummaryEntity,
+  TripOperationsListEntity,
+} from '../entities/trip-operation.entity';
 import { toTripEntity, TripWithRelations } from '../mappers/trip.mapper';
 import { toTripSummaryEntity } from '../mappers/trip-summary.mapper';
+import { DEFAULT_STALE_THRESHOLD_MINUTES } from '../constants/monitoring.constants';
+import {
+  computeLocationFreshness,
+  computeMovementStatus,
+  computeOperationalStatus,
+} from '../utils/operational-status.util';
 import { TollRoutesService } from '../../toll-routes/services/toll-routes.service';
+import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
+import { TollReconciliationResult } from '../../toll-routes/utils/toll-reconciliation.util';
 import { CustomersService } from './customers.service';
 import { LocationsService } from './locations.service';
 
@@ -100,6 +117,7 @@ export class TripsService {
     private readonly locationsService: LocationsService,
     private readonly customersService: CustomersService,
     private readonly tollRoutesService: TollRoutesService,
+    private readonly tollReconciliationService: TollReconciliationService,
   ) {}
 
   async findAll(tenantId: string, query: FindTripsQueryDto): Promise<PaginatedTripsEntity> {
@@ -198,6 +216,109 @@ export class TripsService {
       count: tollAggregate._count._all,
       total: tollAggregate._sum.chargedAmount,
     });
+  }
+
+  // GET /trips/operations/active (Fase 29) -- painel de monitoramento
+  // operacional: uma linha por viagem ainda nao terminada (PLANNED..PAUSED),
+  // reaproveitando integralmente RoutePlan/RouteEvent/TrackingPoint/Alert/
+  // TollReconciliationService ja existentes. Pensado para nunca fazer N
+  // consultas por viagem: no maximo um punhado de queries (todas com
+  // `IN tripIds`), independente de quantas viagens ativas existam.
+  async getActiveOperations(tenantId: string): Promise<TripOperationsListEntity> {
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, deletedAt: null, status: { in: NON_TERMINAL_STATUSES } },
+      include: TRIP_INCLUDE,
+      orderBy: { updatedAt: 'desc' },
+    });
+    const result = new TripOperationsListEntity();
+    if (trips.length === 0) {
+      result.items = [];
+      return result;
+    }
+    const tripIds = trips.map((trip) => trip.id);
+
+    const [lastPoints, deviationEvents, tollSummaries, alerts, settings] = await Promise.all([
+      // Uma linha por viagem: a leitura de TrackingPoint mais recente
+      // (distinct + orderBy), nunca o historico inteiro.
+      this.prisma.trackingPoint.findMany({
+        where: { tenantId, tripId: { in: tripIds } },
+        orderBy: { recordedAt: 'desc' },
+        distinct: ['tripId'],
+      }),
+      this.prisma.routeEvent.findMany({
+        where: { tenantId, tripId: { in: tripIds }, type: RouteEventType.DEVIATION },
+      }),
+      this.tollReconciliationService.getSummaries(tenantId, tripIds),
+      this.prisma.alert.findMany({
+        where: { tenantId, tripId: { in: tripIds }, acknowledgedAt: null },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.tenantSettings.findUnique({ where: { tenantId } }),
+    ]);
+
+    const lastPointByTrip = new Map(lastPoints.map((point) => [point.tripId, point]));
+    const deviationsByTrip = new Map<string, typeof deviationEvents>();
+    for (const event of deviationEvents) {
+      const list = deviationsByTrip.get(event.tripId) ?? [];
+      list.push(event);
+      deviationsByTrip.set(event.tripId, list);
+    }
+    const alertsByTrip = new Map<string, typeof alerts>();
+    for (const alert of alerts) {
+      if (!alert.tripId) continue;
+      const list = alertsByTrip.get(alert.tripId) ?? [];
+      list.push(alert);
+      alertsByTrip.set(alert.tripId, list);
+    }
+
+    const staleThresholdMinutes = settings?.alertDelayThresholdMin ?? DEFAULT_STALE_THRESHOLD_MINUTES;
+    const now = new Date();
+
+    result.items = trips.map((trip) => {
+      const lastPoint = lastPointByTrip.get(trip.id) ?? null;
+      const events = deviationsByTrip.get(trip.id) ?? [];
+      const hasUnresolvedDeviation = events.some((event) => event.resolvedAt === null);
+      const hasRecalculatedRoute = events.some((event) => event.resultingRoutePlanId !== null);
+      const speedKmh = toNumberOrNull(lastPoint?.speedKmh ?? null);
+      const lastTrackingAt = lastPoint?.recordedAt ?? null;
+      const summary = tollSummaries.get(trip.id) ?? null;
+
+      const entity = new TripOperationEntity();
+      entity.tripId = trip.id;
+      entity.status = trip.status;
+      entity.operationalStatus = computeOperationalStatus({
+        tripStatus: trip.status,
+        lastTrackingAt,
+        speedKmh,
+        hasUnresolvedDeviation,
+        now,
+        staleThresholdMinutes,
+      });
+      entity.driverId = trip.driverId;
+      entity.driverName = trip.driver?.name ?? null;
+      entity.vehicleId = trip.composition?.vehicleId ?? null;
+      entity.vehiclePlate = trip.composition?.vehicle.plate ?? null;
+      entity.originName = trip.origin.name;
+      entity.destinationName = trip.destination.name;
+      entity.actualDeparture = trip.actualDeparture;
+      entity.initialOdometerKm = toNumberOrNull(trip.initialOdometerKm);
+      entity.currentOdometerKm = toNumberOrNull(trip.composition?.vehicle.odometerKm ?? null);
+      entity.lastPosition = lastPoint ? toPositionEntity(lastPoint) : null;
+      entity.minutesSinceLastUpdate = lastTrackingAt
+        ? Math.round((now.getTime() - lastTrackingAt.getTime()) / 60_000)
+        : null;
+      entity.locationFreshness = computeLocationFreshness(lastTrackingAt, now, staleThresholdMinutes);
+      entity.movementStatus = computeMovementStatus(speedKmh);
+      entity.hasUnresolvedDeviation = hasUnresolvedDeviation;
+      entity.hasRecalculatedRoute = hasRecalculatedRoute;
+      entity.routePlanId = trip.routePlanId;
+      entity.defaultAxles = trip.composition?.axleConfiguration?.totalAxles ?? null;
+      entity.tollSummary = toTollSummaryEntity(summary);
+      entity.alerts = (alertsByTrip.get(trip.id) ?? []).map(toAlertEntity);
+      return entity;
+    });
+
+    return result;
   }
 
   async create(
@@ -490,6 +611,18 @@ export class TripsService {
       await this.assertCanStart(tenantId, before, id);
     }
 
+    // finalOdometerKm nunca pode regredir a quilometragem do veiculo (mesma
+    // regra da Fase 27/28, reaproveitada de common/utils/odometer.util.ts) --
+    // vale tanto para o motorista (POST /driver/trips/:id/complete) quanto
+    // para o encerramento administrativo (PATCH /trips/:id/status), unico
+    // lugar onde COMPLETED de fato grava o odometro.
+    let bumpedOdometerKm: number | null = null;
+    if (dto.status === TripStatus.COMPLETED && dto.finalOdometerKm !== undefined) {
+      const currentOdometerKm = toNumberOrNull(before.composition?.vehicle?.odometerKm ?? null);
+      assertOdometerNotBelowVehicle(currentOdometerKm, dto.finalOdometerKm);
+      bumpedOdometerKm = computeBumpedOdometer(currentOdometerKm, dto.finalOdometerKm);
+    }
+
     const data: Prisma.TripUpdateInput = { status: dto.status };
     if (dto.status === TripStatus.IN_PROGRESS && !before.actualDeparture) {
       data.actualDeparture = new Date();
@@ -519,10 +652,10 @@ export class TripsService {
             data: { actualDurationMin: durationMinutes },
           });
         }
-        if (dto.finalOdometerKm !== undefined && before.composition?.vehicleId) {
+        if (bumpedOdometerKm !== null && before.composition?.vehicleId) {
           await tx.vehicle.update({
             where: { id: before.composition.vehicleId },
-            data: { odometerKm: dto.finalOdometerKm },
+            data: { odometerKm: bumpedOdometerKm },
           });
         }
       }
@@ -750,4 +883,34 @@ export class TripsService {
     }
     return composition;
   }
+}
+
+function toPositionEntity(point: TrackingPoint): TripOperationPositionEntity {
+  const entity = new TripOperationPositionEntity();
+  entity.latitude = point.latitude.toNumber();
+  entity.longitude = point.longitude.toNumber();
+  entity.recordedAt = point.recordedAt;
+  entity.speedKmh = toNumberOrNull(point.speedKmh);
+  entity.headingDeg = toNumberOrNull(point.headingDeg);
+  return entity;
+}
+
+function toTollSummaryEntity(result: TollReconciliationResult | null): TripOperationTollSummaryEntity {
+  const entity = new TripOperationTollSummaryEntity();
+  entity.plannedCount = result?.expectedStopsCount ?? 0;
+  entity.registeredCount = result?.registeredStopsCount ?? 0;
+  entity.pendingCount = result?.notRegisteredCount ?? 0;
+  entity.unplannedCount = result?.unplannedCount ?? 0;
+  entity.reconciliationStatus = result?.status ?? 'PENDING';
+  return entity;
+}
+
+function toAlertEntity(alert: Alert): TripOperationAlertEntity {
+  const entity = new TripOperationAlertEntity();
+  entity.id = alert.id;
+  entity.type = alert.type;
+  entity.severity = alert.severity;
+  entity.message = alert.message;
+  entity.createdAt = alert.createdAt;
+  return entity;
 }

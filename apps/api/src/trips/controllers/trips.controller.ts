@@ -58,6 +58,7 @@ import { RouteEventEntity } from '../entities/route-event.entity';
 import { RouteVersionEntity } from '../entities/route-version.entity';
 import { TripMetricsEntity } from '../entities/trip-metrics.entity';
 import { TripSummaryEntity } from '../entities/trip-summary.entity';
+import { TripOperationsListEntity } from '../entities/trip-operation.entity';
 import { TripEntity } from '../entities/trip.entity';
 import { RouteEventsService } from '../services/route-events.service';
 import { RouteVersionsService } from '../services/route-versions.service';
@@ -88,6 +89,23 @@ export class TripsController {
   @ApiOkResponse({ type: PaginatedTripsEntity })
   findAll(@Query() query: FindTripsQueryDto): Promise<PaginatedTripsEntity> {
     return this.tripsService.findAll(this.tenantContext.requireTenantId(), query);
+  }
+
+  // Registrado ANTES de ':id' de proposito -- '/trips/operations/active' tem
+  // dois segmentos fixos e nunca colidiria com a rota de 1 segmento ':id',
+  // mas mantemos aqui pela convencao ja usada no resto do controller (rotas
+  // mais especificas antes das genericas).
+  @Get('operations/active')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Painel de monitoramento operacional (Fase 29): uma linha por viagem ainda nao terminada ' +
+      '(PLANNED..PAUSED) com posicao atual, status operacional, situacao de rota/pedagios/' +
+      'conciliacao e alertas em aberto. Nunca inclui historico completo.',
+  })
+  @ApiOkResponse({ type: TripOperationsListEntity })
+  getActiveOperations(): Promise<TripOperationsListEntity> {
+    return this.tripsService.getActiveOperations(this.tenantContext.requireTenantId());
   }
 
   @Get(':id')

@@ -259,6 +259,40 @@ export class RoutingService {
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<RoutePlanComparisonEntity> {
+    const result = await this.performRecalculation(tenantId, tripId);
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'route_plan.recalculated',
+      entityName: 'RoutePlan',
+      entityId: result.nextRoutePlan.id,
+      previousValue: result.previousRoutePlan ? toJsonSafe({ routePlanId: result.previousRoutePlan.id }) : null,
+      newValue: toJsonSafe({ routePlanId: result.nextRoutePlan.id, difference: result.difference }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return {
+      previous: result.previousRoutePlan ? toRoutePlanEntity(result.previousRoutePlan, false) : null,
+      next: toRoutePlanEntity(result.nextRoutePlan, true),
+      difference: result.difference,
+    };
+  }
+
+  // Nucleo do calculo de recalculo, reaproveitado tanto pelo endpoint manual
+  // (recalculate(), acima) quanto pelo recalculo automatico apos desvio
+  // (checkDeviation(), abaixo, Fase 30 secao 4) -- a MESMA logica de rota,
+  // nunca duplicada; so o registro de auditoria (que exige um ator humano)
+  // fica de fora, decidido por cada chamador.
+  private async performRecalculation(
+    tenantId: string,
+    tripId: string,
+  ): Promise<{
+    previousRoutePlan: RoutePlanWithTolls | null;
+    nextRoutePlan: RoutePlanWithTolls;
+    difference: ReturnType<typeof computeRouteComparison> | null;
+  }> {
     const trip = await this.loadTripForRouting(tenantId, tripId);
 
     const previousRoutePlan = trip.routePlanId
@@ -332,30 +366,17 @@ export class RoutingService {
         )
       : null;
 
-    await this.audit.log({
-      tenantId,
-      userId: actor.userId,
-      action: 'route_plan.recalculated',
-      entityName: 'RoutePlan',
-      entityId: nextRoutePlan.id,
-      previousValue: previousRoutePlan ? toJsonSafe({ routePlanId: previousRoutePlan.id }) : null,
-      newValue: toJsonSafe({ routePlanId: nextRoutePlan.id, difference }),
-      ipAddress: metadata.ipAddress,
-      userAgent: metadata.userAgent,
-    });
-
-    return {
-      previous: previousRoutePlan ? toRoutePlanEntity(previousRoutePlan, false) : null,
-      next: toRoutePlanEntity(nextRoutePlan, true),
-      difference,
-    };
+    return { previousRoutePlan, nextRoutePlan, difference };
   }
 
   // Chamado por TrackingPointsService apos inserir um lote de localizacoes
-  // (Fase 26) -- NUNCA recalcula a rota sozinho, so detecta e registra
-  // (RouteEvent + Alert, reaproveitando AlertType.ROUTE_DEVIATION ja
-  // existente e nunca antes populado). Idempotente: nao abre um segundo
-  // RouteEvent enquanto o anterior nao for resolvido (ver recalculate()).
+  // (Fase 26/30) -- detecta e registra o desvio (RouteEvent + Alert,
+  // reaproveitando AlertType.ROUTE_DEVIATION). A partir da Fase 30, secao 4,
+  // tambem recalcula automaticamente (reaproveita performRecalculation(), o
+  // MESMO nucleo do endpoint manual de recalculo) -- o motorista nao precisa
+  // confirmar nada; o botao manual "Recalcular rota" continua existindo como
+  // fallback. Idempotente: nao abre um segundo RouteEvent nem recalcula de
+  // novo enquanto o anterior nao for resolvido.
   async checkDeviation(tenantId: string, tripId: string): Promise<void> {
     const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, deletedAt: null } });
     if (!trip?.routePlanId) return;
@@ -413,6 +434,31 @@ export class RoutingService {
         message: `Veiculo fora da rota planejada ha mais de ${routeDeviationMinutes} minutos.`,
       },
     });
+
+    // Recalculo automatico (Fase 30, secao 4) -- best-effort: se o provider
+    // estiver indisponivel ou qualquer outra falha ocorrer, o desvio ja
+    // registrado acima permanece valido e o motorista/escritorio ainda podem
+    // recalcular manualmente depois. Nunca propaga o erro (o chamador,
+    // TrackingPointsService.createBatch, tambem nao pode falhar por causa
+    // disso).
+    try {
+      const result = await this.performRecalculation(tenantId, tripId);
+      await this.audit.log({
+        tenantId,
+        userId: null,
+        action: 'route_plan.auto_recalculated',
+        entityName: 'RoutePlan',
+        entityId: result.nextRoutePlan.id,
+        previousValue: result.previousRoutePlan
+          ? toJsonSafe({ routePlanId: result.previousRoutePlan.id })
+          : null,
+        newValue: toJsonSafe({ routePlanId: result.nextRoutePlan.id, difference: result.difference }),
+        ipAddress: null,
+        userAgent: 'system:auto-recalculation',
+      });
+    } catch {
+      // best-effort -- ver comentario acima.
+    }
   }
 
   // ==========================================================================

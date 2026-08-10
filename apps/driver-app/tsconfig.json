@@ -4,7 +4,13 @@
     "baseUrl": "./",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    // Fase 31 -- a base react-native.json restringe "types" so a
+    // react-native (compilerOptions.types e substituido, nunca mesclado,
+    // pelo "extends"); adiciona "jest" aqui, isolado deste app, para
+    // tsc --noEmit tambem conferir os arquivos *.test.ts(x) (describe/it/
+    // expect/jest globais).
+    "types": ["react-native", "jest"]
   },
   "include": ["src", "App.tsx"]
 }

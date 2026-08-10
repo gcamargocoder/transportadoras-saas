@@ -11,6 +11,7 @@ import {
   CalculatedRoute,
   RoutingProviderPort,
 } from '../src/routing/providers/routing-provider.interface';
+import { decodePolyline } from '../src/routing/utils/polyline.util';
 
 // Fase 26 -- roteirizacao geografica. NENHUMA credencial real de provider
 // esta configurada neste ambiente (ver relatorio final): este E2E substitui
@@ -304,10 +305,6 @@ describe('Routing (e2e)', () => {
     // Guard-rail: garante que o helper de teste (encodePolyline) e o
     // decodificador real da aplicacao (decodePolyline) sao inversos --
     // sem isso, um bug no encoder de teste mascararia falsos positivos.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { decodePolyline } = require('../src/routing/utils/polyline.util') as {
-      decodePolyline: (s: string) => { latitude: number; longitude: number }[];
-    };
     const { original } = makeRouteLines();
     const decoded = decodePolyline(encodePolyline(original));
     expect(decoded).toHaveLength(original.length);
@@ -638,6 +635,217 @@ describe('Routing (e2e)', () => {
         .set('Authorization', driverAuth)
         .expect(200);
       expect(routeAfterRecalcRes.body.data.hasUnresolvedDeviation).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 30 -- "motorista informa pouco, sistema calcula muito": rota
+  // calculada automaticamente na largada e recalculo automatico apos desvio
+  // (sem nenhuma chamada manual do motorista/escritorio).
+  // ==========================================================================
+  describe('operacao automatica (Fase 30)', () => {
+    it('POST /driver/trips/:id/start calcula a rota automaticamente quando a viagem ainda nao tem nenhuma RoutePlan', async () => {
+      const { original: ORIGINAL_LINE } = makeRouteLines();
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Auto1');
+      const { tripId, driverId } = await setupTrip(adminAuth, 9);
+      const driverAuth = await setupDriverLogin(adminAuth, tenantId, driverId);
+
+      // TripEntity (GET /trips/:id) nao expoe routePlanId -- verifica direto
+      // no banco (mesmo padrao ja usado por outros e2e desta suite).
+      const beforeTrip = await prisma.trip.findUnique({ where: { id: tripId } });
+      expect(beforeTrip!.routePlanId).toBeNull();
+
+      fakeProvider.enqueue([
+        {
+          originLabel: 'Catanduva/SP',
+          destinationLabel: 'Sao Paulo/SP',
+          originLatitude: ORIGINAL_LINE[0]!.latitude,
+          originLongitude: ORIGINAL_LINE[0]!.longitude,
+          destinationLatitude: ORIGINAL_LINE[40]!.latitude,
+          destinationLongitude: ORIGINAL_LINE[40]!.longitude,
+          distanceMeters: 500_000,
+          durationSeconds: 20_000,
+          encodedPolyline: encodePolyline(ORIGINAL_LINE),
+          providerRouteId: null,
+          hasTolls: true,
+          estimatedTollAmount: null,
+          estimatedTollCurrency: 'BRL',
+        },
+      ]);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+
+      const afterTrip = await prisma.trip.findUnique({ where: { id: tripId } });
+      expect(afterTrip!.routePlanId).not.toBeNull();
+
+      const routePlanRes = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(routePlanRes.body.data.distanceMeters).toBe(500_000);
+    });
+
+    it('nao sobrescreve uma RoutePlan ja calculada manualmente antes da largada', async () => {
+      const { original: ORIGINAL_LINE } = makeRouteLines();
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Auto2');
+      const { tripId, driverId } = await setupTrip(adminAuth, 9);
+      const driverAuth = await setupDriverLogin(adminAuth, tenantId, driverId);
+
+      fakeProvider.enqueue([
+        {
+          originLabel: 'Catanduva/SP',
+          destinationLabel: 'Sao Paulo/SP',
+          originLatitude: ORIGINAL_LINE[0]!.latitude,
+          originLongitude: ORIGINAL_LINE[0]!.longitude,
+          destinationLatitude: ORIGINAL_LINE[40]!.latitude,
+          destinationLongitude: ORIGINAL_LINE[40]!.longitude,
+          distanceMeters: 500_000,
+          durationSeconds: 20_000,
+          encodedPolyline: encodePolyline(ORIGINAL_LINE),
+          providerRouteId: null,
+          hasTolls: false,
+          estimatedTollAmount: null,
+          estimatedTollCurrency: 'BRL',
+        },
+      ]);
+      const manualRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      const manualRoutePlanId = manualRes.body.data.id as string;
+      const callsBefore = fakeProvider.calls.length;
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      // Nenhuma chamada nova ao provider -- start() nunca recalcula quando ja
+      // existe uma RoutePlan (guard de routePlanId !== null).
+      expect(fakeProvider.calls.length).toBe(callsBefore);
+
+      const trip = await prisma.trip.findUnique({ where: { id: tripId } });
+      expect(trip!.routePlanId).toBe(manualRoutePlanId);
+    });
+
+    it('desvio dispara recalculo automatico (novo pedagio incluido) sem nenhuma chamada manual a /route/recalculate', async () => {
+      const { original: ORIGINAL_LINE, deviated: DEVIATED_LINE } = makeRouteLines();
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Auto3');
+      const plazaOriginal = await createTollPlaza(adminAuth, {
+        name: 'Praca original (auto)',
+        latitude: ORIGINAL_LINE[35]!.latitude,
+        longitude: ORIGINAL_LINE[35]!.longitude,
+      });
+      const plazaNova = await createTollPlaza(adminAuth, {
+        name: 'Praca nova (auto, so na rota recalculada)',
+        latitude: DEVIATED_LINE[20]!.latitude,
+        longitude: DEVIATED_LINE[20]!.longitude,
+      });
+      const { tripId, driverId } = await setupTrip(adminAuth, 9);
+      const driverAuth = await setupDriverLogin(adminAuth, tenantId, driverId);
+
+      await prisma.tenantSettings.upsert({
+        where: { tenantId },
+        update: { routeDeviationMinutes: 0, maxDeviationMeters: 300 },
+        create: { tenantId, routeDeviationMinutes: 0, maxDeviationMeters: 300 },
+      });
+
+      fakeProvider.enqueue([
+        {
+          originLabel: 'Catanduva/SP',
+          destinationLabel: 'Sao Paulo/SP',
+          originLatitude: ORIGINAL_LINE[0]!.latitude,
+          originLongitude: ORIGINAL_LINE[0]!.longitude,
+          destinationLatitude: ORIGINAL_LINE[40]!.latitude,
+          destinationLongitude: ORIGINAL_LINE[40]!.longitude,
+          distanceMeters: 520_000,
+          durationSeconds: 23_400,
+          encodedPolyline: encodePolyline(ORIGINAL_LINE),
+          providerRouteId: null,
+          hasTolls: true,
+          estimatedTollAmount: null,
+          estimatedTollCurrency: 'BRL',
+        },
+      ]);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      // Enfileira a rota recalculada ANTES do ponto de desvio: o recalculo
+      // (Fase 30) acontece dentro do proprio POST /locations, sem nenhuma
+      // chamada extra do motorista a /route/recalculate.
+      fakeProvider.enqueue([
+        {
+          originLabel: 'Posicao atual',
+          destinationLabel: 'Sao Paulo/SP',
+          originLatitude: ORIGINAL_LINE[15]!.latitude,
+          originLongitude: ORIGINAL_LINE[15]!.longitude + 0.02,
+          destinationLatitude: DEVIATED_LINE[40]!.latitude,
+          destinationLongitude: DEVIATED_LINE[40]!.longitude,
+          distanceMeters: 545_000,
+          durationSeconds: 24_600,
+          encodedPolyline: encodePolyline(DEVIATED_LINE),
+          providerRouteId: null,
+          hasTolls: true,
+          estimatedTollAmount: null,
+          estimatedTollCurrency: 'BRL',
+        },
+      ]);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/locations`)
+        .set('Authorization', driverAuth)
+        .send({
+          points: [
+            {
+              deviceEventId: randomUUID(),
+              latitude: ORIGINAL_LINE[15]!.latitude,
+              longitude: ORIGINAL_LINE[15]!.longitude + 0.02,
+              recordedAt: new Date(Date.now() + 60_000).toISOString(),
+            },
+          ],
+        })
+        .expect(201);
+
+      // Sem NENHUMA chamada a /route/recalculate: o desvio ja deve estar
+      // resolvido automaticamente, com a rota nova e a praca nova.
+      const deviationEvent = await prisma.routeEvent.findFirst({
+        where: { tripId, type: 'DEVIATION' },
+      });
+      expect(deviationEvent).not.toBeNull();
+      expect(deviationEvent!.resolvedAt).not.toBeNull();
+      expect(deviationEvent!.resultingRoutePlanId).not.toBeNull();
+
+      const routeRes = await request(app.getHttpServer())
+        .get(`/api/v1/driver/trips/${tripId}/route`)
+        .set('Authorization', driverAuth)
+        .expect(200);
+      expect(routeRes.body.data.hasUnresolvedDeviation).toBe(false);
+      expect(routeRes.body.data.nextToll.name).toBe('Praca nova (auto, so na rota recalculada)');
+
+      const tollsRes = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/route-plan/tolls`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const tollPlazaIds = (tollsRes.body.data as Array<{ tollPlazaId: string }>).map((t) => t.tollPlazaId);
+      expect(tollPlazaIds).toContain(plazaNova);
+      expect(tollPlazaIds).not.toContain(plazaOriginal);
+
+      // Auditoria da acao automatica (ator nulo -- ninguem "clicou" em nada).
+      const autoLog = await prisma.auditLog.findFirst({
+        where: { tenantId, action: 'route_plan.auto_recalculated' },
+      });
+      expect(autoLog).not.toBeNull();
+      expect(autoLog!.userId).toBeNull();
     });
   });
 

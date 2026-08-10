@@ -33,6 +33,9 @@ import { DRIVER_TRIP_ROLES } from '../constants/driver-trip-roles.constants';
 import { DriverContext } from '../context/driver-context';
 import { NearbyTollPlazasQueryDto } from '../dto/nearby-toll-plazas-query.dto';
 import { StartTripDto } from '../dto/start-trip.dto';
+import { PauseTripDto } from '../dto/pause-trip.dto';
+import { ResumeTripDto } from '../dto/resume-trip.dto';
+import { CompleteTripDto } from '../dto/complete-trip.dto';
 import { DriverActiveTripEntity } from '../entities/driver-active-trip.entity';
 import { DriverConfigEntity } from '../entities/driver-config.entity';
 import { NearbyTollPlazaEntity } from '../entities/nearby-toll-plaza.entity';
@@ -114,39 +117,63 @@ export class DriverTripsController {
   }
 
   @Post('trips/:id/pause')
-  @ApiOperation({ summary: 'Pausa a viagem (idempotente se ja estiver pausada).' })
+  @ApiOperation({
+    summary:
+      'Pausa a viagem (idempotente se ja estiver pausada). Aceita opcionalmente a posicao GPS ' +
+      'atual (Fase 28) -- RoutePlan/TrackingPoints/historico nunca sao perdidos numa pausa.',
+  })
   @ApiOkResponse({ type: TripEntity })
-  pause(@Param('id', ParseUUIDPipe) id: string): Promise<TripEntity> {
+  pause(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PauseTripDto,
+  ): Promise<TripEntity> {
     return this.driverTripsService.pause(
       this.tenantContext.requireTenantId(),
       this.driverContext.requireDriverId(),
       id,
+      dto ?? {},
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
   }
 
   @Post('trips/:id/resume')
-  @ApiOperation({ summary: 'Retoma a viagem (reabrir o app com viagem ja ACTIVE tambem cai aqui, sem efeito).' })
+  @ApiOperation({
+    summary:
+      'Retoma a viagem (reabrir o app com viagem ja ACTIVE tambem cai aqui, sem efeito). Aceita ' +
+      'opcionalmente a posicao GPS atual (Fase 28) -- reavalia desvio de rota automaticamente.',
+  })
   @ApiOkResponse({ type: TripEntity })
-  resume(@Param('id', ParseUUIDPipe) id: string): Promise<TripEntity> {
+  resume(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResumeTripDto,
+  ): Promise<TripEntity> {
     return this.driverTripsService.resume(
       this.tenantContext.requireTenantId(),
       this.driverContext.requireDriverId(),
       id,
+      dto ?? {},
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
   }
 
   @Post('trips/:id/complete')
-  @ApiOperation({ summary: 'Conclui a viagem (idempotente se ja estiver concluida).' })
+  @ApiOperation({
+    summary:
+      'Conclui a viagem (idempotente se ja estiver concluida). Aceita opcionalmente o KM final ' +
+      '(Fase 28, tela "FINALIZAR VIAGEM") -- validado contra o odometro atual do veiculo.',
+  })
   @ApiOkResponse({ type: TripEntity })
-  complete(@Param('id', ParseUUIDPipe) id: string): Promise<TripEntity> {
+  complete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteTripDto,
+  ): Promise<TripEntity> {
     return this.driverTripsService.complete(
       this.tenantContext.requireTenantId(),
       this.driverContext.requireDriverId(),
       id,
+      dto ?? {},
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );

@@ -2,6 +2,8 @@
 // selects de filtro, formularios). Mantido centralizado para nao duplicar
 // strings por tela.
 import {
+  AlertSeverity,
+  AlertType,
   AxleEventSource,
   DocumentType,
   ExpenseCategory,
@@ -57,6 +59,23 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
 export const TRIP_LOAD_STATUS_LABELS: Record<TripLoadStatus, string> = {
   LOADED: 'Carregado',
   EMPTY: 'Vazio',
+};
+
+// Fase 29 -- Alert passa a ter leitura no painel de monitoramento.
+export const ALERT_TYPE_LABELS: Record<AlertType, string> = {
+  ROUTE_DEVIATION: 'Desvio de rota',
+  TOLL_DISCREPANCY: 'Divergência de pedágio',
+  DELAY: 'Atraso',
+  ROUTE_EVENT: 'Evento de rota',
+  DOCUMENT_EXPIRING: 'Documento vencendo',
+  OTHER: 'Outro',
+};
+
+export const ALERT_SEVERITY_LABELS: Record<AlertSeverity, string> = {
+  LOW: 'Baixa',
+  MEDIUM: 'Média',
+  HIGH: 'Alta',
+  CRITICAL: 'Crítica',
 };
 
 export const TRIP_STOP_TYPE_LABELS: Record<TripStopType, string> = {

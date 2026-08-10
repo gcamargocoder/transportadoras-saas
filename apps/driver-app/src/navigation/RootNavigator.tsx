@@ -4,6 +4,7 @@ import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 import { TripProvider } from '../trip/TripContext';
+import { FinishTripScreen } from '../screens/FinishTripScreen';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
@@ -50,6 +51,11 @@ export function RootNavigator(): React.JSX.Element {
               name="StartTrip"
               component={StartTripScreen}
               options={{ headerShown: true, title: 'Iniciar viagem' }}
+            />
+            <Stack.Screen
+              name="FinishTrip"
+              component={FinishTripScreen}
+              options={{ headerShown: true, title: 'Finalizar viagem' }}
             />
             <Stack.Screen
               name="Fuel"

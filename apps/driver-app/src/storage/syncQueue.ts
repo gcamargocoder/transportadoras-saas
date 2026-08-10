@@ -39,7 +39,15 @@ type PendingAction =
       source: AxleEventSource;
       latitude: number;
       longitude: number;
-    };
+    }
+  // Fase 30, secao 10/11 -- pausa/retomada/finalizacao tambem sao eventos
+  // "gerados pelo app" e precisam sobreviver a falta de internet (secao 11
+  // exige explicitamente reaproveitar esta MESMA fila, nao uma nova). Ja sao
+  // idempotentes no backend por ESTADO (pausar 2x so aplica PAUSED->PAUSED,
+  // nunca por deviceEventId) -- nao precisam de um id de deduplicacao.
+  | { kind: 'pause'; tripId: string; latitude?: number; longitude?: number }
+  | { kind: 'resume'; tripId: string; latitude?: number; longitude?: number }
+  | { kind: 'complete'; tripId: string; finalOdometerKm?: number; latitude?: number; longitude?: number };
 
 const STORAGE_KEY = 'driverapp.syncQueue';
 
@@ -91,7 +99,34 @@ async function runAction(action: PendingAction): Promise<void> {
         ...compact({ tollPlazaId: action.tollPlazaId, declaredAxles: action.declaredAxles }),
       });
       return;
+    case 'pause':
+      await driverTripsApi.pauseTrip(action.tripId, toPosition(action));
+      return;
+    case 'resume':
+      await driverTripsApi.resumeTrip(action.tripId, toPosition(action));
+      return;
+    case 'complete':
+      await driverTripsApi.completeTrip(action.tripId, {
+        ...compact({
+          finalOdometerKm: action.finalOdometerKm,
+          latitude: action.latitude,
+          longitude: action.longitude,
+        }),
+      });
+      return;
   }
+}
+
+// pauseTrip/resumeTrip exigem latitude+longitude JUNTOS (ou nenhum dos dois)
+// -- a acao guarda os dois campos independentes (serializacao JSON simples),
+// esta funcao so reconstroi o par quando ambos estao presentes.
+function toPosition(action: {
+  latitude?: number;
+  longitude?: number;
+}): { latitude: number; longitude: number } | undefined {
+  return action.latitude !== undefined && action.longitude !== undefined
+    ? { latitude: action.latitude, longitude: action.longitude }
+    : undefined;
 }
 
 // Tenta executar a acao AGORA; se falhar (rede indisponivel), enfileira para

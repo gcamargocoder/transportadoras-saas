@@ -1,5 +1,6 @@
 import type { Paginated, PaginationParams } from '../../types/api';
 import type {
+  AuditLogEntity,
   CustomerEntity,
   LocationEntity,
   RouteEventEntity,
@@ -9,6 +10,7 @@ import type {
   TripFinancialDashboardEntity,
   TripFinancialSummaryEntity,
   TripMetricsEntity,
+  TripOperationsListEntity,
   TripSettlementEntity,
   TripSummaryEntity,
 } from '../../types/entities';
@@ -56,6 +58,13 @@ export function getTrip(id: string) {
   return api.get<TripEntity>(`/trips/${id}`);
 }
 
+// GET /trips/operations/active (Fase 29) -- painel de monitoramento
+// operacional; registrado ANTES de getTrip nas chamadas para nunca colidir
+// com /trips/:id no backend (rota fixa de 2 segmentos).
+export function getActiveOperations(signal?: AbortSignal) {
+  return api.get<TripOperationsListEntity>('/trips/operations/active', undefined, signal);
+}
+
 export function createTrip(payload: CreateTripPayload) {
   return api.post<TripEntity>('/trips', payload);
 }
@@ -76,8 +85,13 @@ export function deleteTrip(id: string) {
   return api.delete<void>(`/trips/${id}`);
 }
 
-export function getTripTimeline(id: string) {
-  return api.get<RouteEventEntity[]>(`/trips/${id}/timeline`);
+// /trips/:id/timeline devolve o historico de AuditLog da viagem (Fase 28) --
+// inicio, pausa, retomada, chegada, conclusao etc. Antes desta correcao, esta
+// funcao apontava o mesmo endpoint mas era tipada/consumida como se fosse
+// RouteEventEntity[] (usado por getTripRouteEvents, endpoint DIFERENTE) --
+// bug pre-existente que quebrava a aba "Linha do tempo" em runtime.
+export function getTripTimeline(id: string, params?: PaginationParams) {
+  return api.get<Paginated<AuditLogEntity>>(`/trips/${id}/timeline`, params);
 }
 
 export function getTripSummary(id: string) {

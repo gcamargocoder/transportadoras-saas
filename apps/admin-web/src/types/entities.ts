@@ -2,6 +2,8 @@
 // Datas chegam como string ISO 8601 (serializacao JSON), nunca Date.
 // Nao inventar campos: qualquer campo aqui precisa existir na entity real.
 import type {
+  AlertSeverity,
+  AlertType,
   AxleEventSource,
   DocumentType,
   ExpenseCategory,
@@ -285,6 +287,93 @@ export interface TripEntity {
   defaultAxles: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Espelha AuditLogEntity (apps/api/src/audit/entities/audit-log.entity.ts) --
+// usado na aba "Linha do tempo" da viagem (Fase 28) para mostrar os eventos
+// operacionais (inicio, pausa, retomada, chegada, conclusao...) sem inventar
+// uma tabela de eventos separada.
+export interface AuditLogEntity {
+  id: string;
+  tenantId: string;
+  userId: string | null;
+  action: string;
+  entityName: string;
+  entityId: string;
+  previousValue: unknown;
+  newValue: unknown;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: string;
+}
+
+// Fase 29 -- espelha trip-operation.entity.ts (backend). Tipos literais
+// (nao Prisma enum) porque OperationalStatus/MovementStatus/LocationFreshness
+// sao derivados a cada consulta, nunca persistidos.
+export type OperationalStatus =
+  | 'MOVING'
+  | 'STOPPED'
+  | 'STALE'
+  | 'OFF_ROUTE'
+  | 'PAUSED'
+  | 'COMPLETED'
+  | 'UNKNOWN';
+export type MovementStatus = 'MOVING' | 'STOPPED' | 'UNKNOWN';
+export type LocationFreshness = 'ONLINE' | 'STALE' | 'OFFLINE';
+
+export interface TripOperationPositionEntity {
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
+  speedKmh: number | null;
+  headingDeg: number | null;
+}
+
+export interface TripOperationTollSummaryEntity {
+  plannedCount: number;
+  registeredCount: number;
+  pendingCount: number;
+  unplannedCount: number;
+  // ReconciliationStatus e definido mais abaixo neste arquivo (espelha
+  // computeReconciliationStatus() do backend, Fase 24).
+  reconciliationStatus: ReconciliationStatus;
+}
+
+export interface TripOperationAlertEntity {
+  id: string;
+  type: AlertType;
+  severity: AlertSeverity;
+  message: string;
+  createdAt: string;
+}
+
+export interface TripOperationEntity {
+  tripId: string;
+  status: TripStatus;
+  operationalStatus: OperationalStatus;
+  driverId: string | null;
+  driverName: string | null;
+  vehicleId: string | null;
+  vehiclePlate: string | null;
+  originName: string;
+  destinationName: string;
+  actualDeparture: string | null;
+  initialOdometerKm: number | null;
+  currentOdometerKm: number | null;
+  lastPosition: TripOperationPositionEntity | null;
+  minutesSinceLastUpdate: number | null;
+  locationFreshness: LocationFreshness;
+  movementStatus: MovementStatus;
+  hasUnresolvedDeviation: boolean;
+  hasRecalculatedRoute: boolean;
+  routePlanId: string | null;
+  defaultAxles: number | null;
+  tollSummary: TripOperationTollSummaryEntity;
+  alerts: TripOperationAlertEntity[];
+}
+
+export interface TripOperationsListEntity {
+  items: TripOperationEntity[];
 }
 
 export interface RouteEventEntity {

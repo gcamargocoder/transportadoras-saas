@@ -32,6 +32,18 @@ describe('Maintenances (e2e)', () => {
     await app.close();
   });
 
+  // completedAt precisa ser POSTERIOR a openedAt (default = momento real da
+  // criacao, quando o payload nao informa openedAt -- ver
+  // MaintenancesService.assertDatesConsistent). Uma data literal fixa (ex:
+  // '2026-08-10') se torna invalida assim que o relogio real ultrapassa esse
+  // valor durante sessoes de desenvolvimento longas -- por isso relativa a
+  // "agora" (sempre no futuro em relacao ao openedAt default), nunca um
+  // literal que pode expirar.
+  function futureDateOnly(daysFromNow: number): string {
+    const date = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000);
+    return date.toISOString().slice(0, 10);
+  }
+
   function randomCnpj(): string {
     return Array.from({ length: 14 }, () => Math.floor(Math.random() * 10)).join('');
   }
@@ -211,7 +223,7 @@ describe('Maintenances (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/v1/maintenances/${maintenanceId}/status`)
         .set('Authorization', auth)
-        .send({ status: 'COMPLETED', completedAt: '2026-08-10' })
+        .send({ status: 'COMPLETED', completedAt: futureDateOnly(1) })
         .expect(200);
 
       await request(app.getHttpServer())
@@ -299,7 +311,7 @@ describe('Maintenances (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/v1/maintenances/${createRes.body.data.id}/status`)
         .set('Authorization', auth)
-        .send({ status: 'COMPLETED', completedAt: '2026-08-10' })
+        .send({ status: 'COMPLETED', completedAt: futureDateOnly(1) })
         .expect(409);
     });
 

@@ -10,7 +10,12 @@ export function TextField({ label, style, ...rest }: TextFieldProps): React.JSX.
   return (
     <View style={styles.wrapper}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput placeholderTextColor={colors.textMuted} style={[styles.input, style]} {...rest} />
+      <TextInput
+        accessibilityLabel={label}
+        placeholderTextColor={colors.textMuted}
+        style={[styles.input, style]}
+        {...rest}
+      />
     </View>
   );
 }

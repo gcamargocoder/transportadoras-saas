@@ -41,16 +41,40 @@ export function startTrip(
   });
 }
 
-export function pauseTrip(tripId: string): Promise<DriverTrip> {
-  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/pause`, { method: 'POST' });
+// Fase 28 -- posicao GPS opcional (o motorista pode estar sem sinal no
+// momento da pausa/retomada); quando informada, o backend registra como um
+// TrackingPoint normal (reavalia desvio de rota na retomada automaticamente).
+export function pauseTrip(
+  tripId: string,
+  position?: { latitude: number; longitude: number },
+): Promise<DriverTrip> {
+  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/pause`, {
+    method: 'POST',
+    body: position ?? {},
+  });
 }
 
-export function resumeTrip(tripId: string): Promise<DriverTrip> {
-  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/resume`, { method: 'POST' });
+export function resumeTrip(
+  tripId: string,
+  position?: { latitude: number; longitude: number },
+): Promise<DriverTrip> {
+  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/resume`, {
+    method: 'POST',
+    body: position ?? {},
+  });
 }
 
-export function completeTrip(tripId: string): Promise<DriverTrip> {
-  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/complete`, { method: 'POST' });
+// Fase 28 -- tela "FINALIZAR VIAGEM": KM final opcional no contrato HTTP
+// (mesmo principio da Fase 27), mas a tela sempre envia quando o motorista
+// preenche o formulario de encerramento.
+export function completeTrip(
+  tripId: string,
+  input?: { finalOdometerKm?: number; latitude?: number; longitude?: number },
+): Promise<DriverTrip> {
+  return apiRequest<DriverTrip>(`/driver/trips/${tripId}/complete`, {
+    method: 'POST',
+    body: input ?? {},
+  });
 }
 
 export function sendLocations(
