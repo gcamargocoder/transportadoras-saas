@@ -9,11 +9,25 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseFilters,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { CreateChecklistExecutionDto } from '../../checklists/dto/create-checklist-execution.dto';
+import { SubmitChecklistAnswersDto } from '../../checklists/dto/submit-checklist-answers.dto';
+import { UploadChecklistEvidenceDto } from '../../checklists/dto/upload-checklist-evidence.dto';
+import { ChecklistAnswersSubmitResultEntity } from '../../checklists/entities/checklist-answers-submit-result.entity';
+import { ChecklistEvidenceEntity } from '../../checklists/entities/checklist-evidence.entity';
+import { ChecklistExecutionEntity } from '../../checklists/entities/checklist-execution.entity';
+import { ChecklistTemplateEntity } from '../../checklists/entities/checklist-template.entity';
+import { ChecklistExecutionsService } from '../../checklists/services/checklist-executions.service';
+import { ChecklistTemplatesService } from '../../checklists/services/checklist-templates.service';
+import { MulterExceptionFilter } from '../../toll-import/filters/multer-exception.filter';
 import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entity';
 import { TrackingPointsSyncResultEntity } from '../../trip-operations/entities/tracking-point.entity';
 import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
@@ -63,6 +77,8 @@ export class DriverTripsController {
     private readonly trackingPointsService: TrackingPointsService,
     private readonly fuelSuppliesService: FuelSuppliesService,
     private readonly routingService: RoutingService,
+    private readonly checklistTemplatesService: ChecklistTemplatesService,
+    private readonly checklistExecutionsService: ChecklistExecutionsService,
     private readonly tenantContext: TenantContext,
     private readonly driverContext: DriverContext,
   ) {}
@@ -345,6 +361,111 @@ export class DriverTripsController {
       id,
       eventId,
       dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  // ==========================================================================
+  // CHECKLIST (Fase 38) -- ChecklistsService vive em modulo proprio
+  // (ChecklistsModule), importado aqui exatamente como FuelSuppliesModule:
+  // nenhum controller/guard duplicado, so mais metodos nesta classe (mesmo
+  // padrao ja usado para fuel-supplies/axle-events acima).
+  // ==========================================================================
+
+  @Get('checklists/available')
+  @ApiOperation({ summary: 'Templates de checklist PUBLISHED disponiveis para este motorista iniciar.' })
+  @ApiOkResponse({ type: ChecklistTemplateEntity, isArray: true })
+  findAvailableChecklists(): Promise<ChecklistTemplateEntity[]> {
+    return this.checklistTemplatesService.findPublishedForDriver(this.tenantContext.requireTenantId());
+  }
+
+  @Post('checklists')
+  @ApiOperation({ summary: 'Inicia uma execucao de checklist a partir de um template PUBLISHED. Idempotente por deviceEventId.' })
+  @ApiOkResponse({ type: ChecklistExecutionEntity })
+  createChecklist(@Body() dto: CreateChecklistExecutionDto): Promise<ChecklistExecutionEntity> {
+    return this.checklistExecutionsService.create(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get('checklists/:id')
+  @ApiOperation({ summary: 'Detalhe de uma execucao de checklist deste motorista (com respostas e evidencias).' })
+  @ApiOkResponse({ type: ChecklistExecutionEntity })
+  findOneChecklist(@Param('id', ParseUUIDPipe) id: string): Promise<ChecklistExecutionEntity> {
+    return this.checklistExecutionsService.findOneForDriver(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+    );
+  }
+
+  @Post('checklists/:id/answers')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Envia um lote de respostas (upsert por item -- reenvio apos reconexao e idempotente).' })
+  @ApiOkResponse({ type: ChecklistAnswersSubmitResultEntity })
+  submitChecklistAnswers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SubmitChecklistAnswersDto,
+  ): Promise<ChecklistAnswersSubmitResultEntity> {
+    return this.checklistExecutionsService.submitAnswers(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+      dto,
+    );
+  }
+
+  @Post('checklists/:id/evidence')
+  @UseInterceptors(FileInterceptor('file'))
+  @UseFilters(MulterExceptionFilter)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'deviceEventId', 'type'],
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Foto (camera) ou assinatura exportada como PNG.' },
+        deviceEventId: { type: 'string' },
+        type: { type: 'string' },
+        answerId: { type: 'string', format: 'uuid' },
+        description: { type: 'string' },
+        latitude: { type: 'number' },
+        longitude: { type: 'number' },
+      },
+    },
+  })
+  @ApiOperation({ summary: 'Envia uma evidencia (foto/assinatura) para a execucao. Idempotente por deviceEventId.' })
+  @ApiOkResponse({ type: ChecklistEvidenceEntity })
+  addChecklistEvidence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UploadChecklistEvidenceDto,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<ChecklistEvidenceEntity> {
+    return this.checklistExecutionsService.addEvidence(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+      dto,
+      file,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post('checklists/:id/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Conclui o checklist (idempotente -- reenviar numa execucao ja concluida devolve o mesmo estado).' })
+  @ApiOkResponse({ type: ChecklistExecutionEntity })
+  completeChecklist(@Param('id', ParseUUIDPipe) id: string): Promise<ChecklistExecutionEntity> {
+    return this.checklistExecutionsService.complete(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );

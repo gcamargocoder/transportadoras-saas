@@ -24,6 +24,13 @@ export interface AppConfig {
     storageDir: string;
     maxFileSizeMb: number;
   };
+  // Fase 39 -- evidencia de checklist (foto/assinatura). Mesmo padrao de
+  // tollImport (disco privado, nunca servido estaticamente) -- storage
+  // separado por dominio, nunca compartilhado com tollImport.
+  checklistEvidence: {
+    storageDir: string;
+    maxFileSizeMb: number;
+  };
   routing: {
     // Nunca logar/expor esta chave (nem para o frontend, nem em erro) -- ver
     // GoogleRoutingProvider. Ausente = feature desabilitada (ver
@@ -71,6 +78,10 @@ export default (): AppConfig => ({
   tollImport: {
     storageDir: process.env.TOLL_IMPORT_STORAGE_DIR ?? './storage/toll-imports',
     maxFileSizeMb: parseInt(process.env.TOLL_IMPORT_MAX_FILE_SIZE_MB ?? '10', 10),
+  },
+  checklistEvidence: {
+    storageDir: process.env.CHECKLIST_EVIDENCE_STORAGE_DIR ?? './storage/checklist-evidence',
+    maxFileSizeMb: parseInt(process.env.CHECKLIST_EVIDENCE_MAX_FILE_SIZE_MB ?? '8', 10),
   },
   routing: {
     googleRoutesApiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,

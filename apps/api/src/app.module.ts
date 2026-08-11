@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { ChecklistsModule } from './checklists/checklists.module';
 import { CommonModule } from './common/common.module';
 import { buildThrottlerOptions } from './common/config/throttler.config';
 import { AppConfig } from './config/configuration';
@@ -72,6 +73,7 @@ import { UsersModule } from './users/users.module';
     DashboardModule,
     TiresModule,
     RoutingModule,
+    ChecklistsModule,
     DriverTripsModule,
     TollDataModule,
   ],

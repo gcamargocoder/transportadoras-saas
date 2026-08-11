@@ -96,3 +96,55 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   return (json as ApiSuccessResponse<T>).data;
 }
+
+export interface UploadFilePart {
+  uri: string;
+  name: string;
+  type: string;
+}
+
+// Fase 39 -- upload multipart (evidencia de checklist). Mesma logica de
+// autenticacao/refresh de apiRequest, mas o corpo e FormData -- nunca
+// definir Content-Type manualmente (fetch/RN gera o boundary correto
+// sozinho ao ver um FormData; sobrescrever quebraria o upload).
+export async function apiUpload<T>(
+  path: string,
+  fields: Record<string, string | undefined>,
+  file: UploadFilePart,
+  skipAuthRetry = false,
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (accessTokenCache) headers.Authorization = `Bearer ${accessTokenCache}`;
+
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) formData.append(key, value);
+  }
+  // React Native FormData aceita um objeto {uri,name,type} no lugar de um
+  // Blob (API do browser) -- cast necessario porque o tipo padrao do DOM
+  // (lib.dom FormData) nao conhece essa forma especifica do RN.
+  formData.append('file', file as unknown as Blob);
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  const json: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    if (response.status === 401 && !skipAuthRetry) {
+      const refreshed = await performRefresh();
+      if (refreshed) {
+        return apiUpload<T>(path, fields, file, true);
+      }
+      await clearSession();
+      accessTokenCache = null;
+      sessionExpiredHandler?.();
+    }
+    throw new ApiError(response.status, json as ApiErrorResponse | null);
+  }
+
+  return (json as ApiSuccessResponse<T>).data;
+}

@@ -553,6 +553,9 @@ model Tenant {
   tireRetreads            TireRetread[]
   tireInspections         TireInspection[]
   tireDisposals           TireDisposal[]
+  checklistTemplates      ChecklistTemplate[]
+  checklistExecutions     ChecklistExecution[]
+  checklistEvidence       ChecklistEvidence[]
 
   @@map("tenants")
 }
@@ -764,6 +767,7 @@ model Vehicle {
   tires                   Tire[]               @relation("TireCurrentVehicle")
   tireMovementsAsPrevious TireMovement[]       @relation("TireMovementPreviousVehicle")
   tireMovementsAsNew      TireMovement[]       @relation("TireMovementNewVehicle")
+  checklistExecutions     ChecklistExecution[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -1073,6 +1077,7 @@ model Trailer {
   tires                   Tire[]                   @relation("TireCurrentTrailer")
   tireMovementsAsPrevious TireMovement[]           @relation("TireMovementPreviousTrailer")
   tireMovementsAsNew      TireMovement[]           @relation("TireMovementNewTrailer")
+  checklistExecutions     ChecklistExecution[]
 
   @@unique([tenantId, plate])
   @@index([tenantId])
@@ -1160,16 +1165,17 @@ model Driver {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userAccount      UserAccount?      @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
-  trips            Trip[]
-  shifts           DriverShift[]
-  tollTransactions TollTransaction[]
-  tripExpenses     TripExpense[]
-  tripAdvances     TripAdvance[]
-  fuelSupplies     FuelSupply[]
-  tripStops        TripStop[]
-  axleEvents       AxleEvent[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userAccount         UserAccount?         @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
+  trips               Trip[]
+  shifts              DriverShift[]
+  tollTransactions    TollTransaction[]
+  tripExpenses        TripExpense[]
+  tripAdvances        TripAdvance[]
+  fuelSupplies        FuelSupply[]
+  tripStops           TripStop[]
+  axleEvents          AxleEvent[]
+  checklistExecutions ChecklistExecution[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
@@ -1389,23 +1395,24 @@ model Trip {
   // RoutePlan.tripId) -- ver comentario em RoutePlan.
   currentRoutePlan RoutePlan? @relation("CurrentRoutePlan", fields: [routePlanId], references: [id], onDelete: SetNull)
 
-  composition      TripComposition?
-  routeVersions    RouteVersion[]
-  routeEvents      RouteEvent[]
-  routePlans       RoutePlan[]       @relation("TripRoutePlans")
-  trackingPoints   TrackingPoint[]
-  alerts           Alert[]
-  tollTransactions TollTransaction[]
-  expenses         TripExpense[]
-  revenues         TripRevenue[]
-  advances         TripAdvance[]
-  settlement       TripSettlement?
-  fuelSupplies     FuelSupply[]
-  metrics          TripMetrics?
-  driverShifts     DriverShift[]
-  telemetry        Telemetry[]
-  tripStops        TripStop[]
-  axleEvents       AxleEvent[]
+  composition         TripComposition?
+  routeVersions       RouteVersion[]
+  routeEvents         RouteEvent[]
+  routePlans          RoutePlan[]          @relation("TripRoutePlans")
+  trackingPoints      TrackingPoint[]
+  alerts              Alert[]
+  tollTransactions    TollTransaction[]
+  expenses            TripExpense[]
+  revenues            TripRevenue[]
+  advances            TripAdvance[]
+  settlement          TripSettlement?
+  fuelSupplies        FuelSupply[]
+  metrics             TripMetrics?
+  driverShifts        DriverShift[]
+  telemetry           Telemetry[]
+  tripStops           TripStop[]
+  axleEvents          AxleEvent[]
+  checklistExecutions ChecklistExecution[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -2437,15 +2444,297 @@ model Attachment {
   uploadedById String?        @map("uploaded_by_id") @db.Uuid
   createdAt    DateTime       @default(now()) @map("created_at")
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  document     Document?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
-  tripExpenses TripExpense[]
-  tripRevenues TripRevenue[]
-  tripAdvances TripAdvance[]
-  fuelSupplies FuelSupply[]
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document          Document?           @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  tripExpenses      TripExpense[]
+  tripRevenues      TripRevenue[]
+  tripAdvances      TripAdvance[]
+  fuelSupplies      FuelSupply[]
+  /// Fase 38 -- evidencia de checklist (foto/assinatura) reusa este
+  /// mecanismo de storage existente em vez de criar um novo (ver
+  /// ChecklistEvidence.attachmentId).
+  checklistEvidence ChecklistEvidence[]
 
   @@index([tenantId, entityName, entityId])
   @@map("attachments")
+}
+
+// ============================================================================
+// CHECKLIST OPERACIONAL (Fase 38) — fundacao parametrizavel: Template ->
+// Section -> Item -> Execution -> Answer -> Evidence. Suporta qualquer
+// modelo de checklist (Sider, Bau, Graneleiro...) sem virar colunas fixas
+// no banco -- o formulario real de 32 itens (Sider) e representado como
+// dados (sections/items), nunca como schema. Upload real de foto fica para
+// fase futura: ChecklistEvidence.attachmentId aponta para o Attachment ja
+// existente (nunca um storage novo) quando essa fase existir.
+// ============================================================================
+
+enum ChecklistType {
+  PRE_TRIP
+  POST_TRIP
+  MAINTENANCE
+  TRAILER
+  SAFETY
+  ACCIDENT
+  AUDIT
+
+  @@map("checklist_type")
+}
+
+/// DRAFT = editavel; PUBLISHED = imutavel (alteracao estrutural exige nova
+/// versao, ver ChecklistTemplate.previousVersionId); ARCHIVED = fora de uso,
+/// nunca aparece em `driver/checklists/available`, mas o historico de
+/// execucoes antigas continua consultavel.
+enum ChecklistTemplateStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+
+  @@map("checklist_template_status")
+}
+
+/// Extensivel de proposito (seção 7 da Fase 38) -- nesta fase so BOOLEAN e
+/// funcionalmente validado ponta a ponta; os demais existem para nao
+/// travar a evolucao do formulario (ex: TEXT para observacao, PHOTO para
+/// "foto do 1o eixo", ODOMETER para o campo de KM).
+enum ChecklistItemType {
+  BOOLEAN
+  TEXT
+  NUMBER
+  PHOTO
+  SIGNATURE
+  ODOMETER
+  SELECT
+
+  @@map("checklist_item_type")
+}
+
+enum ChecklistExecutionStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+
+  @@map("checklist_execution_status")
+}
+
+enum ChecklistEvidenceType {
+  ODOMETER
+  AXLE_1
+  AXLE_2
+  AXLE_3
+  GENERAL
+  DAMAGE
+  SIGNATURE
+
+  @@map("checklist_evidence_type")
+}
+
+/// Modelo reutilizavel de checklist. Versionado: uma alteracao estrutural em
+/// um template PUBLISHED nunca modifica retroativamente execucoes ja feitas
+/// -- cria uma nova linha (nova versao), preservando a antiga intacta e
+/// ligada via previousVersionId (mesmo espirito de "fecha o antigo, cria o
+/// novo" ja usado em TollRatesService, so que aqui o "fechar" e status
+/// PUBLISHED->ARCHIVED feito manualmente pelo admin, nunca automatico).
+model ChecklistTemplate {
+  id                String                  @id @default(uuid()) @db.Uuid
+  tenantId          String                  @map("tenant_id") @db.Uuid
+  name              String
+  description       String?
+  type              ChecklistType
+  /// Tipo de veiculo/carreta ao qual este template se aplica -- reusa os
+  /// enums ja existentes (VehicleType/TrailerType), nunca duplicados aqui.
+  /// Nenhum dos dois e obrigatorio: um template pode ser generico.
+  vehicleType       VehicleType?            @map("vehicle_type")
+  trailerType       TrailerType?            @map("trailer_type")
+  version           Int                     @default(1)
+  status            ChecklistTemplateStatus @default(DRAFT)
+  /// Aponta para a versao anterior que este template substitui (preenchido
+  /// somente quando criado via POST .../versions). Unique: uma versao
+  /// anterior so pode ser sucedida por uma unica nova versao (sem
+  /// ramificacao).
+  previousVersionId String?                 @unique @map("previous_version_id") @db.Uuid
+  publishedAt       DateTime?               @map("published_at")
+  archivedAt        DateTime?               @map("archived_at")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  previousVersion ChecklistTemplate?   @relation("ChecklistTemplateVersions", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  nextVersion     ChecklistTemplate?   @relation("ChecklistTemplateVersions")
+  sections        ChecklistSection[]
+  executions      ChecklistExecution[]
+
+  @@index([tenantId, type, status])
+  @@map("checklist_templates")
+}
+
+/// Agrupamento de itens dentro de um template (ex: SEGURANCA, PNEUS,
+/// FREIOS). Pertence a UM template/versao especifica -- nunca compartilhada
+/// entre versoes (uma nova versao copia suas proprias sections).
+model ChecklistSection {
+  id          String   @id @default(uuid()) @db.Uuid
+  templateId  String   @map("template_id") @db.Uuid
+  title       String
+  description String?
+  /// Ordem explicita de exibicao (seção 6 da Fase 38) -- nunca inferida da
+  /// ordem de insercao no banco.
+  order       Int
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items    ChecklistItem[]
+
+  @@index([templateId])
+  @@map("checklist_sections")
+}
+
+/// Pergunta/campo dentro de uma section. `code` e estavel dentro da mesma
+/// section (ex: "cinto_seguranca") -- usado como chave de negocio legivel,
+/// distinta do uuid.
+model ChecklistItem {
+  id                  String            @id @default(uuid()) @db.Uuid
+  sectionId           String            @map("section_id") @db.Uuid
+  code                String
+  label               String
+  description         String?
+  type                ChecklistItemType
+  required            Boolean           @default(false)
+  order               Int
+  requiresObservation Boolean           @default(false) @map("requires_observation")
+  requiresPhoto       Boolean           @default(false) @map("requires_photo")
+  /// Item cuja resposta negativa representa uma nao-conformidade relevante
+  /// (ex: freio, cinto). Nesta fase apenas preserva a informacao (ver
+  /// ChecklistExecutionsService.hasCriticalNonConformity) -- nao bloqueia
+  /// nada automaticamente (seção 16 da Fase 38).
+  critical            Boolean           @default(false)
+  /// Configuracao extra especifica do tipo (ex: opcoes de um SELECT). Sem
+  /// uso funcional nesta fase -- so BOOLEAN e validado ponta a ponta.
+  options             Json?
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  section  ChecklistSection    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  answers  ChecklistAnswer[]
+  evidence ChecklistEvidence[]
+
+  @@unique([sectionId, code])
+  @@index([sectionId])
+  @@map("checklist_items")
+}
+
+/// Uma execucao real de um template, feita por um motorista. `templateId`
+/// ja fixa a versao exata (cada versao e uma linha propria de
+/// ChecklistTemplate); `templateVersion` e uma copia denormalizada do
+/// numero de versao no momento da execucao, so para leitura/exibicao sem
+/// join (nunca recalculada depois -- ver seção 5 da Fase 38).
+model ChecklistExecution {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  tenantId           String                   @map("tenant_id") @db.Uuid
+  templateId         String                   @map("template_id") @db.Uuid
+  templateVersion    Int                      @map("template_version")
+  tripId             String?                  @map("trip_id") @db.Uuid
+  driverId           String?                  @map("driver_id") @db.Uuid
+  vehicleId          String?                  @map("vehicle_id") @db.Uuid
+  trailerId          String?                  @map("trailer_id") @db.Uuid
+  status             ChecklistExecutionStatus @default(IN_PROGRESS)
+  /// Gerado pelo dispositivo -- garante idempotencia (mesmo padrao de
+  /// TripStop/AxleEvent/FuelSupply, ver trip-operations).
+  deviceEventId      String                   @map("device_event_id")
+  startedAt          DateTime                 @default(now()) @map("started_at")
+  completedAt        DateTime?                @map("completed_at")
+  latitude           Decimal?                 @db.Decimal(10, 7)
+  longitude          Decimal?                 @db.Decimal(10, 7)
+  address            String?
+  /// Valor informado (numero). Distinto da evidencia fotografica do
+  /// odometro (ChecklistEvidence type=ODOMETER) -- os dois podem coexistir,
+  /// nunca sao confundidos (seção 15 da Fase 38).
+  odometerKm         Decimal?                 @map("odometer_km") @db.Decimal(10, 1)
+  inspectionLocation String?                  @map("inspection_location")
+  responsibleName    String?                  @map("responsible_name")
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template ChecklistTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  trip     Trip?               @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  driver   Driver?             @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle  Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  trailer  Trailer?            @relation(fields: [trailerId], references: [id], onDelete: SetNull)
+  answers  ChecklistAnswer[]
+  evidence ChecklistEvidence[]
+
+  @@unique([tenantId, deviceEventId])
+  @@index([tenantId, status])
+  @@index([tripId])
+  @@index([driverId])
+  @@index([vehicleId])
+  @@map("checklist_executions")
+}
+
+/// Resposta de um item dentro de uma execucao. Unique (executionId, itemId)
+/// -- nunca duas respostas para o mesmo item na mesma execucao (seção 8 da
+/// Fase 38); reenvio idempotente faz upsert sobre essa mesma chave, nunca
+/// cria uma segunda linha.
+model ChecklistAnswer {
+  id            String   @id @default(uuid()) @db.Uuid
+  executionId   String   @map("execution_id") @db.Uuid
+  itemId        String   @map("item_id") @db.Uuid
+  booleanValue  Boolean? @map("boolean_value")
+  textValue     String?  @map("text_value")
+  numberValue   Decimal? @map("number_value") @db.Decimal(10, 2)
+  selectedValue String?  @map("selected_value")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  execution ChecklistExecution  @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  item      ChecklistItem       @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  evidence  ChecklistEvidence[]
+
+  @@unique([executionId, itemId])
+  @@map("checklist_answers")
+}
+
+/// Foto/assinatura associada a uma execucao (e opcionalmente a um item/
+/// resposta especifica). `attachmentId` aponta para o Attachment generico
+/// ja existente (reusado, nunca um storage novo) -- populado desde a Fase
+/// 39 via POST driver/checklists/:id/evidence (multer, disco privado,
+/// mesmo padrao de toll-import). `deviceEventId` (Fase 39) garante
+/// idempotencia de upload -- mesmo padrao de deviceEventId ja usado em
+/// ChecklistExecution/AxleEvent/TripStop. `itemId` (Fase 39) e a
+/// associacao PRIMARIA com o item do template -- deliberadamente
+/// independente de `answerId` (que so existe depois que a resposta foi
+/// enviada ao servidor): a foto de um item PHOTO precisa poder ser
+/// capturada e enfileirada offline SEM depender de uma resposta ja
+/// confirmada no servidor. `answerId` continua existindo para o caso em
+/// que a evidencia complementa uma resposta ja conhecida.
+model ChecklistEvidence {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @map("tenant_id") @db.Uuid
+  executionId   String                @map("execution_id") @db.Uuid
+  itemId        String?               @map("item_id") @db.Uuid
+  answerId      String?               @map("answer_id") @db.Uuid
+  type          ChecklistEvidenceType
+  attachmentId  String?               @map("attachment_id") @db.Uuid
+  deviceEventId String                @map("device_event_id")
+  description   String?
+  latitude      Decimal?              @db.Decimal(10, 7)
+  longitude     Decimal?              @db.Decimal(10, 7)
+  capturedAt    DateTime              @default(now()) @map("captured_at")
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  execution  ChecklistExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  item       ChecklistItem?     @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  answer     ChecklistAnswer?   @relation(fields: [answerId], references: [id], onDelete: SetNull)
+  attachment Attachment?        @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+
+  @@unique([executionId, deviceEventId])
+  @@index([executionId])
+  @@index([itemId])
+  @@map("checklist_evidence")
 }
 
 // ============================================================================

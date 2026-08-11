@@ -4,6 +4,8 @@ import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from '../auth/AuthContext';
 import { TripProvider } from '../trip/TripContext';
+import { ChecklistExecutionScreen } from '../screens/ChecklistExecutionScreen';
+import { ChecklistScreen } from '../screens/ChecklistScreen';
 import { FinishTripScreen } from '../screens/FinishTripScreen';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
@@ -71,6 +73,16 @@ export function RootNavigator(): React.JSX.Element {
               name="Stops"
               component={StopsScreen}
               options={{ headerShown: true, title: 'Paradas' }}
+            />
+            <Stack.Screen
+              name="Checklist"
+              component={ChecklistScreen}
+              options={{ headerShown: true, title: 'Checklist' }}
+            />
+            <Stack.Screen
+              name="ChecklistExecution"
+              component={ChecklistExecutionScreen}
+              options={{ headerShown: true, title: 'Checklist' }}
             />
           </Stack.Navigator>
         </TripProvider>

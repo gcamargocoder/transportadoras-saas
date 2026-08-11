@@ -24,6 +24,14 @@
           "locationWhenInUsePermission": "Permita o acesso a localizacao para o app registrar sua posicao durante a viagem.",
           "isAndroidBackgroundLocationEnabled": false
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Permita o acesso a camera para tirar fotos do checklist de viagem.",
+          "photosPermission": false,
+          "microphonePermission": false
+        }
       ]
     ]
   }

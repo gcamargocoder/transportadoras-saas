@@ -332,3 +332,55 @@ export const SyncStatus = {
   FAILED: 'FAILED',
 } as const;
 export type SyncStatus = (typeof SyncStatus)[keyof typeof SyncStatus];
+
+// Fase 38 -- checklist operacional (Template -> Section -> Item -> Execution -> Answer -> Evidence).
+export const ChecklistType = {
+  PRE_TRIP: 'PRE_TRIP',
+  POST_TRIP: 'POST_TRIP',
+  MAINTENANCE: 'MAINTENANCE',
+  TRAILER: 'TRAILER',
+  SAFETY: 'SAFETY',
+  ACCIDENT: 'ACCIDENT',
+  AUDIT: 'AUDIT',
+} as const;
+export type ChecklistType = (typeof ChecklistType)[keyof typeof ChecklistType];
+
+export const ChecklistTemplateStatus = {
+  DRAFT: 'DRAFT',
+  PUBLISHED: 'PUBLISHED',
+  ARCHIVED: 'ARCHIVED',
+} as const;
+export type ChecklistTemplateStatus = (typeof ChecklistTemplateStatus)[keyof typeof ChecklistTemplateStatus];
+
+// So BOOLEAN e funcionalmente validado ponta a ponta nesta fase -- os
+// demais existem como preparacao arquitetural (ver docs/checklist-module.md).
+export const ChecklistItemType = {
+  BOOLEAN: 'BOOLEAN',
+  TEXT: 'TEXT',
+  NUMBER: 'NUMBER',
+  PHOTO: 'PHOTO',
+  SIGNATURE: 'SIGNATURE',
+  ODOMETER: 'ODOMETER',
+  SELECT: 'SELECT',
+} as const;
+export type ChecklistItemType = (typeof ChecklistItemType)[keyof typeof ChecklistItemType];
+
+export const ChecklistExecutionStatus = {
+  DRAFT: 'DRAFT',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type ChecklistExecutionStatus = (typeof ChecklistExecutionStatus)[keyof typeof ChecklistExecutionStatus];
+
+export const ChecklistEvidenceType = {
+  ODOMETER: 'ODOMETER',
+  AXLE_1: 'AXLE_1',
+  AXLE_2: 'AXLE_2',
+  AXLE_3: 'AXLE_3',
+  GENERAL: 'GENERAL',
+  DAMAGE: 'DAMAGE',
+  SIGNATURE: 'SIGNATURE',
+} as const;
+export type ChecklistEvidenceType = (typeof ChecklistEvidenceType)[keyof typeof ChecklistEvidenceType];

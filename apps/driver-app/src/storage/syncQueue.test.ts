@@ -1,10 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as driverChecklistApi from '../api/driverChecklist.api';
 import * as driverTripsApi from '../api/driverTrips.api';
 import { flushQueue, pendingCount, submitOrQueue } from './syncQueue';
 
 jest.mock('../api/driverTrips.api');
+jest.mock('../api/driverChecklist.api');
 
 const api = driverTripsApi as jest.Mocked<typeof driverTripsApi>;
+const checklistApi = driverChecklistApi as jest.Mocked<typeof driverChecklistApi>;
 
 // Fase 31, Parte 5 -- fila offline (pause/resume/complete). Reaproveita
 // integralmente o mock oficial de AsyncStorage (em memoria, ver
@@ -169,6 +172,135 @@ describe('syncQueue -- pause/resume/complete', () => {
       // cliente, a fila nunca tenta "mesclar" ou deduplicar as duas acoes.
       expect(result.sent).toBe(2);
       expect(api.completeTrip).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  // Fase 39 -- checklist operacional. Mesmo padrao dos kinds acima; a
+  // CRIACAO da execucao nunca passa por aqui (ver comentario em
+  // syncQueue.ts) -- so respostas/evidencia/conclusao.
+  describe('CHECKLIST-ANSWERS', () => {
+    it('online: envia imediatamente e nao enfileira', async () => {
+      checklistApi.submitChecklistAnswers.mockResolvedValue({ created: 1, updated: 0 });
+
+      const result = await submitOrQueue({
+        kind: 'checklist-answers',
+        executionId: 'exec-1',
+        answers: [{ itemId: 'item-1', booleanValue: true }],
+      });
+
+      expect(result.queued).toBe(false);
+      expect(checklistApi.submitChecklistAnswers).toHaveBeenCalledWith('exec-1', [
+        { itemId: 'item-1', booleanValue: true },
+      ]);
+      expect(await pendingCount()).toBe(0);
+    });
+
+    it('offline: entra na fila', async () => {
+      checklistApi.submitChecklistAnswers.mockRejectedValue(new Error('network down'));
+
+      const result = await submitOrQueue({
+        kind: 'checklist-answers',
+        executionId: 'exec-1',
+        answers: [{ itemId: 'item-1', booleanValue: false }],
+      });
+
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(1);
+    });
+  });
+
+  describe('CHECKLIST-COMPLETE', () => {
+    it('online: envia imediatamente', async () => {
+      checklistApi.completeChecklist.mockResolvedValue({} as never);
+
+      const result = await submitOrQueue({ kind: 'checklist-complete', executionId: 'exec-1' });
+
+      expect(result.queued).toBe(false);
+      expect(checklistApi.completeChecklist).toHaveBeenCalledWith('exec-1');
+    });
+
+    it('offline: entra na fila', async () => {
+      checklistApi.completeChecklist.mockRejectedValue(new Error('network down'));
+
+      const result = await submitOrQueue({ kind: 'checklist-complete', executionId: 'exec-1' });
+
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(1);
+    });
+
+    it('reenviar complete numa execucao ja concluida nao duplica localmente (idempotencia fica no backend)', async () => {
+      checklistApi.completeChecklist.mockResolvedValue({} as never);
+
+      await submitOrQueue({ kind: 'checklist-complete', executionId: 'exec-1' });
+      await submitOrQueue({ kind: 'checklist-complete', executionId: 'exec-1' });
+
+      expect(checklistApi.completeChecklist).toHaveBeenCalledTimes(2);
+      expect(await pendingCount()).toBe(0);
+    });
+  });
+
+  describe('CHECKLIST-EVIDENCE', () => {
+    it('online: envia o arquivo local (path persistido) imediatamente', async () => {
+      checklistApi.uploadChecklistEvidence.mockResolvedValue({} as never);
+
+      const result = await submitOrQueue({
+        kind: 'checklist-evidence',
+        executionId: 'exec-1',
+        deviceEventId: 'dev-1',
+        type: 'GENERAL',
+        itemId: 'item-2',
+        localFileUri: 'file:///docs/checklist-evidence/foto.jpg',
+        fileName: 'foto.jpg',
+        mimeType: 'image/jpeg',
+      });
+
+      expect(result.queued).toBe(false);
+      expect(checklistApi.uploadChecklistEvidence).toHaveBeenCalledWith(
+        'exec-1',
+        { deviceEventId: 'dev-1', type: 'GENERAL', itemId: 'item-2' },
+        { uri: 'file:///docs/checklist-evidence/foto.jpg', name: 'foto.jpg', type: 'image/jpeg' },
+      );
+    });
+
+    it('offline: entra na fila -- o arquivo local persistido garante que a foto nao se perde', async () => {
+      checklistApi.uploadChecklistEvidence.mockRejectedValue(new Error('network down'));
+
+      const result = await submitOrQueue({
+        kind: 'checklist-evidence',
+        executionId: 'exec-1',
+        deviceEventId: 'dev-2',
+        type: 'SIGNATURE',
+        itemId: 'item-3',
+        localFileUri: 'file:///docs/checklist-evidence/assinatura.png',
+        fileName: 'assinatura.png',
+        mimeType: 'image/png',
+      });
+
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(1);
+    });
+
+    it('retry apos reconexao envia a mesma evidencia (deviceEventId identico) -- idempotencia fica no backend', async () => {
+      checklistApi.uploadChecklistEvidence.mockRejectedValueOnce(new Error('offline'));
+      await submitOrQueue({
+        kind: 'checklist-evidence',
+        executionId: 'exec-1',
+        deviceEventId: 'dev-3',
+        type: 'GENERAL',
+        itemId: 'item-4',
+        localFileUri: 'file:///docs/checklist-evidence/foto2.jpg',
+        fileName: 'foto2.jpg',
+        mimeType: 'image/jpeg',
+      });
+      expect(await pendingCount()).toBe(1);
+
+      checklistApi.uploadChecklistEvidence.mockResolvedValue({} as never);
+      const result = await flushQueue();
+
+      expect(result.sent).toBe(1);
+      expect(result.remaining).toBe(0);
+      const [, fields] = checklistApi.uploadChecklistEvidence.mock.calls[1]!;
+      expect(fields.deviceEventId).toBe('dev-3');
     });
   });
 });

@@ -5,6 +5,11 @@ import type {
   AlertSeverity,
   AlertType,
   AxleEventSource,
+  ChecklistEvidenceType,
+  ChecklistExecutionStatus,
+  ChecklistItemType,
+  ChecklistTemplateStatus,
+  ChecklistType,
   DocumentType,
   ExpenseCategory,
   ExpensePaymentMethod,
@@ -1095,4 +1100,102 @@ export interface RoutePlanComparisonEntity {
   previous: RoutePlanEntity | null;
   next: RoutePlanEntity;
   difference: RouteComparisonEntity | null;
+}
+
+// Fase 38 -- checklist operacional. Ver docs/checklist-module.md.
+export interface ChecklistItemEntity {
+  id: string;
+  sectionId: string;
+  code: string;
+  label: string;
+  description: string | null;
+  type: ChecklistItemType;
+  required: boolean;
+  order: number;
+  requiresObservation: boolean;
+  requiresPhoto: boolean;
+  critical: boolean;
+  options: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChecklistSectionEntity {
+  id: string;
+  templateId: string;
+  title: string;
+  description: string | null;
+  order: number;
+  items: ChecklistItemEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChecklistTemplateEntity {
+  id: string;
+  tenantId: string;
+  name: string;
+  description: string | null;
+  type: ChecklistType;
+  vehicleType: VehicleType | null;
+  trailerType: TrailerType | null;
+  version: number;
+  status: ChecklistTemplateStatus;
+  previousVersionId: string | null;
+  publishedAt: string | null;
+  archivedAt: string | null;
+  sections: ChecklistSectionEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChecklistEvidenceEntity {
+  id: string;
+  executionId: string;
+  answerId: string | null;
+  type: ChecklistEvidenceType;
+  attachmentId: string | null;
+  description: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  capturedAt: string;
+  createdAt: string;
+}
+
+export interface ChecklistAnswerEntity {
+  id: string;
+  executionId: string;
+  itemId: string;
+  booleanValue: boolean | null;
+  textValue: string | null;
+  numberValue: number | null;
+  selectedValue: string | null;
+  evidence: ChecklistEvidenceEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChecklistExecutionEntity {
+  id: string;
+  tenantId: string;
+  templateId: string;
+  templateVersion: number;
+  tripId: string | null;
+  driverId: string | null;
+  vehicleId: string | null;
+  trailerId: string | null;
+  status: ChecklistExecutionStatus;
+  startedAt: string;
+  completedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  address: string | null;
+  odometerKm: number | null;
+  inspectionLocation: string | null;
+  responsibleName: string | null;
+  hasCriticalNonConformity: boolean;
+  answers: ChecklistAnswerEntity[];
+  evidence: ChecklistEvidenceEntity[];
+  createdAt: string;
+  updatedAt: string;
 }

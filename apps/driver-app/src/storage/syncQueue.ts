@@ -1,4 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as driverChecklistApi from '../api/driverChecklist.api';
+import { ChecklistAnswerInput, ChecklistEvidenceType } from '../api/driverChecklist.types';
 import * as driverTripsApi from '../api/driverTrips.api';
 import { AxleEventSource, TrackingPointInput } from '../api/driverTrips.types';
 import { compact } from '../utils/compact';
@@ -47,7 +49,37 @@ type PendingAction =
   // nunca por deviceEventId) -- nao precisam de um id de deduplicacao.
   | { kind: 'pause'; tripId: string; latitude?: number; longitude?: number }
   | { kind: 'resume'; tripId: string; latitude?: number; longitude?: number }
-  | { kind: 'complete'; tripId: string; finalOdometerKm?: number; latitude?: number; longitude?: number };
+  | { kind: 'complete'; tripId: string; finalOdometerKm?: number; latitude?: number; longitude?: number }
+  // Fase 39 -- checklist operacional. A CRIACAO da execucao (POST
+  // driver/checklists) NUNCA entra nesta fila: ela devolve o id gerado
+  // pelo servidor, que as 3 acoes abaixo precisam na URL -- enfileirar a
+  // criacao exigiria resolver uma dependencia encadeada que esta fila nao
+  // modela (nenhum kind existente depende do resultado de outro). Por
+  // isso a execucao so e criada com o app ONLINE; a partir dai, responder/
+  // enviar evidencia/concluir reaproveitam esta fila normalmente (ver
+  // docs/checklist-module.md).
+  | { kind: 'checklist-answers'; executionId: string; answers: ChecklistAnswerInput[] }
+  | { kind: 'checklist-complete'; executionId: string }
+  | {
+      kind: 'checklist-evidence';
+      executionId: string;
+      deviceEventId: string;
+      type: ChecklistEvidenceType;
+      // Associacao primaria com o item do template -- nunca depende de um
+      // answerId (a resposta pode nem ter sido enviada ainda quando a foto
+      // e capturada, ver schema.prisma ChecklistEvidence).
+      itemId?: string;
+      answerId?: string;
+      description?: string;
+      latitude?: number;
+      longitude?: number;
+      // Path local persistido (ver storage/evidenceFiles.ts) -- nunca a URI
+      // efemera da camera/ImagePicker, que pode desaparecer do cache do SO
+      // antes do flush acontecer.
+      localFileUri: string;
+      fileName: string;
+      mimeType: string;
+    };
 
 const STORAGE_KEY = 'driverapp.syncQueue';
 
@@ -113,6 +145,29 @@ async function runAction(action: PendingAction): Promise<void> {
           longitude: action.longitude,
         }),
       });
+      return;
+    case 'checklist-answers':
+      await driverChecklistApi.submitChecklistAnswers(action.executionId, action.answers);
+      return;
+    case 'checklist-complete':
+      await driverChecklistApi.completeChecklist(action.executionId);
+      return;
+    case 'checklist-evidence':
+      await driverChecklistApi.uploadChecklistEvidence(
+        action.executionId,
+        {
+          deviceEventId: action.deviceEventId,
+          type: action.type,
+          ...compact({
+            itemId: action.itemId,
+            answerId: action.answerId,
+            description: action.description,
+            latitude: action.latitude,
+            longitude: action.longitude,
+          }),
+        },
+        { uri: action.localFileUri, name: action.fileName, type: action.mimeType },
+      );
       return;
   }
 }

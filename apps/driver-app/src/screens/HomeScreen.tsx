@@ -166,6 +166,11 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
             />
             {syncNotice && <Text style={{ color: colors.textMuted }}>{syncNotice}</Text>}
             <Button
+              label="Checklist pos-viagem"
+              variant="secondary"
+              onPress={() => navigation.navigate('Checklist', { tripId: activeTrip.id, type: 'POST_TRIP' })}
+            />
+            <Button
               label="ENCERRAR VIAGEM"
               variant="danger"
               onPress={() => navigation.navigate('FinishTrip', { tripId: activeTrip.id })}
@@ -272,6 +277,13 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
                   onPress={() => navigation.navigate('Stops', { tripId: activeTrip.id })}
                 />
               </View>
+              <View style={{ flexGrow: 1, minWidth: '45%' }}>
+                <Button
+                  label="Checklist pos-viagem"
+                  variant="secondary"
+                  onPress={() => navigation.navigate('Checklist', { tripId: activeTrip.id, type: 'POST_TRIP' })}
+                />
+              </View>
             </View>
           </>
         ) : (
@@ -279,6 +291,14 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
             <Text style={{ color: colors.text, fontWeight: '700' }}>VIAGEM DESPACHADA</Text>
             <Text style={{ color: colors.text }}>Destino: {activeTrip.destinationName}</Text>
             <Text style={{ color: colors.textMuted }}>Veiculo: {activeTrip.vehiclePlate ?? '-'}</Text>
+            {/* Fase 39 -- checklist pre-viagem e opcional aqui: nunca bloqueia
+                INICIAR VIAGEM (secao 22/44 -- o bloqueio automatico fica
+                para uma fase futura, mediante decisao explicita). */}
+            <Button
+              label="Checklist pre-viagem"
+              variant="secondary"
+              onPress={() => navigation.navigate('Checklist', { tripId: activeTrip.id, type: 'PRE_TRIP' })}
+            />
             <Button
               label="INICIAR VIAGEM"
               onPress={() => navigation.navigate('StartTrip', { tripId: activeTrip.id })}

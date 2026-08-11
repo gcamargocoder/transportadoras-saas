@@ -76,6 +76,18 @@ class EnvironmentVariables {
   @Max(100)
   TOLL_IMPORT_MAX_FILE_SIZE_MB = 10;
 
+  // Fase 39 -- evidencia de checklist (foto/assinatura), disco privado
+  // separado de TOLL_IMPORT_STORAGE_DIR (dominios diferentes, nunca
+  // compartilham diretorio).
+  @IsString()
+  CHECKLIST_EVIDENCE_STORAGE_DIR = './storage/checklist-evidence';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  CHECKLIST_EVIDENCE_MAX_FILE_SIZE_MB = 8;
+
   // Fase 26 -- provider de roteirizacao (Google Routes API). OPCIONAL: sem
   // chave, o modulo de routing fica estruturalmente pronto mas responde com
   // erro claro de "nao configurado" em vez de simular dados (ver
