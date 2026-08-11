@@ -38,6 +38,16 @@ export interface AppConfig {
     tollMatchRadiusMeters: number;
     requestTimeoutMs: number;
   };
+  tollDataSync: {
+    // Fase 33 -- desligado por padrao em dev/test (nunca queremos um teste
+    // rodando `npx jest` disparar uma chamada de rede real para a ANTT sem
+    // querer). Cada execucao (manual ou agendada) e idempotente por si so
+    // (ver TollDataSyncService), entao habilitar nao arrisca duplicar dados.
+    enabled: boolean;
+    // Expressao cron padrao: uma vez por dia, 03:00 (fuso do processo) --
+    // nunca polling agressivo da fonte oficial (secao 10 da fase).
+    cronExpression: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -66,5 +76,9 @@ export default (): AppConfig => ({
     googleRoutesApiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,
     tollMatchRadiusMeters: parseInt(process.env.ROUTING_TOLL_MATCH_RADIUS_METERS ?? '300', 10),
     requestTimeoutMs: parseInt(process.env.ROUTING_REQUEST_TIMEOUT_MS ?? '8000', 10),
+  },
+  tollDataSync: {
+    enabled: (process.env.TOLL_DATA_SYNC_ENABLED ?? 'false').toLowerCase() === 'true',
+    cronExpression: process.env.TOLL_DATA_SYNC_CRON ?? '0 3 * * *',
   },
 });

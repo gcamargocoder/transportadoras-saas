@@ -34,6 +34,17 @@ const RECONCILIATION_TRIP_INCLUDE = {
 type ReconciliationTrip = Prisma.TripGetPayload<{ include: typeof RECONCILIATION_TRIP_INCLUDE }>;
 type TransactionWithPlaza = TollTransaction & { tollPlaza: TollPlaza };
 
+// Fase 36 -- le o metadata (Json) que RoutingService.persistRoutePlan()
+// (Fase 33) ja grava em CADA RoutePlanToll no momento em que a rota e
+// calculada: { tariffSource: 'OFFICIAL_CATALOG' | 'PRICE_PER_AXLE_FORMULA', ... }.
+// Leitura defensiva -- metadata e Json solto no schema, nunca confiar no
+// shape sem checar.
+function readTariffSource(metadata: Prisma.JsonValue | null): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const value = (metadata as Record<string, unknown>).tariffSource;
+  return typeof value === 'string' ? value : null;
+}
+
 @Injectable()
 export class TollReconciliationService {
   constructor(private readonly prisma: PrismaService) {}
@@ -86,9 +97,7 @@ export class TollReconciliationService {
       transactionsByTrip.set(tx.tripId, list);
     }
 
-    const results = trips.map((trip) =>
-      this.computeResult(trip, transactionsByTrip.get(trip.id) ?? []),
-    );
+    const results = trips.map((trip) => this.computeResult(trip, transactionsByTrip.get(trip.id) ?? []));
 
     const dashboard = new TollReconciliationDashboardEntity();
     dashboard.totalTripsWithRoute = results.length;
@@ -263,6 +272,16 @@ export class TollReconciliationService {
   // engano. Pracas descobertas sem correspondencia confiavel (tollPlazaId
   // nulo) sao ignoradas aqui -- nao existe ainda uma TollPlaza real para
   // conciliar contra transacoes por identidade de praca.
+  //
+  // Fase 36 -- para o caminho RoutePlan, le a tarifa oficial DIRETO do
+  // snapshot ja gravado em RoutePlanToll (estimatedAmount +
+  // metadata.tariffSource, gravados por RoutingService.persistRoutePlan()
+  // na Fase 33) -- NUNCA uma nova consulta a TollRate durante a
+  // conciliacao (proibido pela fase: "recalcular tarifa oficial durante
+  // conciliacao"). Isso tambem preserva o historico automaticamente: uma
+  // viagem antiga mantem o RoutePlanToll com o valor vigente na epoca em
+  // que a rota foi calculada, mesmo que o catalogo mude depois -- nenhuma
+  // viagem e recalculada retroativamente.
   private buildRouteStopInputs(trip: ReconciliationTrip): ReconciliationRouteStopInput[] {
     if (trip.tollRoute) {
       return trip.tollRoute.stops.map((stop) => ({
@@ -277,13 +296,23 @@ export class TollReconciliationService {
     if (trip.currentRoutePlan) {
       return trip.currentRoutePlan.tolls
         .filter((toll) => toll.tollPlazaId !== null && toll.tollPlaza !== null)
-        .map((toll) => ({
-          sequence: toll.sequence,
-          tollPlazaId: toll.tollPlazaId as string,
-          tollPlazaName: toll.name,
-          highway: toll.tollPlaza?.highway ?? null,
-          pricePerAxle: toNumberOrNull(toll.tollPlaza?.pricePerAxle),
-        }));
+        .map((toll) => {
+          const officialAmount = toNumberOrNull(toll.estimatedAmount);
+          const isOfficial = readTariffSource(toll.metadata) === 'OFFICIAL_CATALOG';
+          const officialTariffsByAxleCategory =
+            isOfficial && officialAmount !== null && toll.axleCountUsed !== null
+              ? { [`${toll.axleCountUsed} eixos`]: officialAmount }
+              : undefined;
+
+          return {
+            sequence: toll.sequence,
+            tollPlazaId: toll.tollPlazaId as string,
+            tollPlazaName: toll.name,
+            highway: toll.tollPlaza?.highway ?? null,
+            pricePerAxle: toNumberOrNull(toll.tollPlaza?.pricePerAxle),
+            officialTariffsByAxleCategory,
+          };
+        });
     }
 
     return [];

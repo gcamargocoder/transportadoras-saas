@@ -339,6 +339,146 @@ describe('toll-reconciliation.util', () => {
     });
   });
 
+  // Fase 36 -- prioridade da tarifa oficial (TollRate, via
+  // officialTariffsByAxleCategory) sobre o fallback pricePerAxle x eixos.
+  // Alteracao aditiva ao MESMO computeTollReconciliation() -- nenhum motor
+  // paralelo.
+  describe('computeTollReconciliation -- prioridade de tarifa oficial (Fase 36)', () => {
+    it('teste fundamental: tarifa oficial (R$130) prevalece sobre o fallback pricePerAxle x eixos (R$45)', () => {
+      const stop: ReconciliationRouteStopInput = {
+        ...PLAZA_A,
+        pricePerAxle: 5, // fallback daria 5 * 9 = 45.
+        officialTariffsByAxleCategory: { '9 eixos': 130 },
+      };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 130, axleCount: 9 })];
+
+      const result = computeTollReconciliation([stop], transactions, 9);
+
+      expect(result.stops[0]!.expectedAmount).toBe(130);
+      expect(result.stops[0]!.expectedAmount).not.toBe(45);
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+    });
+
+    it('fallback pricePerAxle x eixos continua funcionando quando NAO existe tarifa oficial aplicavel', () => {
+      const stop: ReconciliationRouteStopInput = { ...PLAZA_A, pricePerAxle: 15, officialTariffsByAxleCategory: {} };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 60, axleCount: 4 })];
+
+      const result = computeTollReconciliation([stop], transactions, 4);
+
+      expect(result.stops[0]!.expectedAmount).toBe(60); // 15 * 4, formula preservada.
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+    });
+
+    it('valor previsto nunca vira zero quando ha tarifa oficial de R$0,00 informada explicitamente', () => {
+      // Cenario de guarda: mesmo um valor oficial de fronteira (0) e usado
+      // como veio da fonte -- nunca convertido para "sem tarifa" (isso e
+      // representado por AUSENCIA da chave, nao pelo valor 0).
+      const stop: ReconciliationRouteStopInput = {
+        ...PLAZA_A,
+        pricePerAxle: 15,
+        officialTariffsByAxleCategory: { '4 eixos': 0 },
+      };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 0, axleCount: 4 })];
+
+      const result = computeTollReconciliation([stop], transactions, 4);
+
+      expect(result.stops[0]!.expectedAmount).toBe(0);
+    });
+
+    it('valor realizado continua vindo exclusivamente de TollTransaction.chargedAmount, nunca da tarifa oficial', () => {
+      const stop: ReconciliationRouteStopInput = { ...PLAZA_A, pricePerAxle: 5, officialTariffsByAxleCategory: { '9 eixos': 130 } };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 150, axleCount: 9 })]; // motorista pagou diferente do previsto.
+
+      const result = computeTollReconciliation([stop], transactions, 9);
+
+      expect(result.stops[0]!.expectedAmount).toBe(130); // previsto = tarifa oficial.
+      expect(result.stops[0]!.chargedAmount).toBe(150); // realizado = o que a transacao registrou.
+      expect(result.stops[0]!.verdict).toBe('OVERCHARGE');
+    });
+
+    it('9 eixos (planejamento) usa a tarifa oficial de 9 eixos quando ainda nao ha transacao (NOT_REGISTERED)', () => {
+      const stop: ReconciliationRouteStopInput = {
+        ...PLAZA_A,
+        pricePerAxle: 5,
+        officialTariffsByAxleCategory: { '9 eixos': 130, '7 eixos': 105 },
+      };
+      const result = computeTollReconciliation([stop], [], 9);
+      expect(result.stops[0]!.expectedAmount).toBe(130);
+      expect(result.stops[0]!.verdict).toBe('NOT_REGISTERED');
+    });
+
+    it('7 eixos (excecao real na transacao) usa a tarifa oficial de 7 eixos, mesmo com planejamento de 9', () => {
+      const stop: ReconciliationRouteStopInput = {
+        ...PLAZA_A,
+        pricePerAxle: 5,
+        officialTariffsByAxleCategory: { '9 eixos': 130, '7 eixos': 105 },
+      };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 105, axleCount: 7 })];
+
+      const result = computeTollReconciliation([stop], transactions, 9);
+
+      expect(result.stops[0]!.axleCount).toBe(7);
+      expect(result.stops[0]!.expectedAmount).toBe(105);
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+    });
+
+    it('diferenca entre tarifa prevista (oficial) e realizada e refletida em discrepancyAmount', () => {
+      const stop: ReconciliationRouteStopInput = { ...PLAZA_A, pricePerAxle: 5, officialTariffsByAxleCategory: { '9 eixos': 130 } };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 140, axleCount: 9 })];
+
+      const result = computeTollReconciliation([stop], transactions, 9);
+
+      expect(result.stops[0]!.discrepancyAmount).toBe(10);
+      expect(result.stops[0]!.verdict).toBe('OVERCHARGE');
+    });
+
+    it('RoutePlanToll/tarifa oficial ausente (officialTariffsByAxleCategory undefined) preserva o comportamento anterior a Fase 36', () => {
+      const stop: ReconciliationRouteStopInput = { ...PLAZA_A, pricePerAxle: 15 }; // sem o campo novo.
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 60, axleCount: 4 })];
+
+      const result = computeTollReconciliation([stop], transactions, 4);
+
+      expect(result.stops[0]!.expectedAmount).toBe(60); // formula, exatamente como antes da Fase 36.
+    });
+
+    it('tarifa oficial para uma categoria de eixos DIFERENTE da parada nao e usada por engano (sem entrada = cai no fallback)', () => {
+      const stop: ReconciliationRouteStopInput = {
+        ...PLAZA_A,
+        pricePerAxle: 15,
+        officialTariffsByAxleCategory: { '9 eixos': 130 }, // so tem 9 eixos cadastrada.
+      };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 60, axleCount: 4 })]; // parada real e 4 eixos.
+
+      const result = computeTollReconciliation([stop], transactions, 9);
+
+      expect(result.stops[0]!.expectedAmount).toBe(60); // 15 * 4 (fallback) -- nunca usa o valor de "9 eixos".
+    });
+
+    it('sem tarifa oficial e sem pricePerAxle: continua UNVERIFIABLE, nunca inventa um valor', () => {
+      const stop: ReconciliationRouteStopInput = { ...PLAZA_A, pricePerAxle: null, officialTariffsByAxleCategory: {} };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 60, axleCount: 4 })];
+
+      const result = computeTollReconciliation([stop], transactions, 4);
+
+      expect(result.stops[0]!.expectedAmount).toBeNull();
+      expect(result.stops[0]!.verdict).toBe('UNVERIFIABLE');
+    });
+
+    it('tarifa oficial disponivel mas pricePerAxle nulo: ainda assim usa a tarifa oficial (nao depende do fallback existir)', () => {
+      const stop: ReconciliationRouteStopInput = {
+        ...PLAZA_A,
+        pricePerAxle: null,
+        officialTariffsByAxleCategory: { '9 eixos': 130 },
+      };
+      const transactions = [tx({ tollPlazaId: 'plaza-a', chargedAmount: 130, axleCount: 9 })];
+
+      const result = computeTollReconciliation([stop], transactions, 9);
+
+      expect(result.stops[0]!.expectedAmount).toBe(130);
+      expect(result.stops[0]!.verdict).toBe('CORRECT');
+    });
+  });
+
   // computeReconciliationStatus isolado -- cobre as bordas de decisao entre
   // os 5 status sem precisar montar um cenario completo de paradas/transacoes.
   describe('computeReconciliationStatus', () => {

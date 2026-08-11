@@ -26,6 +26,7 @@ import { TripAdvancesModule } from './trip-advances/trip-advances.module';
 import { TripExpensesModule } from './trip-expenses/trip-expenses.module';
 import { TripRevenuesModule } from './trip-revenues/trip-revenues.module';
 import { TiresModule } from './tires/tires.module';
+import { TollDataModule } from './toll-data/toll-data.module';
 import { TripsModule } from './trips/trips.module';
 import { UsersModule } from './users/users.module';
 
@@ -72,6 +73,7 @@ import { UsersModule } from './users/users.module';
     TiresModule,
     RoutingModule,
     DriverTripsModule,
+    TollDataModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

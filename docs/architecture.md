@@ -68,7 +68,17 @@ Decisoes de modelagem registradas:
 - Colunas geoespaciais usam `Unsupported("geometry(...)")`, ja que o Prisma nao tem
   tipo nativo para PostGIS — exigem SQL bruto (`$queryRaw`) para leitura/escrita.
 
-## 10. Roadmap futuro (nao modelado ainda)
+## 10. Catálogo oficial de pedágios (Fase 33)
+
+Estende a tabela `TollRate` (já existente no schema, não utilizada até
+então) em vez de criar uma tabela paralela, e adiciona `TollDataSource`,
+`TollDataSyncRun` e `TollPlazaDataSourceLink` para sincronizar
+periodicamente a identidade de praças a partir de fontes públicas (ANTT) e
+registrar tarifas oficiais versionadas de forma rastreável (nunca
+inventadas). Detalhes completos, incluindo o que cada fonte pesquisada
+realmente oferece, em [`docs/toll-data-providers.md`](./toll-data-providers.md).
+
+## 11. Roadmap futuro (nao modelado ainda)
 **Motor de simulacao de rotas**: dado origem, destino, veiculo e carga, comparar
 rotas alternativas por custo, tempo, pedagios e combustivel antes da viagem comecar.
 Transforma o sistema de rastreador em ferramenta de decisao. Depende de

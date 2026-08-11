@@ -95,6 +95,22 @@ class EnvironmentVariables {
   @Min(1000)
   @Max(60000)
   ROUTING_REQUEST_TIMEOUT_MS = 8000;
+
+  // Fase 33 -- catalogo oficial de pedagios. Desabilitado por padrao: um
+  // administrador liga explicitamente quando estiver pronto para depender da
+  // sincronizacao automatica (nunca ativado "por padrao" contra uma fonte
+  // externa). String, nao boolean: env vars sao sempre texto.
+  @IsOptional()
+  @IsString()
+  TOLL_DATA_SYNC_ENABLED?: string;
+
+  // Uma vez por dia por padrao (secao 10 da fase) -- validado apenas como
+  // string nao vazia aqui; a expressao cron em si e validada pelo
+  // @nestjs/schedule no registro do job (falha rapido no boot se invalida).
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  TOLL_DATA_SYNC_CRON?: string;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

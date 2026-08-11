@@ -631,6 +631,7 @@ model UserAccount {
   tireRetreadsCreated            TireRetread[]        @relation("TireRetreadCreator")
   tireInspectionsCreated         TireInspection[]     @relation("TireInspectionCreator")
   tireDisposalsCreated           TireDisposal[]       @relation("TireDisposalCreator")
+  tollRatesCreated               TollRate[]           @relation("TollRateCreator")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1337,26 +1338,26 @@ model AxleConfiguration {
 /// Viagem. Estados: PLANNED -> IN_PROGRESS -> COMPLETED | CANCELLED.
 /// Replanejamento e um evento dentro de IN_PROGRESS, nao um status proprio.
 model Trip {
-  id                    String       @id @default(uuid()) @db.Uuid
-  tenantId              String       @map("tenant_id") @db.Uuid
-  customerId            String?      @map("customer_id") @db.Uuid
-  driverId              String?      @map("driver_id") @db.Uuid
-  originLocationId      String       @map("origin_location_id") @db.Uuid
-  destinationLocationId String       @map("destination_location_id") @db.Uuid
+  id                    String          @id @default(uuid()) @db.Uuid
+  tenantId              String          @map("tenant_id") @db.Uuid
+  customerId            String?         @map("customer_id") @db.Uuid
+  driverId              String?         @map("driver_id") @db.Uuid
+  originLocationId      String          @map("origin_location_id") @db.Uuid
+  destinationLocationId String          @map("destination_location_id") @db.Uuid
   /// Rota de pedagio (Fase 23) -- corredor operacional conhecido, usado
   /// para determinar deterministicamente as pracas esperadas na viagem.
   /// Opcional: viagens sem rota continuam funcionando normalmente (nao
   /// entram na conciliacao, mas seguem operando e podendo ter pedagios
   /// registrados manualmente como antes da Fase 23).
-  tollRouteId           String?      @map("toll_route_id") @db.Uuid
+  tollRouteId           String?         @map("toll_route_id") @db.Uuid
   /// Rota GEOGRAFICA planejada (Fase 26), calculada por um provider externo
   /// (ver RoutePlan) -- distinta de tollRouteId (corredor operacional
   /// manual da Fase 23; os dois convivem, nenhum substitui o outro).
   /// Aponta para qual das RoutePlan desta viagem (podem existir varias:
   /// alternativas + recalculos historicos) e a atualmente selecionada/ativa.
-  routePlanId           String?      @unique @map("route_plan_id") @db.Uuid
-  status                TripStatus   @default(PLANNED)
-  priority              TripPriority @default(NORMAL)
+  routePlanId           String?         @unique @map("route_plan_id") @db.Uuid
+  status                TripStatus      @default(PLANNED)
+  priority              TripPriority    @default(NORMAL)
   /// Carregado ou vazio, informado pelo motorista na largada (Fase 27) --
   /// nulo em viagens antigas/nao iniciadas por este fluxo.
   loadStatus            TripLoadStatus? @map("load_status")
@@ -1364,17 +1365,17 @@ model Trip {
   /// (Fase 27) -- distinto de Vehicle.odometerKm (que reflete a leitura MAIS
   /// RECENTE do veiculo, atualizada a cada abastecimento/conclusao). Gravado
   /// uma unica vez (primeiro start nunca e sobrescrito por retomadas).
-  initialOdometerKm     Decimal?     @map("initial_odometer_km") @db.Decimal(10, 1)
+  initialOdometerKm     Decimal?        @map("initial_odometer_km") @db.Decimal(10, 1)
   notes                 String?
-  plannedDeparture      DateTime?    @map("planned_departure")
-  plannedArrival        DateTime?    @map("planned_arrival")
-  actualDeparture       DateTime?    @map("actual_departure")
-  actualArrival         DateTime?    @map("actual_arrival")
+  plannedDeparture      DateTime?       @map("planned_departure")
+  plannedArrival        DateTime?       @map("planned_arrival")
+  actualDeparture       DateTime?       @map("actual_departure")
+  actualArrival         DateTime?       @map("actual_arrival")
   /// Exclusao logica -- so permitida enquanto a viagem nunca saiu do
   /// planejamento (ver regra em TripsService: apenas PLANNED/CANCELLED).
-  deletedAt             DateTime?    @map("deleted_at")
-  createdAt             DateTime     @default(now()) @map("created_at")
-  updatedAt             DateTime     @updatedAt @map("updated_at")
+  deletedAt             DateTime?       @map("deleted_at")
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
 
   tenant           Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer         Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -1796,6 +1797,68 @@ model Telemetry {
 // ============================================================================
 
 /// Praca de pedagio. Dado de referencia GLOBAL -- nao pertence a um tenant.
+// Fase 33 -- catalogo oficial de pedagios (ANTT/ARTESP). Fonte de um dado
+// oficial (praca ou tarifa): rastreabilidade obrigatoria (secao 38 da fase --
+// "de onde veio essa tarifa?"). Um unico registro por provider (nao "uma
+// fonte por sincronizacao"): lastSyncAt/lastSuccessAt/lastFailureAt resumem
+// o estado atual; o HISTORICO de execucoes fica em TollDataSyncRun.
+enum TollDataProvider {
+  ANTT
+  /// Fase 35 -- fonte DISTINTA de ANTT (praca/KMZ): tarifas oficiais por
+  /// concessao publicadas em paginas proprias do gov.br/antt (ver
+  /// AnttConcessionTollDataProvider). Precisa de um valor de enum proprio
+  /// porque TollDataSource.provider e @unique -- nao pode compartilhar a
+  /// linha ANTT (praca), sob pena de colisao entre os dois providers.
+  ANTT_TARIFAS
+  /// Fase 36 -- tarifas por concessao estadual do RJ (AGETRANSP). Fonte,
+  /// formato e semantica de vigencia diferentes de ANTT_TARIFAS -- valor
+  /// de enum proprio pelo mesmo motivo (TollDataSource.provider e
+  /// @unique).
+  RJ_AGETRANSP
+  ARTESP
+  OTHER
+
+  @@map("toll_data_provider")
+}
+
+enum TollDataSyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+
+  @@map("toll_data_sync_status")
+}
+
+/// Confianca de uma tarifa (Fase 33, secao 20/38). VERIFIED = tem fonte
+/// oficial rastreavel (documento/URL/data de coleta) registrada no momento
+/// da criacao. PENDING_REVIEW = criada sem uma fonte oficial suficiente
+/// (nunca deveria acontecer via fluxo normal, mas o enum existe para nunca
+/// forcar um registro inconsistente a virar VERIFIED por omissao). STALE =
+/// marcada manualmente quando uma fonte fica indisponivel por muito tempo
+/// (ver secao 21 -- nunca apagar o ultimo dado valido). UNAVAILABLE = sem
+/// nenhuma tarifa oficial conhecida para aquela praca/categoria.
+enum TollRateStatus {
+  VERIFIED
+  PENDING_REVIEW
+  STALE
+  UNAVAILABLE
+
+  @@map("toll_rate_status")
+}
+
+/// Confianca do vinculo entre uma TollPlaza e um registro de uma fonte
+/// externa (Fase 33, secao 5) -- LINKED quando a estrategia deterministica
+/// encontrou exatamente 1 candidato; PENDING_REVIEW quando o sincronizador
+/// preferiu criar uma praca nova a arriscar mesclar automaticamente duas
+/// pracas potencialmente diferentes.
+enum TollPlazaMatchConfidence {
+  LINKED
+  PENDING_REVIEW
+
+  @@map("toll_plaza_match_confidence")
+}
+
 model TollPlaza {
   id           String                                @id @default(uuid()) @db.Uuid
   name         String
@@ -1818,14 +1881,98 @@ model TollPlaza {
   createdAt    DateTime                              @default(now()) @map("created_at")
   updatedAt    DateTime                              @updatedAt @map("updated_at")
 
-  rates          TollRate[]
-  predictions    TollPrediction[]
-  transactions   TollTransaction[]
-  routeStops     TollRouteStop[]
-  axleEvents     AxleEvent[]
-  routePlanTolls RoutePlanToll[]
+  rates           TollRate[]
+  predictions     TollPrediction[]
+  transactions    TollTransaction[]
+  routeStops      TollRouteStop[]
+  axleEvents      AxleEvent[]
+  routePlanTolls  RoutePlanToll[]
+  dataSourceLinks TollPlazaDataSourceLink[]
 
   @@map("toll_plazas")
+}
+
+/// Fonte oficial de dados de pedagio (Fase 33) -- 1 linha por provider
+/// (ANTT/ARTESP/OTHER), nunca por execucao. Dado de referencia GLOBAL (sem
+/// tenantId), mesmo padrao de TollPlaza/TagProvider.
+model TollDataSource {
+  id            String           @id @default(uuid()) @db.Uuid
+  provider      TollDataProvider @unique
+  name          String
+  authority     String
+  baseUrl       String           @map("base_url")
+  enabled       Boolean          @default(true)
+  lastSyncAt    DateTime?        @map("last_sync_at")
+  lastSuccessAt DateTime?        @map("last_success_at")
+  lastFailureAt DateTime?        @map("last_failure_at")
+  /// Sanitizado -- nunca contem token/segredo (fontes sao publicas, ver
+  /// secao 15 da fase).
+  lastError     String?          @map("last_error")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  syncRuns   TollDataSyncRun[]
+  plazaLinks TollPlazaDataSourceLink[]
+  rates      TollRate[]
+
+  @@map("toll_data_sources")
+}
+
+/// Historico de execucoes de sincronizacao (Fase 33, secao 12) -- nunca
+/// sobrescrito, 1 linha por execucao (manual ou agendada).
+model TollDataSyncRun {
+  id               String             @id @default(uuid()) @db.Uuid
+  sourceId         String             @map("source_id") @db.Uuid
+  provider         TollDataProvider
+  startedAt        DateTime           @default(now()) @map("started_at")
+  finishedAt       DateTime?          @map("finished_at")
+  status           TollDataSyncStatus @default(RUNNING)
+  recordsRead      Int                @default(0) @map("records_read")
+  recordsCreated   Int                @default(0) @map("records_created")
+  recordsUpdated   Int                @default(0) @map("records_updated")
+  recordsUnchanged Int                @default(0) @map("records_unchanged")
+  recordsRejected  Int                @default(0) @map("records_rejected")
+  /// Sanitizado -- nunca contem token/segredo/corpo bruto da fonte.
+  errorMessage     String?            @map("error_message")
+  /// "scheduler" para execucao automatica, ou o userId do administrador que
+  /// disparou a sincronizacao manual (secao 11) -- nunca um motorista.
+  triggeredBy      String?            @map("triggered_by")
+  createdAt        DateTime           @default(now()) @map("created_at")
+
+  source TollDataSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([provider, startedAt])
+  @@index([sourceId])
+  @@map("toll_data_sync_runs")
+}
+
+/// Vinculo deterministico entre uma TollPlaza e o registro correspondente
+/// numa fonte externa (Fase 33, secao 5) -- evita recriar a praca a cada
+/// sincronizacao (idempotencia) sem nunca mesclar automaticamente duas
+/// pracas quando a correspondencia e ambigua (ver TollDataSyncService).
+model TollPlazaDataSourceLink {
+  id              String                   @id @default(uuid()) @db.Uuid
+  tollPlazaId     String                   @map("toll_plaza_id") @db.Uuid
+  sourceId        String                   @map("source_id") @db.Uuid
+  provider        TollDataProvider
+  /// Chave deterministica derivada da fonte (concessionaria+rodovia+km+nome
+  /// normalizados) -- nunca so nome, nunca so coordenada (secao 5).
+  sourceKey       String                   @map("source_key")
+  matchConfidence TollPlazaMatchConfidence @default(LINKED) @map("match_confidence")
+  /// Ultimo registro bruto normalizado da fonte, para auditoria futura --
+  /// nunca usado para decidir regra de negocio (so leitura humana).
+  rawSnapshot     Json?                    @map("raw_snapshot")
+  lastSeenAt      DateTime                 @map("last_seen_at")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+
+  tollPlaza TollPlaza      @relation(fields: [tollPlazaId], references: [id], onDelete: Cascade)
+  source    TollDataSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, sourceKey])
+  @@index([tollPlazaId])
+  @@index([sourceId])
+  @@map("toll_plaza_data_source_links")
 }
 
 /// Rota de pedagio (Fase 23) -- corredor operacional conhecido pela
@@ -1883,19 +2030,49 @@ model TollRouteStop {
 
 /// Tarifa por praca e categoria de eixos, versionada no tempo (effectiveFrom)
 /// -- preserva o valor correto historico mesmo que a tarifa mude depois.
-/// Dado de referencia GLOBAL.
+/// Dado de referencia GLOBAL. Estendida na Fase 33 (rastreabilidade da
+/// fonte oficial, vigencia com fim explicito, status de confianca) -- os
+/// 3 campos originais (tollPlazaId/axleCategory/price/effectiveFrom) e a
+/// tabela em si ja existiam desde antes (nunca usados por nenhum service
+/// ate a Fase 33: ver relatorio final da fase para o achado da auditoria).
 model TollRate {
-  id            String   @id @default(uuid()) @db.Uuid
-  tollPlazaId   String   @map("toll_plaza_id") @db.Uuid
-  axleCategory  String   @map("axle_category") // ex: "2 eixos", "9 eixos"
-  price         Decimal  @db.Decimal(10, 2)
-  effectiveFrom DateTime @map("effective_from")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id              String         @id @default(uuid()) @db.Uuid
+  tollPlazaId     String         @map("toll_plaza_id") @db.Uuid
+  axleCategory    String         @map("axle_category") // ex: "2 eixos", "9 eixos"
+  price           Decimal        @db.Decimal(10, 2)
+  currency        String         @default("BRL") @db.VarChar(3)
+  effectiveFrom   DateTime       @map("effective_from")
+  /// Nulo = ainda vigente (a tarifa mais recente de uma categoria nunca tem
+  /// effectiveUntil preenchido; quando uma nova versao e criada, a anterior
+  /// passa a ter effectiveUntil = novo effectiveFrom, ver TollTariffService).
+  effectiveUntil  DateTime?      @map("effective_until")
+  status          TollRateStatus @default(PENDING_REVIEW)
+  /// Fonte oficial (ANTT/ARTESP/OTHER) -- nulo apenas para tarifas legadas
+  /// anteriores a Fase 33 (nenhuma existia em producao, mas o campo fica
+  /// opcional por seguranca/compatibilidade de schema).
+  sourceId        String?        @map("source_id") @db.Uuid
+  /// Referencia textual ao documento oficial (ex: numero da deliberacao/ato,
+  /// nome do arquivo) -- nunca inventado, preenchido pelo importador ou pelo
+  /// administrador que registrou a tarifa.
+  sourceDocument  String?        @map("source_document")
+  /// URL ou identificador oficial de onde o valor foi obtido.
+  sourceReference String?        @map("source_reference")
+  /// Quando o dado foi efetivamente coletado/registrado (distinto de
+  /// effectiveFrom, que e a vigencia OFICIAL da tarifa).
+  collectedAt     DateTime?      @map("collected_at")
+  createdBy       String?        @map("created_by") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
 
-  tollPlaza TollPlaza @relation(fields: [tollPlazaId], references: [id], onDelete: Cascade)
+  tollPlaza TollPlaza       @relation(fields: [tollPlazaId], references: [id], onDelete: Cascade)
+  source    TollDataSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  creator   UserAccount?    @relation("TollRateCreator", fields: [createdBy], references: [id], onDelete: SetNull)
 
   @@unique([tollPlazaId, axleCategory, effectiveFrom])
   @@index([tollPlazaId])
+  @@index([tollPlazaId, axleCategory, effectiveFrom])
+  @@index([sourceId])
+  @@index([status])
   @@map("toll_rates")
 }
 

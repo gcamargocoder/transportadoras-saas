@@ -8,6 +8,7 @@ import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { AppConfig } from '../../config/configuration';
 import { PrismaService } from '../../prisma/prisma.service';
+import { TollRatesService } from '../../toll-data/services/toll-rates.service';
 import { SelectRoutePlanDto } from '../dto/select-route-plan.dto';
 import { DriverRouteEntity } from '../entities/driver-route.entity';
 import { RoutePlanComparisonEntity } from '../entities/route-plan-comparison.entity';
@@ -43,6 +44,7 @@ export class RoutingService {
     private readonly audit: AuditService,
     @Inject(ROUTING_PROVIDER) private readonly provider: RoutingProviderPort,
     private readonly configService: ConfigService<AppConfig, true>,
+    private readonly tollRatesService: TollRatesService,
   ) {}
 
   // POST /trips/:id/route-plan -- calcula UMA rota (a "principal") e ja
@@ -479,9 +481,28 @@ export class RoutingService {
     const discovered = discoverTollsAlongRoute(polyline, candidates, toleranceMeters);
     const candidatesById = new Map(candidates.map((c) => [c.id, c]));
 
+    // Fase 33, secao 16/17 -- prefere a tarifa oficial versionada do
+    // catalogo (TollRate, via getEffectiveTariffsForAxleCount) quando ela
+    // existir para a praca+eixos+data da rota; cai para a formula
+    // pricePerAxle*eixos (Fase 26) so quando NAO ha tarifa oficial vigente.
+    // Nunca duplica regra de negocio: a decisao de qual tarifa vale numa
+    // data e sempre da resolveEffectiveTollTariff (util puro), nunca
+    // reimplementada aqui. estimatedAmount continua sendo PREVISAO -- nunca
+    // confundido com TollTransaction.
+    const officialTariffs =
+      axleCountUsed !== null
+        ? await this.tollRatesService.getEffectiveTariffsForAxleCount(
+            discovered.map((toll) => toll.tollPlazaId),
+            axleCountUsed,
+            new Date(),
+          )
+        : new Map();
+
     const tollsData = discovered.map((toll) => {
       const candidate = candidatesById.get(toll.tollPlazaId)!;
-      const estimatedAmount = estimateTollAmount(candidate.pricePerAxle, axleCountUsed);
+      const officialTariff = officialTariffs.get(toll.tollPlazaId);
+      const estimatedAmount =
+        officialTariff?.price ?? estimateTollAmount(candidate.pricePerAxle, axleCountUsed);
       return {
         tenantId,
         tollPlazaId: toll.tollPlazaId,
@@ -491,12 +512,18 @@ export class RoutingService {
         name: toll.name,
         distanceFromOriginMeters: toll.distanceFromOriginMeters,
         estimatedAmount,
-        currency: calculated.estimatedTollCurrency ?? 'BRL',
+        currency: officialTariff?.currency ?? calculated.estimatedTollCurrency ?? 'BRL',
         axleCountUsed,
         matchStatus: 'MATCHED' as const,
         matchConfidence: toll.matchConfidence,
         source: 'TOLL_PLAZA_MATCH',
-        metadata: { distanceToRouteMeters: toll.distanceToRouteMeters },
+        metadata: {
+          distanceToRouteMeters: toll.distanceToRouteMeters,
+          tariffSource: officialTariff?.price !== null && officialTariff?.price !== undefined
+            ? 'OFFICIAL_CATALOG'
+            : 'PRICE_PER_AXLE_FORMULA',
+          officialTollRateId: officialTariff?.rateId ?? null,
+        },
       };
     });
 

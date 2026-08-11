@@ -39,8 +39,20 @@ export interface ReconciliationRouteStopInput {
   tollPlazaId: string;
   tollPlazaName: string;
   highway: string | null;
-  /** Tarifa ATUAL da praca (TollPlaza.pricePerAxle) -- null quando desconhecida. */
+  /** Tarifa ATUAL da praca (TollPlaza.pricePerAxle) -- null quando desconhecida.
+   *  Usado como FALLBACK (formula pricePerAxle x eixos) somente quando nao
+   *  ha tarifa oficial aplicavel -- ver officialTariffsByAxleCategory. */
   pricePerAxle: number | null;
+  /** Fase 36 -- tarifas oficiais VIGENTES desta praca (catalogo TollRate,
+   *  Fase 33/35/36), indexadas por categoria de eixos ("9 eixos", "7
+   *  eixos"...), ja resolvidas pelo chamador (TollReconciliationService)
+   *  antes de invocar este motor puro -- nunca uma consulta feita aqui
+   *  dentro. Quando existir uma entrada para a categoria de eixos
+   *  REALMENTE usada nesta parada (a da transacao registrada, ou a
+   *  padrao da composicao quando ainda nao ha transacao), ela prevalece
+   *  sobre pricePerAxle x eixos. Ausente/sem a categoria = sem tarifa
+   *  oficial aplicavel, cai no fallback -- nunca inventada. */
+  officialTariffsByAxleCategory?: Record<string, number> | undefined;
 }
 
 export interface ReconciliationTransactionInput {
@@ -140,10 +152,22 @@ export function computeTollReconciliation(
     // composicao quando nao ha transacao (NOT_REGISTERED), unico caso em que
     // so resta estimar.
     const stopAxleCount = transaction ? transaction.axleCount : defaultAxleCount;
-    const canCompute = stop.pricePerAxle !== null && stopAxleCount !== null;
-    const expectedAmount = canCompute
-      ? (stop.pricePerAxle as number) * (stopAxleCount as number)
-      : null;
+
+    // Fase 36 -- prioridade 1: tarifa oficial vigente do catalogo (TollRate)
+    // PARA A CATEGORIA DE EIXOS REALMENTE USADA nesta parada (nunca a
+    // categoria planejada quando a real for outra, ex: excecao 9 -> 7
+    // eixos) -- nunca uma formula generica quando existe tarifa oficial.
+    // Prioridade 2: fallback pricePerAxle x eixos (Fase 22/26), preservado
+    // integralmente quando nao ha tarifa oficial aplicavel.
+    const officialAmount =
+      stopAxleCount !== null ? stop.officialTariffsByAxleCategory?.[`${stopAxleCount} eixos`] : undefined;
+    const canCompute = officialAmount !== undefined || (stop.pricePerAxle !== null && stopAxleCount !== null);
+    const expectedAmount =
+      officialAmount !== undefined
+        ? officialAmount
+        : canCompute
+          ? (stop.pricePerAxle as number) * (stopAxleCount as number)
+          : null;
 
     if (!transaction) {
       // Sem transacao, o fato mais importante e "nao registrado" -- mas
