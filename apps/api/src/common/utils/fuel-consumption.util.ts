@@ -85,3 +85,47 @@ export function computeAverageConsumptionKmL(points: FuelConsumptionPoint[]): nu
 export function computeTotalAmount(liters: number, pricePerLiter: number): number {
   return Math.round(liters * pricePerLiter * 100) / 100;
 }
+
+// Fase 42 -- deteccao de hodometro regressivo. DISTINTO de
+// computeConsumptionTotals/computeFuelConsumptionSegments acima: aquelas
+// funcoes ordenam por ODOMETRO (nunca produzem distancia negativa "por
+// construcao", o que mascara um hodometro digitado errado ou trocado --
+// sempre reordenam ao redor do problema em vez de sinaliza-lo). Esta funcao
+// ordena pela ordem CRONOLOGICA real (supplyDate) e compara com o
+// odometro: se um abastecimento mais recente no tempo tem odometro MENOR
+// que o anterior, isso e uma inconsistencia real (nunca deveria acontecer
+// em um veiculo real) -- usada pela camada de alertas, nunca pelo calculo
+// de consumo em si.
+export interface OdometerRegressionPoint {
+  id: string;
+  supplyDate: Date;
+  odometerKm: number;
+}
+
+export interface OdometerRegressionPair {
+  previousId: string;
+  currentId: string;
+  previousOdometerKm: number;
+  currentOdometerKm: number;
+}
+
+export function detectOdometerRegression(points: OdometerRegressionPoint[]): OdometerRegressionPair[] {
+  const sortedByDate = [...points].sort((a, b) => a.supplyDate.getTime() - b.supplyDate.getTime());
+  const regressions: OdometerRegressionPair[] = [];
+
+  for (let i = 1; i < sortedByDate.length; i++) {
+    const previous = sortedByDate.at(i - 1);
+    const current = sortedByDate.at(i);
+    if (!previous || !current) continue;
+    if (current.odometerKm < previous.odometerKm) {
+      regressions.push({
+        previousId: previous.id,
+        currentId: current.id,
+        previousOdometerKm: previous.odometerKm,
+        currentOdometerKm: current.odometerKm,
+      });
+    }
+  }
+
+  return regressions;
+}

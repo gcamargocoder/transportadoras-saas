@@ -2,6 +2,7 @@ import {
   computeAverageConsumptionKmL,
   computeFuelConsumptionSegments,
   computeTotalAmount,
+  detectOdometerRegression,
 } from './fuel-consumption.util';
 
 describe('fuel-consumption.util', () => {
@@ -64,6 +65,57 @@ describe('fuel-consumption.util', () => {
     it('multiplica litros por preco e arredonda para 2 casas decimais', () => {
       expect(computeTotalAmount(45.678, 5.899)).toBeCloseTo(269.45, 2);
       expect(computeTotalAmount(10, 5)).toBe(50);
+    });
+  });
+
+  describe('detectOdometerRegression', () => {
+    it('retorna vazio quando a ordem cronologica do odometro e sempre crescente', () => {
+      const points = [
+        { id: 'a', supplyDate: new Date('2026-01-01'), odometerKm: 1000 },
+        { id: 'b', supplyDate: new Date('2026-01-10'), odometerKm: 1400 },
+        { id: 'c', supplyDate: new Date('2026-01-20'), odometerKm: 1800 },
+      ];
+      expect(detectOdometerRegression(points)).toEqual([]);
+    });
+
+    it('detecta quando um abastecimento mais recente tem odometro MENOR que o anterior', () => {
+      const points = [
+        { id: 'a', supplyDate: new Date('2026-01-01'), odometerKm: 1000 },
+        { id: 'b', supplyDate: new Date('2026-01-10'), odometerKm: 1400 },
+        { id: 'c', supplyDate: new Date('2026-01-20'), odometerKm: 1200 }, // regressivo
+      ];
+      expect(detectOdometerRegression(points)).toEqual([
+        { previousId: 'b', currentId: 'c', previousOdometerKm: 1400, currentOdometerKm: 1200 },
+      ]);
+    });
+
+    it('nao confunde ordem de ODOMETRO com ordem CRONOLOGICA (diferente de sortByOdometer interno)', () => {
+      // Mesmos pontos de computeFuelConsumptionSegments acima (ordenados por
+      // odometro nunca "regridem" ali por construcao) -- aqui, ordenados por
+      // DATA, o ponto "b" (data do meio) tem odometro MENOR que "a" (data
+      // mais antiga) -- uma regressao real que o calculo de consumo nunca
+      // detectaria.
+      const points = [
+        { id: 'a', supplyDate: new Date('2026-01-01'), odometerKm: 1000 },
+        { id: 'b', supplyDate: new Date('2026-01-10'), odometerKm: 900 },
+        { id: 'c', supplyDate: new Date('2026-01-20'), odometerKm: 1800 },
+      ];
+      expect(detectOdometerRegression(points)).toEqual([
+        { previousId: 'a', currentId: 'b', previousOdometerKm: 1000, currentOdometerKm: 900 },
+      ]);
+    });
+
+    it('retorna vazio para lista vazia ou com 1 unico ponto', () => {
+      expect(detectOdometerRegression([])).toEqual([]);
+      expect(detectOdometerRegression([{ id: 'a', supplyDate: new Date(), odometerKm: 100 }])).toEqual([]);
+    });
+
+    it('nao considera empate (mesmo odometro) uma regressao', () => {
+      const points = [
+        { id: 'a', supplyDate: new Date('2026-01-01'), odometerKm: 1000 },
+        { id: 'b', supplyDate: new Date('2026-01-10'), odometerKm: 1000 },
+      ];
+      expect(detectOdometerRegression(points)).toEqual([]);
     });
   });
 });

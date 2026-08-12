@@ -56,6 +56,11 @@ export const TRIP_SETTLEMENT_CLOSE_ROLES = MANAGEMENT_ROLES;
 export const TIRE_READ_ROLES = OPERATIONAL_READ_ROLES;
 export const TIRE_WRITE_ROLES = MANAGEMENT_ROLES;
 
+// Fase 40 -- mesmo grupo amplo ja usado por abastecimento/pneus/manutencao
+// (leitura operacional do dia a dia, distinto do DASHBOARD_ROLES mais
+// restrito do dashboard executivo).
+export const FLEET_OPERATIONS_READ_ROLES = OPERATIONAL_READ_ROLES;
+
 export const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.ADMIN];
 export const SUPER_ADMIN_ONLY: UserRole[] = [UserRole.SUPER_ADMIN];
 

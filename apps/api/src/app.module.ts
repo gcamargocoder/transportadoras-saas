@@ -14,6 +14,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { DriverTripsModule } from './driver-trips/driver-trips.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
+import { FleetOperationsModule } from './fleet-operations/fleet-operations.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
@@ -76,6 +77,7 @@ import { UsersModule } from './users/users.module';
     ChecklistsModule,
     DriverTripsModule,
     TollDataModule,
+    FleetOperationsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

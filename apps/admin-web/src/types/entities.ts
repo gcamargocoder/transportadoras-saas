@@ -1005,6 +1005,265 @@ export interface DashboardEntity {
   charts: DashboardChartsEntity;
 }
 
+// Fase 40 -- gestao operacional da frota (dashboards executivos e
+// operacionais). "value" em FleetVehicleRankingEntryEntity tem significado
+// dependente do contexto (custo em R$ ou duracao em minutos), documentado
+// em cada uso.
+export interface FleetOverviewEntity {
+  totalVehicles: number;
+  activeVehicles: number;
+  inactiveVehicles: number;
+  maintenanceVehicles: number;
+  soldVehicles: number;
+  activeTrips: number;
+  // Fase 41 -- subconjunto de activeVehicles.
+  vehiclesOnTrip: number;
+  vehiclesAvailable: number;
+  activeDrivers: number;
+  openAlerts: number;
+}
+
+export interface FleetVehicleRankingEntryEntity {
+  vehicleId: string;
+  plate: string;
+  value: number;
+  count: number;
+}
+
+export interface FleetCostCategoryEntity {
+  category: string;
+  amount: number;
+}
+
+// Fase 41 -- fleetId=null representa veiculos sem frota atribuida.
+export interface FleetCostFleetEntity {
+  fleetId: string | null;
+  fleetName: string;
+  amount: number;
+}
+
+// Fase 41 -- so preenchido quando o filtro informa startDate E endDate.
+export interface FleetCostsPreviousPeriodEntity {
+  totalCost: number;
+  deltaAmount: number;
+  deltaPercent: number | null;
+}
+
+export interface FleetCostsEntity {
+  totalCost: number;
+  fuelCost: number;
+  maintenanceCost: number;
+  tireCost: number;
+  tollCost: number;
+  otherCost: number;
+  costByCategory: FleetCostCategoryEntity[];
+  topVehiclesByCost: FleetVehicleRankingEntryEntity[];
+  averageCostPerVehicle: number | null;
+  costByFleet: FleetCostFleetEntity[];
+  monthlyTrend: DashboardChartPointEntity[];
+  previousPeriod: FleetCostsPreviousPeriodEntity | null;
+}
+
+export interface FleetMaintenanceTypeBreakdownEntity {
+  type: VehicleMaintenanceType;
+  count: number;
+  cost: number;
+}
+
+export interface FleetMaintenancePriorityBreakdownEntity {
+  priority: VehicleMaintenancePriority;
+  count: number;
+}
+
+export interface FleetMaintenanceWorkshopBreakdownEntity {
+  workshop: string | null;
+  count: number;
+  cost: number;
+}
+
+export interface FleetMaintenanceDashboardEntity {
+  totalCount: number;
+  openCount: number;
+  completedCount: number;
+  totalCost: number;
+  averageCostPerOccurrence: number | null;
+  averageDurationHours: number | null;
+  byType: FleetMaintenanceTypeBreakdownEntity[];
+  byPriority: FleetMaintenancePriorityBreakdownEntity[];
+  byWorkshop: FleetMaintenanceWorkshopBreakdownEntity[];
+  topVehiclesByCost: FleetVehicleRankingEntryEntity[];
+  // Fase 41 -- "value"/"count" = nº de manutencoes do veiculo.
+  topVehiclesByCount: FleetVehicleRankingEntryEntity[];
+  monthlyTrend: DashboardChartPointEntity[];
+}
+
+export interface FleetStopsTypeBreakdownEntity {
+  type: TripStopType;
+  count: number;
+  totalDurationMinutes: number;
+}
+
+export interface FleetStopsDashboardEntity {
+  totalStops: number;
+  totalDurationMinutes: number;
+  averageDurationMinutes: number | null;
+  byType: FleetStopsTypeBreakdownEntity[];
+  topVehiclesByDuration: FleetVehicleRankingEntryEntity[];
+  monthlyTrend: DashboardChartPointEntity[];
+}
+
+export interface FleetChecklistSummaryEntity {
+  totalExecutions: number;
+  completedExecutions: number;
+  pendingExecutions: number;
+  criticalNonConformityCount: number;
+}
+
+// Fase 41 -- KPIs operacionais (viagens/tempo/custo por viagem/utilizacao).
+// "Km rodados"/"custo por km" NAO existem aqui: TripMetrics.actualDistanceKm
+// nunca e escrito por nenhum service (ver docs/fleet-operations-dashboard.md).
+export interface FleetOperationalIndicatorsEntity {
+  completedTrips: number;
+  inProgressTrips: number;
+  cancelledTrips: number;
+  averageTripDurationMinutes: number | null;
+  averageCostPerTrip: number | null;
+  utilizationPercent: number | null;
+  topVehiclesByTripCount: FleetVehicleRankingEntryEntity[];
+}
+
+// Fase 41 -- camada de alertas computada em memoria, nunca persistida (ver
+// backend fleet-operations/entities/fleet-alert.entity.ts).
+export type FleetAlertType =
+  | 'COST_OUTLIER'
+  | 'MAINTENANCE_OUTLIER'
+  | 'STOP_TIME_OUTLIER'
+  | 'STALLED_VEHICLE'
+  | 'PENDING_CHECKLIST'
+  // Fase 42 -- alertas de abastecimento.
+  | 'FUEL_PRICE_OUTLIER'
+  | 'CONSUMPTION_OUTLIER_HIGH'
+  | 'CONSUMPTION_OUTLIER_LOW'
+  | 'SUPPLY_VOLUME_OUTLIER'
+  | 'ODOMETER_REGRESSION';
+
+export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
+
+export interface FleetAlertEntity {
+  type: FleetAlertType;
+  severity: FleetAlertSeverity;
+  vehicleId: string;
+  plate: string;
+  message: string;
+  value: number | null;
+}
+
+export interface FleetOperationsDashboardEntity {
+  overview: FleetOverviewEntity;
+  costs: FleetCostsEntity;
+  fuel: FuelDashboardEntity;
+  tires: TireDashboardEntity;
+  maintenance: FleetMaintenanceDashboardEntity;
+  stops: FleetStopsDashboardEntity;
+  checklist: FleetChecklistSummaryEntity;
+  operational: FleetOperationalIndicatorsEntity;
+  alerts: FleetAlertEntity[];
+}
+
+// Fase 42 -- gestao avancada de abastecimento (GET /fleet-operations/fuel).
+// Metodologia de consumo/custo-por-km reaproveitada INTEGRALMENTE de
+// FuelSuppliesService.getDashboard() (distancia entre o primeiro e o
+// ultimo odometro de um veiculo, litros abastecidos entre eles), so
+// disponivel com >= 2 abastecimentos no escopo. Isto e "custo DE
+// COMBUSTIVEL por km" -- distinto do "custo total da frota por km"
+// (Fase 41, ainda indisponivel).
+export interface FleetFuelSummaryEntity {
+  totalCost: number;
+  totalLiters: number;
+  supplyCount: number;
+  averagePricePerLiter: number | null;
+  averageCostPerSupply: number | null;
+  vehiclesSupplied: number;
+  fleetsSupplied: number;
+}
+
+export interface FleetFuelConsumptionEntity {
+  value: number | null;
+  available: boolean;
+  unit: 'km/l';
+  reason: string | null;
+}
+
+export interface FleetFuelCostPerKmEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface FleetFuelVehicleBreakdownEntity {
+  vehicleId: string;
+  plate: string;
+  fleetId: string | null;
+  fleetName: string;
+  supplyCount: number;
+  liters: number;
+  cost: number;
+  averagePricePerLiter: number | null;
+  consumption: FleetFuelConsumptionEntity;
+  costPerKm: FleetFuelCostPerKmEntity;
+  rankPosition: number;
+  hasOdometerAnomaly: boolean;
+}
+
+export interface FleetFuelFleetBreakdownEntity {
+  fleetId: string | null;
+  fleetName: string;
+  supplyCount: number;
+  liters: number;
+  cost: number;
+  averagePricePerLiter: number | null;
+  consumption: FleetFuelConsumptionEntity;
+}
+
+// best/worstConsumption so incluem veiculos com consumption.available=true.
+export interface FleetFuelRankingsEntity {
+  topCost: FleetVehicleRankingEntryEntity[];
+  bottomCost: FleetVehicleRankingEntryEntity[];
+  topVolume: FleetVehicleRankingEntryEntity[];
+  bottomVolume: FleetVehicleRankingEntryEntity[];
+  bestConsumption: FleetVehicleRankingEntryEntity[];
+  worstConsumption: FleetVehicleRankingEntryEntity[];
+  topPricePerLiter: FleetVehicleRankingEntryEntity[];
+  topSupplyCount: FleetVehicleRankingEntryEntity[];
+}
+
+// So preenchido quando startDate E endDate sao ambos informados.
+export interface FleetFuelPreviousPeriodEntity {
+  currentCost: number;
+  previousCost: number;
+  costDeltaPercent: number | null;
+  currentLiters: number;
+  previousLiters: number;
+  litersDeltaPercent: number | null;
+  currentSupplyCount: number;
+  previousSupplyCount: number;
+  supplyCountDeltaPercent: number | null;
+}
+
+export interface FleetFuelAnalyticsEntity {
+  summary: FleetFuelSummaryEntity;
+  consumption: FleetFuelConsumptionEntity;
+  costPerKm: FleetFuelCostPerKmEntity;
+  monthlyTrendCost: DashboardChartPointEntity[];
+  monthlyTrendLiters: DashboardChartPointEntity[];
+  monthlyTrendSupplyCount: DashboardChartPointEntity[];
+  vehicleBreakdown: FleetFuelVehicleBreakdownEntity[];
+  fleetBreakdown: FleetFuelFleetBreakdownEntity[];
+  rankings: FleetFuelRankingsEntity;
+  alerts: FleetAlertEntity[];
+  previousPeriod: FleetFuelPreviousPeriodEntity | null;
+}
+
 // Fase 25 -- operacao da viagem (app do motorista), visibilidade
 // administrativa somente leitura.
 export interface TrackingPointEntity {

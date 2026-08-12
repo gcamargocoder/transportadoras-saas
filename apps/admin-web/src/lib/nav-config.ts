@@ -7,6 +7,7 @@ import {
   Gauge,
   HandCoins,
   LayoutDashboard,
+  LayoutGrid,
   Link2,
   MapPinned,
   Milestone,
@@ -26,6 +27,7 @@ import {
   ADMIN_ROLES,
   DASHBOARD_ROLES,
   DRIVER_READ_ROLES,
+  FLEET_OPERATIONS_READ_ROLES,
   FLEET_READ_ROLES,
   FUEL_STATION_READ_ROLES,
   FUEL_SUPPLY_READ_ROLES,
@@ -61,6 +63,12 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Operação',
     items: [
       { label: 'Monitoramento', href: '/operations', icon: Activity, roles: TRIP_READ_ROLES },
+      {
+        label: 'Gestão da frota',
+        href: '/operations/fleet',
+        icon: LayoutGrid,
+        roles: FLEET_OPERATIONS_READ_ROLES,
+      },
       { label: 'Viagens', href: '/trips', icon: Route, roles: TRIP_READ_ROLES },
       { label: 'Pedágios', href: '/tolls', icon: Ticket, roles: TOLL_READ_ROLES },
       { label: 'Rotas de pedágio', href: '/toll-routes', icon: Milestone, roles: TOLL_READ_ROLES },

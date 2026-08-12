@@ -436,9 +436,12 @@ enum ExternalSystem {
   @@map("external_system")
 }
 
-/// Classificacao da parada operacional (Fase 25). UNKNOWN e o padrao quando o
-/// app apenas detecta "veiculo parado" via GPS -- a classificacao real pode
-/// ser feita pelo motorista depois, sem bloquear o registro da parada.
+/// Classificacao da parada operacional (Fase 25, catalogo ampliado na Fase
+/// 43). UNKNOWN e o padrao quando o app apenas detecta "veiculo parado" via
+/// GPS -- a classificacao real pode ser feita pelo motorista depois, sem
+/// bloquear o registro da parada. Agrupamento de apresentacao (OPERACIONAL/
+/// VEICULO/TRANSITO/MOTORISTA/ADMINISTRATIVO/OUTROS) fica em
+/// fleet-operations/constants (nao e uma coluna -- e so rotulagem de UI).
 enum TripStopType {
   UNKNOWN
   FUEL
@@ -446,8 +449,48 @@ enum TripStopType {
   MEAL
   MAINTENANCE
   OTHER
+  // Fase 43 -- OPERACIONAL
+  LOADING
+  UNLOADING
+  WAITING_LOADING
+  WAITING_UNLOADING
+  YARD
+  CUSTOMER
+  GARAGE
+  // Fase 43 -- VEICULO
+  BREAKDOWN
+  TIRE
+  // Fase 43 -- TRANSITO
+  CONGESTION
+  ACCIDENT
+  ROAD_CLOSURE
+  INSPECTION
+  // Fase 43 -- MOTORISTA
+  PERSONAL_NEED
+  // Fase 43 -- ADMINISTRATIVO
+  DOCUMENTATION
+  WAITING_AUTHORIZATION
 
   @@map("trip_stop_type")
+}
+
+/// Origem do registro da parada (Fase 43). DRIVER_APP/GPS sao os unicos
+/// fluxos reais hoje (StopsScreen e useLocationTracker, respectivamente --
+/// ambos ja existiam antes desta fase, so nao eram distinguiveis). ADMIN e
+/// gravado pelo backend quando criado via POST /trip-stops (nunca aceito do
+/// cliente). MANUAL/SYSTEM/IMPORT ficam definidos para evolucao futura
+/// (fechamento automatico ao concluir viagem, importacao de dados externos)
+/// -- documentados como NAO utilizados nesta fase, nunca um fluxo fake so
+/// pra "existir".
+enum TripStopSource {
+  MANUAL
+  DRIVER_APP
+  GPS
+  SYSTEM
+  IMPORT
+  ADMIN
+
+  @@map("trip_stop_source")
 }
 
 /// Origem do numero de eixos DECLARADO num AxleEvent -- DRIVER_INPUT quando o
@@ -1644,35 +1687,55 @@ model TrackingPoint {
 /// reclassificar depois (FUEL/REST/MEAL/MAINTENANCE/OTHER) sem precisar
 /// reabrir a parada.
 model TripStop {
-  id              String       @id @default(uuid()) @db.Uuid
-  tenantId        String       @map("tenant_id") @db.Uuid
-  tripId          String       @map("trip_id") @db.Uuid
-  vehicleId       String       @map("vehicle_id") @db.Uuid
-  driverId        String       @map("driver_id") @db.Uuid
-  type            TripStopType @default(UNKNOWN)
-  latitude        Decimal      @db.Decimal(9, 6)
-  longitude       Decimal      @db.Decimal(9, 6)
-  startedAt       DateTime     @map("started_at")
-  endedAt         DateTime?    @map("ended_at")
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  /// Opcional desde a Fase 43 -- uma parada administrativa (patio/garagem
+  /// fora de uma viagem ativa) pode existir sem trip. Quando criada pelo
+  /// driver-app (fluxo original, Fase 25), tripId continua sempre presente
+  /// -- vehicleId/driverId continuam derivados da propria Trip nesse caso,
+  /// nunca inventados.
+  tripId          String?        @map("trip_id") @db.Uuid
+  vehicleId       String         @map("vehicle_id") @db.Uuid
+  driverId        String?        @map("driver_id") @db.Uuid
+  type            TripStopType   @default(UNKNOWN)
+  /// Opcionais desde a Fase 43 -- uma parada administrativa lancada sem
+  /// coordenada (ex.: retroativa, informada por telefone) nunca inventa
+  /// latitude/longitude; o driver-app continua sempre enviando ambos.
+  latitude        Decimal?       @db.Decimal(9, 6)
+  longitude       Decimal?       @db.Decimal(9, 6)
+  startedAt       DateTime       @map("started_at")
+  endedAt         DateTime?      @map("ended_at")
   /// Sempre calculado (endedAt - startedAt) no fechamento -- nunca aceito do
   /// cliente.
-  durationMinutes Int?         @map("duration_minutes")
+  durationMinutes Int?           @map("duration_minutes")
   /// Nome/local do posto ou ponto identificado -- nulo quando nao for
   /// possivel identificar (nunca inventado, ver regra da Fase 25).
-  locationLabel   String?      @map("location_label")
-  deviceEventId   String       @unique @map("device_event_id")
-  syncedAt        DateTime     @default(now()) @map("synced_at")
-  syncStatus      SyncStatus   @default(SYNCED) @map("sync_status")
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
+  locationLabel   String?        @map("location_label")
+  /// Observacao livre (Fase 43) -- nunca obrigatoria, nunca usada para
+  /// inferir classificacao automaticamente.
+  notes           String?
+  /// Fase 43 -- quem/o que originou o registro (ver enum TripStopSource).
+  source          TripStopSource @default(DRIVER_APP)
+  /// Fase 43 -- preenchido no cancelamento; um evento cancelado nunca entra
+  /// em indicadores/rankings/alertas. "status" (OPEN/COMPLETED/CANCELLED) e
+  /// SEMPRE computado a partir de endedAt/cancelledAt na entity/mapper --
+  /// nunca uma coluna redundante que poderia dessincronizar.
+  cancelledAt     DateTime?      @map("cancelled_at")
+  deviceEventId   String         @unique @map("device_event_id")
+  syncedAt        DateTime       @default(now()) @map("synced_at")
+  syncStatus      SyncStatus     @default(SYNCED) @map("sync_status")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip    Trip    @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  trip    Trip?   @relation(fields: [tripId], references: [id], onDelete: SetNull)
   vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  driver  Driver  @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  driver  Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([tenantId, tripId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, startedAt])
   @@map("trip_stops")
 }
 
