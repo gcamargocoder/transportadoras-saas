@@ -6,8 +6,10 @@ import { AuthenticatedRequest } from '../interfaces/authenticated-request.interf
 
 // Guard global (registrado apos JwtAuthGuard via APP_GUARD): so restringe
 // algo quando a rota tem @Roles(...). Sem essa metadata, libera qualquer
-// usuario autenticado -- nenhum endpoint de negocio usa @Roles() ainda
-// nesta fase, entao hoje e um no-op em todas as rotas existentes.
+// usuario autenticado -- @Roles() ja esta em uso amplo em endpoints de
+// negocio (vehicles, users, tenants, toll-*, fleet-operations etc.),
+// auditado na Fase 46; controllers que legitimamente nao usam @Roles()
+// sao os pre-autenticacao (auth) e o health check.
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}

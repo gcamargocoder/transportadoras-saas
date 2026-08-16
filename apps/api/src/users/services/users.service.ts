@@ -7,6 +7,8 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PLAN_ERRORS } from '../../tenants/constants/plan-error.constants';
+import { assertUnderLimit, runSerializable } from '../../tenants/utils/plan-limit.util';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto';
@@ -38,23 +40,36 @@ export class UsersService {
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<UserEntity> {
-    const existing = await this.prisma.userAccount.findUnique({
-      where: { tenantId_email: { tenantId, email: dto.email } },
-    });
-    if (existing) {
-      throw new ConflictException('Ja existe um usuario com este e-mail nesta empresa.');
-    }
-
+    // Hash fora da transacao serializavel -- bcrypt e lento, e a transacao
+    // deve ficar curta para minimizar chance de conflito de serializacao
+    // com outra criacao concorrente no mesmo tenant.
     const passwordHash = await hashPassword(dto.password);
-    const user = await this.prisma.userAccount.create({
-      data: {
-        tenantId,
-        name: dto.name,
-        email: dto.email,
-        passwordHash,
-        role: dto.role,
-        isActive: true,
-      },
+
+    // Fase 48 -- checagem de duplicidade + limite do plano + create numa
+    // unica transacao Serializable: garante que duas criacoes concorrentes
+    // nunca ultrapassem juntas o limite de usuarios do tenant.
+    const user = await runSerializable(this.prisma, async (tx) => {
+      const existing = await tx.userAccount.findUnique({
+        where: { tenantId_email: { tenantId, email: dto.email } },
+      });
+      if (existing) {
+        throw new ConflictException('Ja existe um usuario com este e-mail nesta empresa.');
+      }
+
+      const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+      const count = await tx.userAccount.count({ where: { tenantId, deletedAt: null } });
+      assertUnderLimit(count, plan?.maxUsers, PLAN_ERRORS.USER_LIMIT_REACHED);
+
+      return tx.userAccount.create({
+        data: {
+          tenantId,
+          name: dto.name,
+          email: dto.email,
+          passwordHash,
+          role: dto.role,
+          isActive: true,
+        },
+      });
     });
 
     await this.audit.log({

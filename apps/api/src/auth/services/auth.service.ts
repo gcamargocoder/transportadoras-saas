@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { UserAccount } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { TokenExpiredError } from 'jsonwebtoken';
+import { AuditService } from '../../audit/services/audit.service';
 import { AppConfig } from '../../config/configuration';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AUTH_ERRORS } from '../constants/auth-error.constants';
@@ -17,6 +18,7 @@ import { verifyPassword } from '../utils/password.util';
 import { RequestMetadata } from '../utils/request-metadata.util';
 import { hashToken } from '../utils/token-hash.util';
 import { toAuthenticatedUser, toJwtPayload } from '../utils/user-mapper.util';
+import { LoginProtectionService } from './login-protection.service';
 
 const EMPTY_REQUEST_METADATA: RequestMetadata = { userAgent: null, ipAddress: null };
 
@@ -27,6 +29,8 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly audit: AuditService,
+    private readonly loginProtection: LoginProtectionService,
     configService: ConfigService<AppConfig, true>,
   ) {
     this.jwtConfig = configService.get('jwt', { infer: true });
@@ -36,6 +40,15 @@ export class AuthService {
     dto: LoginDto,
     metadata: RequestMetadata = EMPTY_REQUEST_METADATA,
   ): Promise<AuthTokensDto> {
+    // Bloqueio temporario por conta (Fase 46) -- checado ANTES de tocar no
+    // banco/argon2 (curto-circuito barato) e ANTES de qualquer
+    // recordFailure() abaixo, para nunca estender o proprio lockout. A
+    // resposta permanece IDENTICA (401 generico) esteja bloqueado ou nao --
+    // nunca revela ao cliente que a conta esta temporariamente bloqueada.
+    if (this.loginProtection.isLocked(dto.tenantId, dto.email)) {
+      throw new UnauthorizedException(AUTH_ERRORS.INVALID_CREDENTIALS);
+    }
+
     // Chave composta (tenantId + email): o schema so garante unicidade de
     // e-mail DENTRO de um tenant (@@unique([tenantId, email])) -- NUNCA
     // buscar so por e-mail, o mesmo e-mail pode existir em tenants
@@ -45,11 +58,28 @@ export class AuthService {
     });
 
     if (!user || user.deletedAt) {
+      // Sem auditoria aqui de proposito: nao ha um tenantId/userId validado
+      // para atribuir a entrada (tenantId pode nem existir) -- registrar
+      // exigiria uma FK falsa ou um formato de auditoria paralelo, o que
+      // fugiria do padrao unico de AuditLog. O contador de brute force
+      // (por tenantId+email, real ou nao) continua contando normalmente.
+      this.loginProtection.recordFailure(dto.tenantId, dto.email);
       throw new UnauthorizedException(AUTH_ERRORS.INVALID_CREDENTIALS);
     }
 
     const passwordMatches = await verifyPassword(user.passwordHash, dto.password);
     if (!passwordMatches) {
+      this.loginProtection.recordFailure(dto.tenantId, dto.email);
+      await this.audit.log({
+        tenantId: user.tenantId,
+        userId: user.id,
+        action: 'auth.login_failed',
+        entityName: 'UserAccount',
+        entityId: user.id,
+        newValue: { reason: 'invalid_password' },
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      });
       throw new UnauthorizedException(AUTH_ERRORS.INVALID_CREDENTIALS);
     }
 
@@ -61,6 +91,17 @@ export class AuthService {
     if (!tenant || !tenant.isActive) {
       throw new ForbiddenException(AUTH_ERRORS.TENANT_INACTIVE);
     }
+
+    this.loginProtection.recordSuccess(dto.tenantId, dto.email);
+    await this.audit.log({
+      tenantId: user.tenantId,
+      userId: user.id,
+      action: 'auth.login_succeeded',
+      entityName: 'UserAccount',
+      entityId: user.id,
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
 
     return this.issueTokens(user, metadata);
   }

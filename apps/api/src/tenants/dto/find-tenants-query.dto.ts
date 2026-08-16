@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { TenantStatus } from '@prisma/client';
 import { IsBoolean, IsEnum, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ParseBooleanQuery } from '../../common/decorators/parse-boolean-query.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -24,6 +25,11 @@ export class FindTenantsQueryDto extends PaginationQueryDto {
   @ParseBooleanQuery()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ enum: TenantStatus, description: 'Fase 47 -- filtra pelo status de ciclo de vida na plataforma.' })
+  @IsOptional()
+  @IsEnum(TenantStatus, { message: 'status invalido.' })
+  status?: TenantStatus;
 
   @ApiPropertyOptional({ enum: TenantSortField, default: TenantSortField.NAME })
   @IsOptional()

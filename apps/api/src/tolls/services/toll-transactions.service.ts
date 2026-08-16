@@ -5,6 +5,8 @@ import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
+import { aggregateMonthlySeries } from '../../common/utils/monthly-series.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTollTransactionDto } from '../dto/create-toll-transaction.dto';
@@ -25,6 +27,8 @@ import {
   TollAuditVerdict,
 } from '../utils/toll-calculation.util';
 import { resolveAxleCount } from '../utils/axle-count-resolution.util';
+
+const MONTHLY_TREND_MONTHS = 12;
 
 const TRANSACTION_INCLUDE = {
   vehicle: true,
@@ -225,6 +229,22 @@ export class TollTransactionsService {
   ): Promise<TollDashboardEntity> {
     const where = this.buildWhere(tenantId, query);
 
+    // Evolucao mensal -- SEMPRE ultimos 12 meses, ignora chargedFrom/
+    // chargedTo (mesmo principio ja usado nos outros dashboards da frota:
+    // uma tendencia de longo prazo nao deveria ficar refem de um filtro de
+    // periodo curto), mas continua respeitando vehicleId/fleetId/demais
+    // filtros de entidade.
+    const trendFloor = new Date();
+    trendFloor.setUTCMonth(trendFloor.getUTCMonth() - (MONTHLY_TREND_MONTHS - 1), 1);
+    trendFloor.setUTCHours(0, 0, 0, 0);
+    const queryWithoutPeriod: FindTollTransactionsQueryDto = { ...query };
+    delete queryWithoutPeriod.chargedFrom;
+    delete queryWithoutPeriod.chargedTo;
+    const trendWhere: Prisma.TollTransactionWhereInput = {
+      ...this.buildWhere(tenantId, queryWithoutPeriod),
+      chargedAt: { gte: trendFloor },
+    };
+
     const [
       totals,
       byStatus,
@@ -236,6 +256,7 @@ export class TollTransactionsService {
       correctCount,
       overchargeCount,
       underchargeCount,
+      trendRows,
     ] = await Promise.all([
       this.prisma.tollTransaction.aggregate({
         where,
@@ -283,6 +304,10 @@ export class TollTransactionsService {
       }),
       this.prisma.tollTransaction.count({
         where: { ...where, ...this.buildAuditVerdictWhere('UNDERCHARGE') },
+      }),
+      this.prisma.tollTransaction.findMany({
+        where: trendWhere,
+        select: { chargedAt: true, chargedAmount: true },
       }),
     ]);
 
@@ -344,6 +369,11 @@ export class TollTransactionsService {
     entity.conformityPercentage =
       entity.conferredCount > 0 ? (correctCount / entity.conferredCount) * 100 : 0;
 
+    entity.monthlyTrendChargedAmount = aggregateMonthlySeries(
+      trendRows.map((r) => ({ date: r.chargedAt, value: toNumberOrNull(r.chargedAmount) ?? 0 })),
+      MONTHLY_TREND_MONTHS,
+    );
+
     return entity;
   }
 
@@ -355,6 +385,7 @@ export class TollTransactionsService {
       tenantId,
       ...(query.tripId ? { tripId: query.tripId } : {}),
       ...(query.vehicleId ? { vehicleId: query.vehicleId } : {}),
+      ...(query.fleetId ? { vehicle: { fleetId: query.fleetId } } : {}),
       ...(query.driverId ? { driverId: query.driverId } : {}),
       ...(query.tagProviderId ? { tagProviderId: query.tagProviderId } : {}),
       ...(query.tollPlazaId ? { tollPlazaId: query.tollPlazaId } : {}),

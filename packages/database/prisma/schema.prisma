@@ -150,6 +150,39 @@ enum VehicleMaintenancePriority {
   @@map("vehicle_maintenance_priority")
 }
 
+/// Catalogo de componentes/itens de manutencao (Fase 45) -- rotulagem
+/// estruturada para permitir agregacao (custo/ocorrencias por componente),
+/// distinta de description/notes (texto livre, nunca usado para agregar).
+/// Enum (nao tabela) por consistencia com o padrao ja usado no projeto para
+/// catalogos fixos (ExpenseCategory, TripStopType etc.).
+enum MaintenanceComponent {
+  ENGINE
+  TRANSMISSION
+  DIFFERENTIAL
+  BRAKES
+  SUSPENSION
+  CLUTCH
+  TIRES
+  COOLING
+  ELECTRICAL
+  ARLA
+  FILTERS
+  ENGINE_OIL
+  TRANSMISSION_OIL
+  DIFFERENTIAL_OIL
+  DIESEL_FILTER
+  AIR_FILTER
+  OIL_FILTER
+  BATTERY
+  SPRINGS
+  SHOCK_ABSORBERS
+  SIDER
+  TRAILER
+  OTHER
+
+  @@map("maintenance_component")
+}
+
 /// Estado do ciclo de vida do pneu (Fase 20) -- distinto de TireLocationType
 /// (ONDE o pneu esta fisicamente agora). RETREADED e setado automaticamente
 /// ao registrar uma recapagem; SCRAPPED ao registrar um descarte.
@@ -529,6 +562,47 @@ enum TripLoadStatus {
 // PLATAFORMA — tenant, usuarios, configuracoes, auditoria geral
 // ============================================================================
 
+/// Status de ciclo de vida da transportadora na plataforma (Fase 47,
+/// Super Administracao) -- mais rico que o `isActive` booleano ja
+/// existente (mantido, nunca removido). Sincronizado numa via so
+/// (status -> isActive) pelo TenantsService: ACTIVE/TRIAL sempre deixam
+/// isActive=true; SUSPENDED/EXPIRED sempre deixam isActive=false. O
+/// TenantGuard (bloqueio de acesso) continua usando so isActive, nunca
+/// duplicando a logica de bloqueio para o status novo.
+enum TenantStatus {
+  ACTIVE
+  TRIAL
+  SUSPENDED
+  EXPIRED
+}
+
+/// Nivel de plano SaaS (Fase 47) -- estrutura inicial, sem cobranca/Stripe
+/// nesta fase. Nomes genericos, ajustaveis livremente depois (nao sao
+/// valores comerciais definitivos).
+enum TenantPlanTier {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+/// Modulos funcionais que podem ser habilitados/desabilitados por
+/// transportadora (Fase 47). Estrutura preparada para o sistema consultar
+/// "este tenant tem X habilitado?" -- nesta fase NENHUM controller
+/// existente consulta isso ainda (nunca bloqueia funcionalidade already
+/// em uso), ver TenantModule util.
+enum TenantModule {
+  TRIPS
+  TOLLS
+  FUEL
+  MAINTENANCE
+  TIRES
+  CHECKLIST
+  STOPS
+  DASHBOARDS
+  REPORTS
+}
+
 /// Transportadora — raiz do isolamento multi-tenant. Toda tabela operacional
 /// referencia Tenant direta ou indiretamente.
 model Tenant {
@@ -546,10 +620,17 @@ model Tenant {
   /// aqui e apenas a referencia (ex: URL de um storage externo).
   logoUrl   String?  @map("logo_url")
   isActive  Boolean  @default(true) @map("is_active")
+  /// Fase 47 -- ver comentario do enum TenantStatus.
+  status    TenantStatus @default(ACTIVE)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   settings                TenantSettings?
+  plan                    TenantPlan?
+  /// Fase 50 -- relacao comercial (assinatura/cobranca), distinta de
+  /// TenantPlan (que governa modulos/limites).
+  subscription            TenantSubscription?
+  subscriptionPayments    SubscriptionPayment[]
   users                   UserAccount[]
   fleets                  Fleet[]
   vehicles                Vehicle[]
@@ -560,6 +641,7 @@ model Tenant {
   trips                   Trip[]
   vehicleTags             VehicleTag[]
   vehicleMaintenances     VehicleMaintenance[]
+  maintenancePlans        MaintenancePlan[]
   documents               Document[]
   attachments             Attachment[]
   externalReferences      ExternalReference[]
@@ -636,6 +718,137 @@ model TenantSettings {
   @@map("tenant_settings")
 }
 
+/// Plano SaaS da transportadora (Fase 47, Super Administracao). 1:1 com
+/// Tenant, mesmo padrao de TenantSettings -- separado para nao poluir a
+/// tabela principal. Sem cobranca/Stripe nesta fase -- so estrutura
+/// (tier/trial/limites/modulos). Limites nulos = sem limite (nunca um
+/// numero comercial inventado por padrao).
+model TenantPlan {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @unique @map("tenant_id") @db.Uuid
+  tier           TenantPlanTier @default(STARTER)
+  /// Fase 49 -- data de inicio do trial (preenchida na 1a transicao para
+  /// TRIAL, nunca sobrescrita depois -- preserva historico mesmo que o
+  /// tenant saia e volte para TRIAL ou tenha o status alterado manualmente).
+  trialStartedAt DateTime?      @map("trial_started_at")
+  /// Preenchido quando o tenant esta (ou esteve) em trial. Fase 49 -- usado
+  /// pelo scheduler de expiracao automatica (TRIAL -> EXPIRED quando
+  /// trialEndsAt < agora); antes so era editavel manualmente pelo SUPER_ADMIN.
+  trialEndsAt    DateTime?      @map("trial_ends_at")
+  /// Limites configuraveis por tenant. null = sem limite.
+  maxUsers       Int?           @map("max_users")
+  maxVehicles    Int?           @map("max_vehicles")
+  maxDrivers     Int?           @map("max_drivers")
+  maxStorageMb   Int?           @map("max_storage_mb")
+  /// Modulos habilitados -- default = todos (nunca bloqueia modulo ja em
+  /// uso por um tenant existente).
+  enabledModules TenantModule[] @default([TRIPS, TOLLS, FUEL, MAINTENANCE, TIRES, CHECKLIST, STOPS, DASHBOARDS, REPORTS]) @map("enabled_modules")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_plans")
+}
+
+// ============================================================================
+// ASSINATURA E COBRANCA (Fase 50) -- relacao COMERCIAL (quanto/quando/como o
+// tenant paga), deliberadamente separada de TenantPlan (que continua sendo a
+// UNICA fonte de modulos/limites/enforcement, intocado nesta fase). Cobranca
+// e 100% MANUAL nesta fase -- sem Stripe/gateway/webhook real, so campos
+// opcionais preparados para integracao futura.
+// ============================================================================
+
+enum SubscriptionStatus {
+  ACTIVE
+  PENDING
+  OVERDUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum SubscriptionPaymentMethod {
+  PIX_SCHEDULED
+  DIRECT_DEBIT
+  /// Preparado para uso futuro -- nenhuma integracao real nesta fase.
+  STRIPE
+}
+
+enum BillingPeriodicity {
+  MONTHLY
+  YEARLY
+}
+
+enum SubscriptionPaymentStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+/// 1:1 com Tenant. planTier reaproveita o MESMO enum TenantPlanTier de
+/// TenantPlan (nunca um enum paralelo) mas representa o tier COMERCIAL
+/// (o que esta sendo cobrado) -- pode divergir do TenantPlan.tier atual
+/// (ex: upgrade de features acordado antes do upgrade comercial formal),
+/// nunca sincronizado automaticamente entre os dois.
+model TenantSubscription {
+  id            String                     @id @default(uuid()) @db.Uuid
+  tenantId      String                     @unique @map("tenant_id") @db.Uuid
+  planTier      TenantPlanTier             @map("plan_tier")
+  amount        Decimal                    @db.Decimal(10, 2)
+  periodicity   BillingPeriodicity
+  paymentMethod SubscriptionPaymentMethod  @map("payment_method")
+  startDate     DateTime                   @map("start_date")
+  /// Dia do mes de vencimento (1-31), usado pelo calculo de proximo
+  /// vencimento (billing-date.util.ts) -- nunca calculado no frontend.
+  dueDay        Int                        @map("due_day")
+  nextDueDate   DateTime                   @map("next_due_date")
+  status        SubscriptionStatus         @default(PENDING)
+  notes         String?                    @db.Text
+  /// Preparacao Stripe (Fase 50, secao 12) -- nunca lidos/escritos por
+  /// nenhum codigo nesta fase, so reservam o campo para integracao futura.
+  externalCustomerId     String?           @map("external_customer_id")
+  externalSubscriptionId String?           @map("external_subscription_id")
+  createdAt     DateTime                   @default(now()) @map("created_at")
+  updatedAt     DateTime                   @updatedAt @map("updated_at")
+
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payments SubscriptionPayment[]
+
+  @@index([status])
+  @@index([nextDueDate])
+  @@map("tenant_subscriptions")
+}
+
+/// Historico de pagamentos -- registro IMUTAVEL (ledger). Deliberadamente
+/// SEM updatedAt e sem nenhum endpoint de update/delete: cada acao gera uma
+/// linha NOVA, nunca altera uma existente (pedido explicito: nao alterar
+/// retroativamente, nao permitir apagar historico financeiro).
+model SubscriptionPayment {
+  id                String                     @id @default(uuid()) @db.Uuid
+  tenantId          String                     @map("tenant_id") @db.Uuid
+  subscriptionId    String                     @map("subscription_id") @db.Uuid
+  amount            Decimal                    @db.Decimal(10, 2)
+  dueDate           DateTime                   @map("due_date")
+  paidAt            DateTime?                  @map("paid_at")
+  paymentMethod     SubscriptionPaymentMethod  @map("payment_method")
+  status            SubscriptionPaymentStatus  @default(PENDING)
+  reference         String?                    @db.Text
+  /// Preparacao Stripe -- nunca lido/escrito nesta fase.
+  externalPaymentId String?                    @map("external_payment_id")
+  createdBy         String                     @map("created_by") @db.Uuid
+  createdAt         DateTime                   @default(now()) @map("created_at")
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription TenantSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  creator      UserAccount        @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@map("subscription_payments")
+}
+
 /// Conta de usuario da plataforma (admin, operador/despachante). Motoristas
 /// podem opcionalmente ter uma UserAccount vinculada para login no app --
 /// ver Driver.userAccountId.
@@ -678,6 +891,7 @@ model UserAccount {
   tireInspectionsCreated         TireInspection[]     @relation("TireInspectionCreator")
   tireDisposalsCreated           TireDisposal[]       @relation("TireDisposalCreator")
   tollRatesCreated               TollRate[]           @relation("TollRateCreator")
+  subscriptionPaymentsCreated    SubscriptionPayment[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -801,6 +1015,7 @@ model Vehicle {
   tags                    VehicleTag[]
   telemetry               Telemetry[]
   maintenances            VehicleMaintenance[]
+  maintenancePlans        MaintenancePlan[]
   tollTransactions        TollTransaction[]
   tripExpenses            TripExpense[]
   fuelSupplies            FuelSupply[]
@@ -820,10 +1035,12 @@ model Vehicle {
   @@map("vehicles")
 }
 
-/// Registro de manutencao do veiculo. Modulo de negocio completo (agendamento,
-/// custo, oficina, pecas...) fica para uma fase dedicada -- aqui existe o
-/// suficiente para o relacionamento Vehicle->Manutencoes e para a regra de
-/// exclusao ("nao excluir veiculo com manutencao aberta").
+/// Registro de manutencao do veiculo (Fase 12: relacionamento basico +
+/// regra de exclusao; Fase 45: modulo completo -- componente, pecas
+/// itemizadas, vinculo com plano preventivo, tempo parado, proxima
+/// quilometragem). Continua sendo A UNICA fonte de verdade de manutencao --
+/// "MaintenanceRecord" nao e um model separado, e este mesmo (evita
+/// duplicar dominio).
 model VehicleMaintenance {
   id                 String                     @id @default(uuid()) @db.Uuid
   tenantId           String                     @map("tenant_id") @db.Uuid
@@ -831,12 +1048,19 @@ model VehicleMaintenance {
   type               VehicleMaintenanceType     @default(PREVENTIVE)
   status             VehicleMaintenanceStatus   @default(OPEN)
   priority           VehicleMaintenancePriority @default(MEDIUM)
+  /// Fase 45 -- item/sistema do veiculo alvo desta manutencao. Opcional
+  /// (nem todo registro historico tem essa granularidade).
+  component          MaintenanceComponent?
   /// Data de abertura da manutencao (distinta de createdAt: pode ser
   /// retroativa, ex: importacao de historico).
   openedAt           DateTime                   @default(now()) @map("opened_at")
   scheduledAt        DateTime?                  @map("scheduled_at")
   completedAt        DateTime?                  @map("completed_at")
   odometerKm         Decimal?                   @map("odometer_km") @db.Decimal(10, 2)
+  /// Fase 45 -- quilometragem prevista da PROXIMA manutencao deste
+  /// componente (distinto de MaintenancePlan.intervalKm, que e a regra;
+  /// este e o valor calculado/informado para ESTE registro especifico).
+  nextOdometerKm     Decimal?                   @map("next_odometer_km") @db.Decimal(10, 2)
   workshop           String?
   supplier           String?
   mechanic           String?
@@ -847,25 +1071,105 @@ model VehicleMaintenance {
   description        String?
   notes              String?
   laborCost          Decimal?                   @map("labor_cost") @db.Decimal(10, 2)
+  /// Fase 45 -- quando ha pecas itemizadas (relacao `parts`), este valor e
+  /// SEMPRE recalculado como a soma delas pelo service, nunca aceito solto
+  /// do cliente nesse caso. Sem itens, continua aceito diretamente (mesmo
+  /// comportamento desde a Fase 13).
   partsCost          Decimal?                   @map("parts_cost") @db.Decimal(10, 2)
   /// Sempre calculado pelo service (laborCost + partsCost) -- nunca aceito
   /// diretamente do cliente.
   totalCost          Decimal?                   @map("total_cost") @db.Decimal(10, 2)
+  /// Fase 45 -- tempo de veiculo parado para esta manutencao, em minutos,
+  /// SEMPRE informado explicitamente (nunca inferido de openedAt/
+  /// completedAt, que podem nao representar o periodo real de parada --
+  /// ex: pecas encomendadas com o veiculo rodando ate elas chegarem).
+  downtimeMinutes    Int?                       @map("downtime_minutes")
   serviceOrderNumber String?                    @map("service_order_number")
+  /// Fase 45 -- nota fiscal do fornecedor/oficina, distinta de
+  /// serviceOrderNumber (OS interna).
+  invoiceNumber      String?                    @map("invoice_number")
   warrantyUntil      DateTime?                  @map("warranty_until")
   nextReviewAt       DateTime?                  @map("next_review_at")
+  /// Fase 45 -- preenchido quando este registro cumpre um MaintenancePlan
+  /// (preventiva agendada). Opcional -- corretivas e preventivas avulsas
+  /// nunca tem plano.
+  maintenancePlanId  String?                    @map("maintenance_plan_id") @db.Uuid
   createdAt          DateTime                   @default(now()) @map("created_at")
   updatedAt          DateTime                   @updatedAt @map("updated_at")
 
-  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  vehicle         Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  responsibleUser UserAccount? @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle         Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  responsibleUser UserAccount?      @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  maintenancePlan MaintenancePlan?  @relation(fields: [maintenancePlanId], references: [id], onDelete: SetNull)
+  parts           MaintenancePart[]
 
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, openedAt])
   @@index([vehicleId, status])
+  @@index([tenantId, component])
+  @@index([maintenancePlanId])
   @@map("vehicle_maintenances")
+}
+
+/// Plano de manutencao PREVENTIVA (Fase 45) -- regra de recorrencia por
+/// veiculo/componente (intervalo em km/dias/horas), usada pela camada de
+/// alertas para calcular vencidas/proximas (MAINTENANCE_OVERDUE/
+/// MAINTENANCE_DUE_SOON). Nao gera VehicleMaintenance automaticamente --
+/// so serve de REFERENCIA para o calculo; o registro real continua sendo
+/// criado manualmente (administrativo, online) e pode referenciar o plano
+/// via VehicleMaintenance.maintenancePlanId.
+model MaintenancePlan {
+  id              String                 @id @default(uuid()) @db.Uuid
+  tenantId        String                 @map("tenant_id") @db.Uuid
+  vehicleId       String                 @map("vehicle_id") @db.Uuid
+  name            String
+  component       MaintenanceComponent
+  maintenanceType VehicleMaintenanceType @default(PREVENTIVE) @map("maintenance_type")
+  /// Pelo menos um dos 3 intervalos abaixo deve ser informado (validado no
+  /// service, nunca a nivel de schema) -- um plano sem nenhum criterio de
+  /// vencimento nunca gera alerta.
+  intervalKm      Int?                   @map("interval_km")
+  intervalDays    Int?                   @map("interval_days")
+  intervalHours   Int?                   @map("interval_hours")
+  /// Antecedencia (km/dias) para o alerta MAINTENANCE_DUE_SOON, antes de
+  /// vencer de fato. Opcional -- sem isso, so MAINTENANCE_OVERDUE se aplica.
+  alertBeforeKm   Int?                   @map("alert_before_km")
+  alertBeforeDays Int?                   @map("alert_before_days")
+  active          Boolean                @default(true)
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+
+  tenant  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle Vehicle              @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  records VehicleMaintenance[]
+
+  @@index([tenantId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, active])
+  @@map("maintenance_plans")
+}
+
+/// Peca/item utilizado numa manutencao (Fase 45) -- itemizacao opcional de
+/// VehicleMaintenance.partsCost. Quando existem linhas aqui, partsCost do
+/// registro pai e SEMPRE a soma delas (ver MaintenancesService) -- nunca os
+/// dois valores divergindo.
+model MaintenancePart {
+  id            String   @id @default(uuid()) @db.Uuid
+  maintenanceId String   @map("maintenance_id") @db.Uuid
+  name          String
+  quantity      Decimal  @db.Decimal(10, 2)
+  unitPrice     Decimal  @map("unit_price") @db.Decimal(10, 2)
+  /// Sempre calculado pelo service (quantity * unitPrice) -- nunca aceito
+  /// diretamente do cliente.
+  totalPrice    Decimal  @map("total_price") @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  maintenance VehicleMaintenance @relation(fields: [maintenanceId], references: [id], onDelete: Cascade)
+
+  @@index([maintenanceId])
+  @@map("maintenance_parts")
 }
 
 /// Pneu da frota (Fase 20). status = estado de ciclo de vida (NEW/IN_USE/
@@ -2233,6 +2537,11 @@ model ImportJob {
   finishedAt       DateTime?       @map("finished_at")
   createdBy        String          @map("created_by") @db.Uuid
   createdAt        DateTime        @default(now()) @map("created_at")
+  /// Fase 48 -- tamanho real do arquivo (Express.Multer.File.size) para
+  /// enforcement de limite de armazenamento do plano. Nullable: jobs
+  /// anteriores a esta fase ficam NULL (nunca estimado retroativamente),
+  /// excluidos da soma de uso real.
+  sizeBytes        Int?            @map("size_bytes")
 
   tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   provider TagProvider      @relation(fields: [providerId], references: [id], onDelete: Restrict)
@@ -2506,6 +2815,11 @@ model Attachment {
   storageKey   String         @map("storage_key")
   uploadedById String?        @map("uploaded_by_id") @db.Uuid
   createdAt    DateTime       @default(now()) @map("created_at")
+  /// Fase 48 -- tamanho real do arquivo (Express.Multer.File.size) para
+  /// enforcement de limite de armazenamento do plano. Nullable: anexos
+  /// anteriores a esta fase ficam NULL (nunca estimado retroativamente),
+  /// excluidos da soma de uso real.
+  sizeBytes    Int?           @map("size_bytes")
 
   tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   document          Document?           @relation(fields: [documentId], references: [id], onDelete: SetNull)

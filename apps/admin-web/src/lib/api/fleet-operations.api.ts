@@ -1,12 +1,17 @@
 import type { QueryableParams } from '../../types/api';
 import type {
   FleetCostsEntity,
+  FleetCompositionsOverviewEntity,
   FleetFuelAnalyticsEntity,
   FleetMaintenanceDashboardEntity,
   FleetOperationalIndicatorsEntity,
   FleetOperationsDashboardEntity,
+  FleetDowntimeCostEntity,
   FleetStopsDashboardEntity,
+  FleetTiresOverviewEntity,
+  FleetVehiclesOverviewEntity,
 } from '../../types/entities';
+import type { TireStatus, TrailerType, TripStopStatus, TripStopType, VehicleStatus, VehicleType } from '../../types/enums';
 import { api } from './http';
 
 // Fase 40 -- gestao operacional da frota. Filtros espelham
@@ -14,12 +19,24 @@ import { api } from './http';
 // endDate filtram pela data do EVENTO real de cada dominio (nunca
 // createdAt); fleetId filtra por Vehicle.fleetId (nao se aplica aos cards
 // fuel/tires do dashboard consolidado, que reaproveitam os dashboards
-// proprios de abastecimento/pneus tal como existem).
+// proprios de abastecimento/pneus tal como existem). Fase 44 -- driverId/
+// type/status so sao aplicados por getFleetOperationsStops (ranking por
+// motorista + alertas de duracao longa), ignorados pelos demais.
 export interface FleetOperationsQuery extends QueryableParams {
   startDate?: string | undefined;
   endDate?: string | undefined;
   vehicleId?: string | undefined;
   fleetId?: string | undefined;
+  driverId?: string | undefined;
+  type?: TripStopType | undefined;
+  status?: TripStopStatus | undefined;
+  // Aplicados apenas por getFleetOperationsVehicles.
+  vehicleType?: VehicleType | undefined;
+  vehicleStatus?: VehicleStatus | undefined;
+  // Aplicado apenas por getFleetOperationsTires.
+  tireStatus?: TireStatus | undefined;
+  // Aplicado apenas por getFleetOperationsCompositions.
+  trailerType?: TrailerType | undefined;
 }
 
 export function getFleetOperationsDashboard(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
@@ -46,4 +63,30 @@ export function getFleetOperationsIndicators(query: FleetOperationsQuery = {}, s
 // rankings, evolucao mensal, periodo anterior e alertas).
 export function getFleetOperationsFuel(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
   return api.get<FleetFuelAnalyticsEntity>('/fleet-operations/fuel', query, signal);
+}
+
+// Composicao da frota (iteracao de redesign visual) -- foto do estado atual,
+// ignora startDate/endDate.
+export function getFleetOperationsVehicles(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetVehiclesOverviewEntity>('/fleet-operations/vehicles', query, signal);
+}
+
+// Pneus (iteracao de redesign visual) -- custo/evolucao mensal respeitam
+// startDate/endDate; composicao/gauge de desgaste sao estado atual.
+export function getFleetOperationsTires(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetTiresOverviewEntity>('/fleet-operations/tires', query, signal);
+}
+
+// Tempo parado (TripStop) e receita perdida ESTIMADA (taxa de receita/hora
+// por veiculo, historico completo, ignora startDate/endDate -- so o tempo
+// parado em si respeita o periodo).
+export function getFleetOperationsDowntimeCost(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetDowntimeCostEntity>('/fleet-operations/downtime-cost', query, signal);
+}
+
+// Uso de veiculo+carreta por viagem: composicao atual da frota de carretas
+// (ignora startDate/endDate), configuracao de eixos/ranking/tempo parado vs.
+// em uso respeitam o periodo (via viagens no escopo do filtro).
+export function getFleetOperationsCompositions(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetCompositionsOverviewEntity>('/fleet-operations/compositions', query, signal);
 }

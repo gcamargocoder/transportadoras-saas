@@ -1,15 +1,20 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { VehicleMaintenancePriority, VehicleMaintenanceType } from '@prisma/client';
+import { MaintenanceComponent, VehicleMaintenancePriority, VehicleMaintenanceType } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDateString,
   IsEnum,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Min,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { MaintenancePartInputDto } from './maintenance-part-input.dto';
 
 // status/completedAt/totalCost NAO fazem parte deste DTO de proposito:
 // status nasce sempre OPEN e so muda via PATCH /maintenances/:id/status
@@ -113,4 +118,42 @@ export class CreateMaintenanceDto {
   @IsOptional()
   @IsDateString({}, { message: 'nextReviewAt deve ser uma data valida (ISO 8601).' })
   nextReviewAt?: string;
+
+  @ApiPropertyOptional({ enum: MaintenanceComponent, description: 'Item/sistema do veiculo alvo desta manutencao.' })
+  @IsOptional()
+  @IsEnum(MaintenanceComponent, { message: 'component invalido.' })
+  component?: MaintenanceComponent;
+
+  @ApiPropertyOptional({ example: 135000, description: 'Quilometragem prevista da proxima manutencao deste componente.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0, { message: 'nextOdometerKm deve ser maior ou igual a zero.' })
+  nextOdometerKm?: number;
+
+  @ApiPropertyOptional({ example: 240, description: 'Tempo de veiculo parado (minutos), informado explicitamente.' })
+  @IsOptional()
+  @IsInt()
+  @Min(0, { message: 'downtimeMinutes nao pode ser negativo.' })
+  downtimeMinutes?: number;
+
+  @ApiPropertyOptional({ example: 'NF-000123456' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  invoiceNumber?: string;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'Plano de manutencao preventiva que este registro cumpre.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'maintenancePlanId deve ser um UUID valido.' })
+  maintenancePlanId?: string;
+
+  @ApiPropertyOptional({
+    type: [MaintenancePartInputDto],
+    description: 'Pecas itemizadas. Quando informado, substitui a lista inteira e recalcula partsCost como a soma.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MaintenancePartInputDto)
+  parts?: MaintenancePartInputDto[];
 }

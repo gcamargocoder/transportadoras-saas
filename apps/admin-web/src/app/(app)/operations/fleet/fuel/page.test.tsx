@@ -54,6 +54,8 @@ function buildFuelAnalytics(overrides: Partial<FleetFuelAnalyticsEntity> = {}): 
     },
     alerts: [],
     previousPeriod: null,
+    tankLevels: [],
+    tankFleetAverage: { value: null, available: false, reason: 'NO_VEHICLE_WITH_TANK_DATA' },
     ...overrides,
   };
 }
@@ -232,5 +234,51 @@ describe('FleetFuelPage', () => {
 
     expect(await screen.findByText('Custo vs período anterior')).toBeInTheDocument();
     expect(screen.getByText('+100%')).toBeInTheDocument();
+  });
+
+  it('renderiza o gauge de nível de tanque disponível e o card indisponível com o motivo', async () => {
+    getFleetOperationsFuelMock.mockResolvedValue(
+      buildFuelAnalytics({
+        tankLevels: [
+          {
+            vehicleId: 'v1',
+            plate: 'ABC1D23',
+            capacityLiters: 400,
+            estimatedLevelLiters: 300,
+            percentage: 75,
+            available: true,
+            reason: null,
+            lastSupplyAt: '2026-01-01T10:00:00.000Z',
+            kmSinceLastSupply: 400,
+          },
+          {
+            vehicleId: 'v2',
+            plate: 'XYZ9A88',
+            capacityLiters: null,
+            estimatedLevelLiters: null,
+            percentage: null,
+            available: false,
+            reason: 'TANK_CAPACITY_NOT_CONFIGURED',
+            lastSupplyAt: null,
+            kmSinceLastSupply: null,
+          },
+        ],
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText('Nível dos tanques')).toBeInTheDocument();
+    expect(screen.getAllByText('ABC1D23').length).toBeGreaterThan(0);
+    expect(screen.getByText('75%')).toBeInTheDocument();
+    expect(screen.getByText('≈ 300 L de 400 L')).toBeInTheDocument();
+    expect(screen.getByText('XYZ9A88')).toBeInTheDocument();
+    expect(screen.getByText('Capacidade do tanque não cadastrada')).toBeInTheDocument();
+  });
+
+  it('mostra estado vazio na seção de tanques quando não há veículo no escopo', async () => {
+    getFleetOperationsFuelMock.mockResolvedValue(buildFuelAnalytics({ tankLevels: [] }));
+    renderPage();
+
+    expect(await screen.findByText('Nenhum veículo ativo no período/filtro selecionado.')).toBeInTheDocument();
   });
 });

@@ -4,13 +4,16 @@ import { Truck } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '../../hooks/use-auth';
+import { useTenantPlan } from '../../hooks/use-tenant-plan';
 import { hasRole } from '../../lib/auth/roles';
 import { NAV_GROUPS } from '../../lib/nav-config';
+import { UserRole } from '../../types/enums';
 import { cn } from '../../utils/cn';
 
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }): JSX.Element {
   const pathname = usePathname();
   const { user } = useAuth();
+  const { plan } = useTenantPlan();
 
   return (
     <div className="flex h-full flex-col">
@@ -23,7 +26,18 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }): JSX.Ele
 
       <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 pb-4">
         {NAV_GROUPS.map((group) => {
-          const visibleItems = group.items.filter((item) => hasRole(user?.role, item.roles));
+          const visibleItems = group.items.filter(
+            (item) =>
+              hasRole(user?.role, item.roles) &&
+              // Fase 48 -- SUPER_ADMIN nunca e restringido por modulo (mesmo
+              // criterio do RequireModuleGuard no backend); autoridade real
+              // e sempre o backend, isto e so UX (esconder o que o usuario
+              // nao pode usar).
+              (!item.module ||
+                user?.role === UserRole.SUPER_ADMIN ||
+                !plan ||
+                plan.enabledModules.includes(item.module)),
+          );
           if (visibleItems.length === 0) return null;
 
           return (

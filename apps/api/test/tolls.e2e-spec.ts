@@ -141,6 +141,15 @@ describe('Tolls (e2e)', () => {
     return res.body.data.id as string;
   }
 
+  async function createFleet(auth: string, overrides: Partial<Record<string, unknown>> = {}) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/fleets')
+      .set('Authorization', auth)
+      .send({ name: `Frota ${randomUUID()}`, type: 'OWN', ...overrides })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   async function createVehicle(auth: string, overrides: Partial<Record<string, unknown>> = {}) {
     const res = await request(app.getHttpServer())
       .post('/api/v1/vehicles')
@@ -218,8 +227,8 @@ describe('Tolls (e2e)', () => {
 
   // Monta viagem + veiculo com tag ativa e valida, pronta para registrar
   // transacao de pedagio.
-  async function setupTripWithTaggedVehicle(auth: string) {
-    const vehicleId = await createVehicle(auth);
+  async function setupTripWithTaggedVehicle(auth: string, vehicleOverrides: Partial<Record<string, unknown>> = {}) {
+    const vehicleId = await createVehicle(auth, vehicleOverrides);
     const driverId = await createDriver(auth);
     const compositionId = await createComposition(auth, vehicleId);
     const originId = await createLocation(auth, `Origem ${randomUUID()}`);
@@ -948,6 +957,61 @@ describe('Tolls (e2e)', () => {
         (g: { status: string }) => g.status === 'NORMAL',
       );
       expect(statusNormal.count).toBe(1);
+    });
+
+    it('filtra por fleetId (Vehicle.fleetId)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('DashboardFleet');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plaza = await createTollPlaza({ pricePerAxle: 10 });
+      const fleetA = await createFleet(auth);
+
+      const setupA = await setupTripWithTaggedVehicle(auth, { fleetId: fleetA });
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({ tripId: setupA.tripId, tollPlazaId: plaza, axleCount: 5, chargedAmount: 50, chargedAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+
+      const setupB = await setupTripWithTaggedVehicle(auth); // sem frota
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({ tripId: setupB.tripId, tollPlazaId: plaza, axleCount: 5, chargedAmount: 70, chargedAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+
+      const byFleet = await request(app.getHttpServer())
+        .get(`/api/v1/toll-transactions/dashboard?fleetId=${fleetA}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(byFleet.body.data.totalCount).toBe(1);
+      expect(byFleet.body.data.totalChargedAmount).toBe(50);
+
+      const unfiltered = await request(app.getHttpServer())
+        .get('/api/v1/toll-transactions/dashboard')
+        .set('Authorization', auth)
+        .expect(200);
+      expect(unfiltered.body.data.totalCount).toBe(2);
+    });
+
+    it('inclui evolucao mensal com 12 posicoes, incluindo uma transacao lancada agora', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('DashboardTrend');
+      const auth = `Bearer ${adminAccessToken}`;
+      const plaza = await createTollPlaza({ pricePerAxle: 10 });
+      const setup = await setupTripWithTaggedVehicle(auth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({ tripId: setup.tripId, tollPlazaId: plaza, axleCount: 5, chargedAmount: 50, chargedAt: new Date().toISOString() })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/toll-transactions/dashboard')
+        .set('Authorization', auth)
+        .expect(200);
+
+      expect(res.body.data.monthlyTrendChargedAmount).toHaveLength(12);
+      expect(res.body.data.monthlyTrendChargedAmount[11].value).toBe(50);
     });
   });
 

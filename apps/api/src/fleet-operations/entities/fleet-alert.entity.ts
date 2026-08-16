@@ -18,7 +18,22 @@ export type FleetAlertType =
   | 'CONSUMPTION_OUTLIER_HIGH'
   | 'CONSUMPTION_OUTLIER_LOW'
   | 'SUPPLY_VOLUME_OUTLIER'
-  | 'ODOMETER_REGRESSION';
+  | 'ODOMETER_REGRESSION'
+  // Fase 45 -- manutencao (ver fleet-operations-alerts.constants.ts).
+  // MAINTENANCE_OVERDUE/MAINTENANCE_DUE_SOON tambem aparecem, com mais
+  // detalhe estruturado (componente/data/km), em overdueMaintenances/
+  // upcomingMaintenances (FleetMaintenanceDashboardEntity).
+  | 'MAINTENANCE_OVERDUE'
+  | 'MAINTENANCE_DUE_SOON'
+  | 'HIGH_COST'
+  | 'EXCESSIVE_BREAKDOWN'
+  | 'EXCESSIVE_DOWNTIME'
+  | 'CRITICAL_COMPONENT'
+  // Iteracao de redesign visual -- pneus (ver
+  // fleet-operations-metrics.service.ts, computeTiresOverview).
+  | 'TIRE_NEAR_REPLACEMENT'
+  // Tempo parado e receita perdida (ver computeDowntimeCost).
+  | 'DOWNTIME_COST_OUTLIER';
 
 export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
 
@@ -33,6 +48,14 @@ export const FLEET_ALERT_TYPES: FleetAlertType[] = [
   'CONSUMPTION_OUTLIER_LOW',
   'SUPPLY_VOLUME_OUTLIER',
   'ODOMETER_REGRESSION',
+  'MAINTENANCE_OVERDUE',
+  'MAINTENANCE_DUE_SOON',
+  'HIGH_COST',
+  'EXCESSIVE_BREAKDOWN',
+  'EXCESSIVE_DOWNTIME',
+  'CRITICAL_COMPONENT',
+  'TIRE_NEAR_REPLACEMENT',
+  'DOWNTIME_COST_OUTLIER',
 ];
 
 export class FleetAlertEntity {

@@ -1,8 +1,19 @@
-import { VehicleMaintenance } from '@prisma/client';
+import { MaintenancePart, VehicleMaintenance } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { MaintenanceEntity } from '../entities/maintenance.entity';
+import { MaintenancePartEntity } from '../entities/maintenance-part.entity';
 
-export function toMaintenanceEntity(maintenance: VehicleMaintenance): MaintenanceEntity {
+function toMaintenancePartEntity(part: MaintenancePart): MaintenancePartEntity {
+  const entity = new MaintenancePartEntity();
+  entity.id = part.id;
+  entity.name = part.name;
+  entity.quantity = toNumberOrNull(part.quantity) ?? 0;
+  entity.unitPrice = toNumberOrNull(part.unitPrice) ?? 0;
+  entity.totalPrice = toNumberOrNull(part.totalPrice) ?? 0;
+  return entity;
+}
+
+export function toMaintenanceEntity(maintenance: VehicleMaintenance & { parts?: MaintenancePart[] }): MaintenanceEntity {
   const entity = new MaintenanceEntity();
   entity.id = maintenance.id;
   entity.tenantId = maintenance.tenantId;
@@ -26,6 +37,12 @@ export function toMaintenanceEntity(maintenance: VehicleMaintenance): Maintenanc
   entity.serviceOrderNumber = maintenance.serviceOrderNumber;
   entity.warrantyUntil = maintenance.warrantyUntil;
   entity.nextReviewAt = maintenance.nextReviewAt;
+  entity.component = maintenance.component;
+  entity.nextOdometerKm = toNumberOrNull(maintenance.nextOdometerKm);
+  entity.downtimeMinutes = maintenance.downtimeMinutes;
+  entity.invoiceNumber = maintenance.invoiceNumber;
+  entity.maintenancePlanId = maintenance.maintenancePlanId;
+  entity.parts = (maintenance.parts ?? []).map(toMaintenancePartEntity);
   entity.createdAt = maintenance.createdAt;
   entity.updatedAt = maintenance.updatedAt;
   return entity;

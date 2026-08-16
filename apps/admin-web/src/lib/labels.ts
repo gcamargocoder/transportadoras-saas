@@ -5,6 +5,7 @@ import {
   AlertSeverity,
   AlertType,
   AxleEventSource,
+  BillingPeriodicity,
   DocumentType,
   ExpenseCategory,
   ExpensePaymentMethod,
@@ -13,11 +14,18 @@ import {
   FuelType,
   ImportJobStatus,
   LocationType,
+  MaintenanceComponent,
   PaymentType,
   RevenueCategory,
   RouteTollEstimateSource,
   SettlementStatus,
+  SubscriptionPaymentMethod,
+  SubscriptionPaymentStatus,
+  SubscriptionStatus,
   SyncStatus,
+  TenantModule,
+  TenantPlanTier,
+  TenantStatus,
   TireLocationType,
   TireStatus,
   TollMatchStatus,
@@ -26,6 +34,8 @@ import {
   TripLoadStatus,
   TripPriority,
   TripStatus,
+  TripStopSource,
+  TripStopStatus,
   TripStopType,
   UserRole,
   VehicleFuelType,
@@ -35,6 +45,7 @@ import {
   VehicleStatus,
   VehicleType,
 } from '../types/enums';
+import type { DowntimeCategory } from '../types/entities';
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   SUPER_ADMIN: 'Super admin',
@@ -85,6 +96,37 @@ export const TRIP_STOP_TYPE_LABELS: Record<TripStopType, string> = {
   MEAL: 'Refeição',
   MAINTENANCE: 'Manutenção',
   OTHER: 'Outro',
+  LOADING: 'Carga',
+  UNLOADING: 'Descarga',
+  WAITING_LOADING: 'Aguardando carga',
+  WAITING_UNLOADING: 'Aguardando descarga',
+  YARD: 'Pátio',
+  CUSTOMER: 'Cliente',
+  GARAGE: 'Garagem',
+  BREAKDOWN: 'Quebra',
+  TIRE: 'Pneu',
+  CONGESTION: 'Congestionamento',
+  ACCIDENT: 'Acidente',
+  ROAD_CLOSURE: 'Interdição',
+  INSPECTION: 'Fiscalização',
+  PERSONAL_NEED: 'Necessidade pessoal',
+  DOCUMENTATION: 'Documentação',
+  WAITING_AUTHORIZATION: 'Aguardando autorização',
+};
+
+export const TRIP_STOP_STATUS_LABELS: Record<TripStopStatus, string> = {
+  OPEN: 'Em aberto',
+  COMPLETED: 'Concluída',
+  CANCELLED: 'Cancelada',
+};
+
+export const TRIP_STOP_SOURCE_LABELS: Record<TripStopSource, string> = {
+  MANUAL: 'Manual',
+  DRIVER_APP: 'App do motorista',
+  GPS: 'GPS',
+  SYSTEM: 'Sistema',
+  IMPORT: 'Importação',
+  ADMIN: 'Administrativo',
 };
 
 export const AXLE_EVENT_SOURCE_LABELS: Record<AxleEventSource, string> = {
@@ -190,6 +232,32 @@ export const MAINTENANCE_PRIORITY_LABELS: Record<VehicleMaintenancePriority, str
   CRITICAL: 'Crítica',
 };
 
+export const MAINTENANCE_COMPONENT_LABELS: Record<MaintenanceComponent, string> = {
+  ENGINE: 'Motor',
+  TRANSMISSION: 'Câmbio',
+  DIFFERENTIAL: 'Diferencial',
+  BRAKES: 'Freio',
+  SUSPENSION: 'Suspensão',
+  CLUTCH: 'Embreagem',
+  TIRES: 'Pneus',
+  COOLING: 'Arrefecimento',
+  ELECTRICAL: 'Elétrica',
+  ARLA: 'Arla',
+  FILTERS: 'Filtros',
+  ENGINE_OIL: 'Óleo Motor',
+  TRANSMISSION_OIL: 'Óleo Câmbio',
+  DIFFERENTIAL_OIL: 'Óleo Diferencial',
+  DIESEL_FILTER: 'Filtro Diesel',
+  AIR_FILTER: 'Filtro Ar',
+  OIL_FILTER: 'Filtro Óleo',
+  BATTERY: 'Bateria',
+  SPRINGS: 'Molas',
+  SHOCK_ABSORBERS: 'Amortecedores',
+  SIDER: 'Sider',
+  TRAILER: 'Carreta',
+  OTHER: 'Outro',
+};
+
 export const TIRE_STATUS_LABELS: Record<TireStatus, string> = {
   NEW: 'Novo',
   IN_USE: 'Em uso',
@@ -202,6 +270,16 @@ export const TIRE_LOCATION_LABELS: Record<TireLocationType, string> = {
   STOCK: 'Estoque',
   VEHICLE: 'Veículo',
   TRAILER: 'Carreta',
+};
+
+// Categoria de tempo parado (dashboard "Tempo parado e receita perdida")
+// -- mapeada de TripStopType no backend (MAINTENANCE/BREAKDOWN/FUEL; todo
+// o resto cai em "Outras").
+export const DOWNTIME_CATEGORY_LABELS: Record<DowntimeCategory, string> = {
+  MAINTENANCE: 'Manutenção',
+  BREAKDOWN: 'Quebra',
+  FUEL: 'Abastecimento',
+  OTHER: 'Outras',
 };
 
 export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
@@ -298,3 +376,79 @@ export const IMPORT_JOB_STATUS_LABELS: Record<ImportJobStatus, string> = {
 export function labelOrValue<T extends string>(map: Record<T, string>, value: T): string {
   return map[value] ?? value;
 }
+
+// Fase 47 -- Super Administracao da Plataforma.
+export const TENANT_STATUS_LABELS: Record<TenantStatus, string> = {
+  ACTIVE: 'Ativa',
+  TRIAL: 'Em trial',
+  SUSPENDED: 'Suspensa',
+  EXPIRED: 'Expirada',
+};
+
+export const TENANT_STATUS_TONE: Record<TenantStatus, 'success' | 'warning' | 'danger' | 'info'> = {
+  ACTIVE: 'success',
+  TRIAL: 'info',
+  SUSPENDED: 'danger',
+  EXPIRED: 'warning',
+};
+
+export const TENANT_PLAN_TIER_LABELS: Record<TenantPlanTier, string> = {
+  FREE: 'Gratuito',
+  STARTER: 'Starter',
+  PROFESSIONAL: 'Profissional',
+  ENTERPRISE: 'Enterprise',
+};
+
+export const TENANT_MODULE_LABELS: Record<TenantModule, string> = {
+  TRIPS: 'Viagens',
+  TOLLS: 'Pedágios',
+  FUEL: 'Abastecimento',
+  MAINTENANCE: 'Manutenção',
+  TIRES: 'Pneus',
+  CHECKLIST: 'Checklist',
+  STOPS: 'Paradas',
+  DASHBOARDS: 'Dashboards',
+  REPORTS: 'Relatórios',
+};
+
+// Fase 50 -- Gestao Manual de Assinaturas e Cobranca.
+export const SUBSCRIPTION_STATUS_LABELS: Record<SubscriptionStatus, string> = {
+  ACTIVE: 'Ativa',
+  PENDING: 'Pendente',
+  OVERDUE: 'Atrasada',
+  SUSPENDED: 'Suspensa',
+  CANCELLED: 'Cancelada',
+};
+
+export const SUBSCRIPTION_STATUS_TONE: Record<SubscriptionStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  ACTIVE: 'success',
+  PENDING: 'info',
+  OVERDUE: 'danger',
+  SUSPENDED: 'warning',
+  CANCELLED: 'neutral',
+};
+
+export const SUBSCRIPTION_PAYMENT_METHOD_LABELS: Record<SubscriptionPaymentMethod, string> = {
+  PIX_SCHEDULED: 'PIX agendado',
+  DIRECT_DEBIT: 'Débito automático',
+  STRIPE: 'Stripe',
+};
+
+export const BILLING_PERIODICITY_LABELS: Record<BillingPeriodicity, string> = {
+  MONTHLY: 'Mensal',
+  YEARLY: 'Anual',
+};
+
+export const SUBSCRIPTION_PAYMENT_STATUS_LABELS: Record<SubscriptionPaymentStatus, string> = {
+  PENDING: 'Pendente',
+  PAID: 'Pago',
+  OVERDUE: 'Atrasado',
+  CANCELLED: 'Cancelado',
+};
+
+export const SUBSCRIPTION_PAYMENT_STATUS_TONE: Record<SubscriptionPaymentStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  PENDING: 'info',
+  PAID: 'success',
+  OVERDUE: 'danger',
+  CANCELLED: 'neutral',
+};

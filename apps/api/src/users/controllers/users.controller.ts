@@ -20,8 +20,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { ADMIN_THROTTLE, CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
@@ -50,6 +52,7 @@ export class UsersController {
   }
 
   @Post()
+  @Throttle(ADMIN_THROTTLE)
   @ApiOperation({ summary: 'Cria um novo usuario na empresa do usuario autenticado.' })
   @ApiCreatedResponse({ type: UserEntity })
   @ApiConflictResponse({ description: 'Ja existe um usuario com este e-mail nesta empresa.' })
@@ -63,6 +66,7 @@ export class UsersController {
   }
 
   @Patch(':id')
+  @Throttle(ADMIN_THROTTLE)
   @ApiOperation({
     summary: 'Atualiza dados de um usuario da empresa (opcionalmente redefine a senha).',
   })
@@ -80,6 +84,7 @@ export class UsersController {
   }
 
   @Patch(':id/status')
+  @Throttle(ADMIN_THROTTLE)
   @ApiOperation({ summary: 'Ativa ou desativa um usuario da empresa.' })
   @ApiOkResponse({ type: UserEntity })
   @ApiNotFoundResponse({ description: 'Usuario nao encontrado nesta empresa.' })
@@ -98,6 +103,7 @@ export class UsersController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Throttle(CRITICAL_THROTTLE)
   @ApiOperation({ summary: 'Exclui logicamente um usuario da empresa.' })
   @ApiNoContentResponse({ description: 'Usuario excluido.' })
   @ApiNotFoundResponse({ description: 'Usuario nao encontrado nesta empresa.' })

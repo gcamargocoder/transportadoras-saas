@@ -1,7 +1,9 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { DASHBOARD_ROLES } from '../constants/dashboard-roles.constants';
 import { DashboardQueryDto } from '../dto/dashboard-query.dto';
 import { DashboardEntity } from '../entities/dashboard.entity';
@@ -10,6 +12,7 @@ import { DashboardService } from '../services/dashboard.service';
 @ApiTags('dashboard')
 @ApiBearerAuth()
 @Controller('dashboard')
+@RequireModule(TenantModule.DASHBOARDS)
 export class DashboardController {
   constructor(
     private readonly dashboardService: DashboardService,

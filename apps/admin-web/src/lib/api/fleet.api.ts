@@ -11,6 +11,7 @@ import type {
 } from '../../types/entities';
 import type {
   FleetType,
+  MaintenanceComponent,
   TrailerType,
   VehicleFuelType,
   VehicleMaintenancePriority,
@@ -175,12 +176,19 @@ export interface FindMaintenancesQuery extends PaginationParams {
   status?: VehicleMaintenanceStatus | undefined;
   type?: VehicleMaintenanceType | undefined;
   priority?: VehicleMaintenancePriority | undefined;
+  component?: MaintenanceComponent | undefined;
   vehicleId?: string | undefined;
   plate?: string | undefined;
   openedFrom?: string | undefined;
   openedTo?: string | undefined;
   sortBy?: string | undefined;
   sortOrder?: 'asc' | 'desc' | undefined;
+}
+
+export interface MaintenancePartInput {
+  name: string;
+  quantity: number;
+  unitPrice: number;
 }
 
 export interface CreateMaintenancePayload {
@@ -200,6 +208,12 @@ export interface CreateMaintenancePayload {
   serviceOrderNumber?: string | undefined;
   warrantyUntil?: string | undefined;
   nextReviewAt?: string | undefined;
+  component?: MaintenanceComponent | undefined;
+  nextOdometerKm?: number | undefined;
+  downtimeMinutes?: number | undefined;
+  invoiceNumber?: string | undefined;
+  maintenancePlanId?: string | undefined;
+  parts?: MaintenancePartInput[] | undefined;
 }
 
 export function listMaintenances(query: FindMaintenancesQuery, signal?: AbortSignal) {

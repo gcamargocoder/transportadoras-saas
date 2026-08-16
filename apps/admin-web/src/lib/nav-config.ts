@@ -8,6 +8,7 @@ import {
   HandCoins,
   LayoutDashboard,
   LayoutGrid,
+  ShieldCheck,
   Link2,
   MapPinned,
   Milestone,
@@ -22,6 +23,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { TenantModule } from '../types/enums';
 import type { UserRole } from '../types/enums';
 import {
   ADMIN_ROLES,
@@ -45,6 +47,11 @@ export interface NavItem {
   href: string;
   icon: LucideIcon;
   roles: UserRole[];
+  // Fase 48 -- quando presente, o item so aparece se o modulo estiver
+  // habilitado no plano do tenant (checagem real e sempre no backend; isto
+  // e so UX). Itens sem correspondencia clara de modulo (dashboard,
+  // cadastros centrais) ficam sem esta prop.
+  module?: TenantModule;
 }
 
 export interface NavGroup {
@@ -56,7 +63,13 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Visão geral',
     items: [
-      { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: DASHBOARD_ROLES },
+      {
+        label: 'Dashboard',
+        href: '/dashboard',
+        icon: LayoutDashboard,
+        roles: DASHBOARD_ROLES,
+        module: TenantModule.DASHBOARDS,
+      },
     ],
   },
   {
@@ -68,10 +81,29 @@ export const NAV_GROUPS: NavGroup[] = [
         href: '/operations/fleet',
         icon: LayoutGrid,
         roles: FLEET_OPERATIONS_READ_ROLES,
+        module: TenantModule.DASHBOARDS,
       },
-      { label: 'Viagens', href: '/trips', icon: Route, roles: TRIP_READ_ROLES },
-      { label: 'Pedágios', href: '/tolls', icon: Ticket, roles: TOLL_READ_ROLES },
-      { label: 'Rotas de pedágio', href: '/toll-routes', icon: Milestone, roles: TOLL_READ_ROLES },
+      {
+        label: 'Viagens',
+        href: '/trips',
+        icon: Route,
+        roles: TRIP_READ_ROLES,
+        module: TenantModule.TRIPS,
+      },
+      {
+        label: 'Pedágios',
+        href: '/tolls',
+        icon: Ticket,
+        roles: TOLL_READ_ROLES,
+        module: TenantModule.TOLLS,
+      },
+      {
+        label: 'Rotas de pedágio',
+        href: '/toll-routes',
+        icon: Milestone,
+        roles: TOLL_READ_ROLES,
+        module: TenantModule.TOLLS,
+      },
     ],
   },
   {
@@ -81,13 +113,26 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Carretas', href: '/trailers', icon: Container, roles: FLEET_READ_ROLES },
       { label: 'Composições', href: '/compositions', icon: Link2, roles: FLEET_READ_ROLES },
       { label: 'Motoristas', href: '/drivers', icon: UserRound, roles: DRIVER_READ_ROLES },
-      { label: 'Pneus', href: '/tires', icon: CircleDot, roles: TIRE_READ_ROLES },
-      { label: 'Manutenções', href: '/maintenances', icon: Wrench, roles: FLEET_READ_ROLES },
+      {
+        label: 'Pneus',
+        href: '/tires',
+        icon: CircleDot,
+        roles: TIRE_READ_ROLES,
+        module: TenantModule.TIRES,
+      },
+      {
+        label: 'Manutenções',
+        href: '/maintenances',
+        icon: Wrench,
+        roles: FLEET_READ_ROLES,
+        module: TenantModule.MAINTENANCE,
+      },
       {
         label: 'Abastecimentos',
         href: '/fuel-supplies',
         icon: Gauge,
         roles: FUEL_SUPPLY_READ_ROLES,
+        module: TenantModule.FUEL,
       },
     ],
   },
@@ -113,6 +158,7 @@ export const NAV_GROUPS: NavGroup[] = [
         href: '/fuel-stations',
         icon: Fuel,
         roles: FUEL_STATION_READ_ROLES,
+        module: TenantModule.FUEL,
       },
       {
         label: 'Praças de pedágio',
@@ -127,6 +173,9 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Empresa', href: '/settings/company', icon: Settings, roles: [] },
       { label: 'Usuários', href: '/settings/users', icon: Users, roles: ADMIN_ROLES },
+      // Fase 47 -- area separada (layout proprio, fora do AppShell), so o
+      // link de entrada mora aqui no menu normal.
+      { label: 'Plataforma', href: '/super-admin', icon: ShieldCheck, roles: SUPER_ADMIN_ONLY },
     ],
   },
 ];

@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
 import { ChecklistsModule } from './checklists/checklists.module';
 import { CommonModule } from './common/common.module';
 import { buildThrottlerOptions } from './common/config/throttler.config';
@@ -18,6 +19,7 @@ import { FleetOperationsModule } from './fleet-operations/fleet-operations.modul
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RoutingModule } from './routing/routing.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -77,7 +79,9 @@ import { UsersModule } from './users/users.module';
     ChecklistsModule,
     DriverTripsModule,
     TollDataModule,
+    MaintenanceModule,
     FleetOperationsModule,
+    BillingModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

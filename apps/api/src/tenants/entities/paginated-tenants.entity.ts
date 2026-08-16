@@ -1,10 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { PaginationMetaEntity } from '../../common/entities/pagination-meta.entity';
-import { TenantEntity } from './tenant.entity';
+import { TenantListItemEntity } from './tenant-list-item.entity';
 
 export class PaginatedTenantsEntity {
-  @ApiProperty({ type: [TenantEntity] })
-  items!: TenantEntity[];
+  @ApiProperty({ type: [TenantListItemEntity] })
+  items!: TenantListItemEntity[];
 
   @ApiProperty({ type: PaginationMetaEntity })
   meta!: PaginationMetaEntity;

@@ -22,9 +22,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../constants/fleet-roles.constants';
 import { CreateMaintenanceDto } from '../dto/create-maintenance.dto';
 import { FindMaintenancesQueryDto } from '../dto/find-maintenances-query.dto';
@@ -37,6 +39,7 @@ import { MaintenancesService } from '../services/maintenances.service';
 @ApiTags('maintenances')
 @ApiBearerAuth()
 @Controller('maintenances')
+@RequireModule(TenantModule.MAINTENANCE)
 export class MaintenancesController {
   constructor(
     private readonly maintenancesService: MaintenancesService,

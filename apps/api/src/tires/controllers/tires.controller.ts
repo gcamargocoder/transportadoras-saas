@@ -21,10 +21,12 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../../fleet/constants/fleet-roles.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { CreateTireDisposalDto } from '../dto/create-tire-disposal.dto';
 import { CreateTireInspectionDto } from '../dto/create-tire-inspection.dto';
 import { CreateTireMovementDto } from '../dto/create-tire-movement.dto';
@@ -48,6 +50,7 @@ import { TiresService } from '../services/tires.service';
 @ApiTags('tires')
 @ApiBearerAuth()
 @Controller('tires')
+@RequireModule(TenantModule.TIRES)
 export class TiresController {
   constructor(
     private readonly tiresService: TiresService,

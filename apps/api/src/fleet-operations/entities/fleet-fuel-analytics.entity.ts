@@ -185,6 +185,58 @@ export class FleetFuelPreviousPeriodEntity {
   supplyCountDeltaPercent!: number | null;
 }
 
+// Iteracao de redesign visual (dashboard de combustivel) -- nivel de
+// tanque ESTIMADO, nunca lido de sensor real (Telemetry.fuelLevel existe no
+// schema mas nunca e escrito/lido em lugar nenhum do sistema hoje). A
+// estimativa assume que cada abastecimento enche o tanque ate
+// Vehicle.tankCapacityLiters, e desconta o consumo estimado desde entao
+// (km rodados / Vehicle.averageConsumptionKmL). So calculado quando TODOS
+// os dados existem -- ver computeTankLevels() no service para as regras
+// completas de disponibilidade/reason.
+export class FleetFuelTankLevelEntity {
+  @ApiProperty({ format: 'uuid' })
+  vehicleId!: string;
+
+  @ApiProperty()
+  plate!: string;
+
+  @ApiProperty({ nullable: true, description: 'Vehicle.tankCapacityLiters. Null quando o veiculo nao tem capacidade cadastrada.' })
+  capacityLiters!: number | null;
+
+  @ApiProperty({ nullable: true })
+  estimatedLevelLiters!: number | null;
+
+  @ApiProperty({ nullable: true, description: '0-100, arredondado.' })
+  percentage!: number | null;
+
+  @ApiProperty()
+  available!: boolean;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Motivo quando available=false: TANK_CAPACITY_NOT_CONFIGURED | AVERAGE_CONSUMPTION_NOT_CONFIGURED | NO_SUPPLY_RECORDED | VEHICLE_ODOMETER_NOT_AVAILABLE.',
+  })
+  reason!: string | null;
+
+  @ApiProperty({ nullable: true })
+  lastSupplyAt!: string | null;
+
+  @ApiProperty({ nullable: true })
+  kmSinceLastSupply!: number | null;
+}
+
+export class FleetFuelTankFleetAverageEntity {
+  @ApiProperty({ nullable: true })
+  value!: number | null;
+
+  @ApiProperty()
+  available!: boolean;
+
+  @ApiProperty({ nullable: true })
+  reason!: string | null;
+}
+
 export class FleetFuelAnalyticsEntity {
   @ApiProperty({ type: FleetFuelSummaryEntity })
   summary!: FleetFuelSummaryEntity;
@@ -218,4 +270,13 @@ export class FleetFuelAnalyticsEntity {
 
   @ApiProperty({ type: FleetFuelPreviousPeriodEntity, nullable: true })
   previousPeriod!: FleetFuelPreviousPeriodEntity | null;
+
+  @ApiProperty({
+    type: [FleetFuelTankLevelEntity],
+    description: 'Estado atual (ignora startDate/endDate). Ordenado por percentage ascendente; indisponiveis por ultimo.',
+  })
+  tankLevels!: FleetFuelTankLevelEntity[];
+
+  @ApiProperty({ type: FleetFuelTankFleetAverageEntity })
+  tankFleetAverage!: FleetFuelTankFleetAverageEntity;
 }

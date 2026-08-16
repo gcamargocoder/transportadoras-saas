@@ -1,7 +1,9 @@
 import {
+  buildDriverStopRanking,
   computeAverageDurationHours,
   computeDeltaPercent,
   computePreviousPeriodRange,
+  DriverStopRankingRow,
   FuelVehicleAggregate,
   isLowOutlier,
   isOutlier,
@@ -267,5 +269,93 @@ describe('isLowOutlier', () => {
 
   it('retorna false quando a media e zero (evita falso alarme)', () => {
     expect(isLowOutlier(0, 0, 2)).toBe(false);
+  });
+});
+
+describe('buildDriverStopRanking', () => {
+  function row(overrides: Partial<DriverStopRankingRow>): DriverStopRankingRow {
+    return {
+      driverId: 'd1',
+      _count: 1,
+      _sum: { durationMinutes: 0 },
+      _max: { durationMinutes: null },
+      _min: { durationMinutes: null },
+      ...overrides,
+    };
+  }
+
+  it('ordena por tempo total parado, decrescente', () => {
+    const rows = [
+      row({ driverId: 'd1', _count: 2, _sum: { durationMinutes: 100 } }),
+      row({ driverId: 'd2', _count: 2, _sum: { durationMinutes: 300 } }),
+    ];
+    const names = new Map([
+      ['d1', 'Motorista A'],
+      ['d2', 'Motorista B'],
+    ]);
+    const ranking = buildDriverStopRanking(rows, names);
+    expect(ranking.map((r) => r.driverId)).toEqual(['d2', 'd1']);
+    expect(ranking[0]).toMatchObject({ rankPosition: 1, totalDurationMinutes: 300 });
+    expect(ranking[1]).toMatchObject({ rankPosition: 2, totalDurationMinutes: 100 });
+  });
+
+  it('empate no tempo total -> desempata por quantidade de paradas (desc)', () => {
+    const rows = [
+      row({ driverId: 'd1', _count: 2, _sum: { durationMinutes: 200 } }),
+      row({ driverId: 'd2', _count: 5, _sum: { durationMinutes: 200 } }),
+    ];
+    const names = new Map([
+      ['d1', 'A'],
+      ['d2', 'B'],
+    ]);
+    const ranking = buildDriverStopRanking(rows, names);
+    expect(ranking.map((r) => r.driverId)).toEqual(['d2', 'd1']);
+  });
+
+  it('empate em tempo total e quantidade -> desempata por tempo medio (desc)', () => {
+    // Mesmo total/contagem por construcao (media = total/contagem sempre
+    // igual quando total e contagem sao iguais) -- este caso so e alcancavel
+    // se as contagens forem diferentes mas a media coincidir; testado aqui
+    // via nome como desempate final quando tudo mais e igual.
+    const rows = [
+      row({ driverId: 'd1', _count: 2, _sum: { durationMinutes: 200 } }),
+      row({ driverId: 'd2', _count: 2, _sum: { durationMinutes: 200 } }),
+    ];
+    const names = new Map([
+      ['d1', 'Zeca'],
+      ['d2', 'Ana'],
+    ]);
+    const ranking = buildDriverStopRanking(rows, names);
+    // Tudo igual (total/contagem/media) -> desempata por nome (asc).
+    expect(ranking.map((r) => r.driverName)).toEqual(['Ana', 'Zeca']);
+  });
+
+  it('motorista sem nenhuma parada no periodo simplesmente nao aparece (nunca um 0 inventado)', () => {
+    const rows = [row({ driverId: 'd1', _count: 3, _sum: { durationMinutes: 90 } })];
+    const names = new Map([
+      ['d1', 'A'],
+      ['d2', 'Sem paradas'],
+    ]);
+    const ranking = buildDriverStopRanking(rows, names);
+    expect(ranking).toHaveLength(1);
+    expect(ranking.find((r) => r.driverName === 'Sem paradas')).toBeUndefined();
+  });
+
+  it('ignora linhas sem driverId (paradas administrativas sem motorista)', () => {
+    const rows = [row({ driverId: null }), row({ driverId: 'd1', _sum: { durationMinutes: 50 } })];
+    const ranking = buildDriverStopRanking(rows, new Map([['d1', 'A']]));
+    expect(ranking).toHaveLength(1);
+  });
+
+  it('averageDurationMinutes nunca e 0 falso -- reflete total/contagem real', () => {
+    const rows = [row({ driverId: 'd1', _count: 4, _sum: { durationMinutes: 100 } })];
+    const ranking = buildDriverStopRanking(rows, new Map([['d1', 'A']]));
+    expect(ranking[0]?.averageDurationMinutes).toBe(25);
+  });
+
+  it('propaga max/min por motorista', () => {
+    const rows = [row({ driverId: 'd1', _max: { durationMinutes: 80 }, _min: { durationMinutes: 5 } })];
+    const ranking = buildDriverStopRanking(rows, new Map([['d1', 'A']]));
+    expect(ranking[0]).toMatchObject({ maxDurationMinutes: 80, minDurationMinutes: 5 });
   });
 });

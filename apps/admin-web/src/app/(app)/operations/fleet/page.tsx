@@ -6,6 +6,7 @@ import {
   CircleDot,
   Clock,
   ClipboardCheck,
+  Container,
   Fuel,
   Gauge,
   Info,
@@ -23,11 +24,20 @@ import { Badge } from '../../../../components/ui/badge';
 import { Card, CardHeader } from '../../../../components/ui/card';
 import { ErrorState } from '../../../../components/ui/error-state';
 import { PageHeader } from '../../../../components/ui/page-header';
+import { RadialGauge } from '../../../../components/ui/radial-gauge';
 import { SkeletonCards } from '../../../../components/ui/skeleton';
 import { StatCard } from '../../../../components/ui/stat-card';
 import { FleetFilters } from '../../../../features/fleet-operations/fleet-filters';
 import { useFleetOperationsFilters } from '../../../../features/fleet-operations/use-fleet-operations-filters';
-import { getFleetOperationsDashboard, getFleetOperationsFuel, getFleetOperationsIndicators } from '../../../../lib/api/fleet-operations.api';
+import {
+  getFleetOperationsCompositions,
+  getFleetOperationsDashboard,
+  getFleetOperationsDowntimeCost,
+  getFleetOperationsFuel,
+  getFleetOperationsIndicators,
+} from '../../../../lib/api/fleet-operations.api';
+import { getTollDashboard } from '../../../../lib/api/tolls.api';
+import { TRIP_STOP_TYPE_LABELS } from '../../../../lib/labels';
 import type { FleetAlertSeverity } from '../../../../types/entities';
 import { formatCurrency, formatNumber } from '../../../../utils/format';
 
@@ -70,6 +80,32 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
     queryFn: ({ signal }) => getFleetOperationsFuel(filters, signal),
   });
 
+  const downtimeCostQuery = useQuery({
+    queryKey: ['fleet-operations', 'downtime-cost', filters],
+    queryFn: ({ signal }) => getFleetOperationsDowntimeCost(filters, signal),
+  });
+
+  const tollsQuery = useQuery({
+    queryKey: ['tolls', 'dashboard', filters],
+    queryFn: ({ signal }) =>
+      getTollDashboard(
+        { chargedFrom: filters.startDate, chargedTo: filters.endDate, vehicleId: filters.vehicleId, fleetId: filters.fleetId },
+        signal,
+      ),
+  });
+
+  const compositionsQuery = useQuery({
+    queryKey: ['fleet-operations', 'compositions', filters],
+    queryFn: ({ signal }) => getFleetOperationsCompositions(filters, signal),
+  });
+
+  // Fase 43 -- "principal motivo" = tipo com mais OCORRENCIAS (nao maior
+  // duracao total) no periodo/filtro; "—" quando nao ha nenhuma parada.
+  const mainStopType = query.data?.stops.byType.length
+    ? [...query.data.stops.byType].sort((a, b) => b.count - a.count)[0]
+    : null;
+  const stalledAlertsCount = query.data?.alerts.filter((a) => a.type === 'STALLED_VEHICLE').length ?? 0;
+
   return (
     <div>
       <PageHeader
@@ -98,9 +134,14 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
         <div className="flex flex-col gap-6">
           {/* ===== Secao 1: KPIs ===== */}
           <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
-              Visão geral
-            </h2>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+                Visão geral
+              </h2>
+              <Link href="/operations/fleet/vehicles" className="text-xs font-medium text-brand-600 hover:underline">
+                Ver detalhes →
+              </Link>
+            </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
                 label="Veículos ativos"
@@ -206,6 +247,139 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
             </Card>
           </section>
 
+          {/* ===== Secao 3.5: Paradas (Fase 43) ===== */}
+          <section>
+            <Card>
+              <CardHeader
+                title="Paradas"
+                description="Tempo parado da frota no período/filtro selecionado."
+                action={
+                  <Link href="/operations/fleet/stops" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <StatCard label="Total de paradas" value={formatNumber(query.data.stops.totalStops)} icon={ParkingSquare} />
+                <StatCard label="Tempo total parado" value={`${formatNumber(query.data.stops.totalDurationMinutes)} min`} />
+                <StatCard
+                  label="Tempo médio"
+                  value={query.data.stops.averageDurationMinutes === null ? '—' : `${formatNumber(query.data.stops.averageDurationMinutes, 1)} min`}
+                  icon={Clock}
+                />
+                <StatCard
+                  label="Principal motivo"
+                  value={
+                    mainStopType
+                      ? TRIP_STOP_TYPE_LABELS[mainStopType.type]
+                      : '—'
+                  }
+                />
+                <StatCard
+                  label="Veículo mais parado"
+                  value={query.data.stops.topVehiclesByDuration[0]?.plate ?? '—'}
+                />
+                <StatCard
+                  label="Motorista mais parado"
+                  value={query.data.stops.driverRanking[0]?.driverName ?? '—'}
+                />
+                <StatCard
+                  label="Paradas em aberto há muito tempo"
+                  value={formatNumber(stalledAlertsCount)}
+                  icon={AlertTriangle}
+                  tone={stalledAlertsCount > 0 ? 'danger' : 'success'}
+                />
+                <StatCard
+                  label="Alertas de duração longa"
+                  value={formatNumber(query.data.stops.durationAlerts.length)}
+                  icon={AlertTriangle}
+                  tone={query.data.stops.durationAlerts.length > 0 ? 'danger' : 'success'}
+                />
+              </div>
+            </Card>
+          </section>
+
+          {/* ===== Secao 3.55: Tempo parado e receita perdida ===== */}
+          <section>
+            <Card>
+              <CardHeader
+                title="Tempo parado e receita perdida"
+                description="Receita não gerada ESTIMADA por causa de paradas — taxa de receita/hora do próprio veículo."
+                action={
+                  <Link href="/operations/fleet/downtime-cost" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              {downtimeCostQuery.isLoading && (
+                <div className="p-5">
+                  <SkeletonCards count={4} />
+                </div>
+              )}
+              {downtimeCostQuery.data && (
+                <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                  <StatCard label="Tempo total parado" value={`${formatNumber(downtimeCostQuery.data.totalDowntimeMinutes)} min`} icon={Clock} />
+                  <StatCard
+                    label="Receita perdida estimada"
+                    value={
+                      downtimeCostQuery.data.totalEstimatedLostRevenue.available && downtimeCostQuery.data.totalEstimatedLostRevenue.value !== null
+                        ? formatCurrency(downtimeCostQuery.data.totalEstimatedLostRevenue.value)
+                        : 'Indisponível'
+                    }
+                    icon={Wallet}
+                  />
+                  <StatCard
+                    label="Veículo com maior receita perdida"
+                    value={downtimeCostQuery.data.topVehiclesByLostRevenue[0]?.plate ?? '—'}
+                  />
+                  <StatCard
+                    label="Alertas"
+                    value={formatNumber(downtimeCostQuery.data.downtimeCostAlerts.length)}
+                    icon={AlertTriangle}
+                    tone={downtimeCostQuery.data.downtimeCostAlerts.length > 0 ? 'danger' : 'success'}
+                  />
+                </div>
+              )}
+            </Card>
+          </section>
+
+          {/* ===== Secao 3.6: Manutencao (Fase 45) ===== */}
+          <section>
+            <Card>
+              <CardHeader
+                title="Manutenção"
+                description="Manutenções preventivas e corretivas da frota no período/filtro selecionado."
+                action={
+                  <Link href="/operations/fleet/maintenance" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <StatCard label="Custo total" value={formatCurrency(query.data.maintenance.totalCost)} icon={Wrench} />
+                <StatCard
+                  label="Preventivas vencidas"
+                  value={formatNumber(query.data.maintenance.overdueCount)}
+                  icon={AlertTriangle}
+                  tone={query.data.maintenance.overdueCount > 0 ? 'danger' : 'success'}
+                />
+                <StatCard label="Corretivas" value={formatNumber(query.data.maintenance.correctiveCount)} />
+                <StatCard label="Veículo com maior custo" value={query.data.maintenance.topVehiclesByCost[0]?.plate ?? '—'} />
+                <StatCard
+                  label="Tempo total parado"
+                  value={query.data.maintenance.totalDowntimeMinutes === null ? '—' : `${formatNumber(query.data.maintenance.totalDowntimeMinutes)} min`}
+                  icon={Clock}
+                />
+                <StatCard
+                  label="Alertas críticos"
+                  value={formatNumber(query.data.maintenance.maintenanceAlerts.filter((a) => a.severity === 'CRITICAL').length)}
+                  icon={AlertTriangle}
+                  tone={query.data.maintenance.maintenanceAlerts.some((a) => a.severity === 'CRITICAL') ? 'danger' : 'success'}
+                />
+              </div>
+            </Card>
+          </section>
+
           {/* ===== Secao 4: Alertas ===== */}
           <section>
             <Card>
@@ -280,25 +454,37 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
                   </div>
                 )}
                 {fuelQuery.data && (
-                  <div className="grid grid-cols-2 gap-4 p-5">
-                    <StatCard label="Litros abastecidos" value={`${formatNumber(fuelQuery.data.summary.totalLiters, 1)} L`} icon={Fuel} />
-                    <StatCard label="Custo total" value={formatCurrency(fuelQuery.data.summary.totalCost)} />
-                    <StatCard
-                      label="Consumo médio"
-                      value={
-                        fuelQuery.data.consumption.available && fuelQuery.data.consumption.value !== null
-                          ? `${formatNumber(fuelQuery.data.consumption.value, 1)} km/L`
-                          : 'Indisponível'
-                      }
-                    />
-                    <StatCard
-                      label="Custo de combustível/km"
-                      value={
-                        fuelQuery.data.costPerKm.available && fuelQuery.data.costPerKm.value !== null
-                          ? nullableCurrency(fuelQuery.data.costPerKm.value)
-                          : 'Indisponível'
-                      }
-                    />
+                  <div className="flex items-center gap-4 p-5">
+                    <div className="grid flex-1 grid-cols-2 gap-4">
+                      <StatCard label="Litros abastecidos" value={`${formatNumber(fuelQuery.data.summary.totalLiters, 1)} L`} icon={Fuel} />
+                      <StatCard label="Custo total" value={formatCurrency(fuelQuery.data.summary.totalCost)} />
+                      <StatCard
+                        label="Consumo médio"
+                        value={
+                          fuelQuery.data.consumption.available && fuelQuery.data.consumption.value !== null
+                            ? `${formatNumber(fuelQuery.data.consumption.value, 1)} km/L`
+                            : 'Indisponível'
+                        }
+                      />
+                      <StatCard
+                        label="Custo de combustível/km"
+                        value={
+                          fuelQuery.data.costPerKm.available && fuelQuery.data.costPerKm.value !== null
+                            ? nullableCurrency(fuelQuery.data.costPerKm.value)
+                            : 'Indisponível'
+                        }
+                      />
+                    </div>
+                    <div className="hidden shrink-0 flex-col items-center sm:flex">
+                      {fuelQuery.data.tankFleetAverage.available && fuelQuery.data.tankFleetAverage.value !== null ? (
+                        <RadialGauge percentage={fuelQuery.data.tankFleetAverage.value} size={80} />
+                      ) : (
+                        <div className="flex h-20 w-20 items-center justify-center rounded-full border border-dashed border-border text-xs text-ink-subtle">
+                          —
+                        </div>
+                      )}
+                      <p className="mt-1.5 text-center text-[11px] text-ink-subtle">Nível médio</p>
+                    </div>
                   </div>
                 )}
               </Card>
@@ -306,10 +492,10 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
               <Card>
                 <CardHeader
                   title="Pneus"
-                  description="Reaproveita o dashboard existente de pneus."
+                  description="Resumo do estoque/uso da frota de pneus."
                   action={
-                    <Link href="/tires" className="text-xs font-medium text-brand-600 hover:underline">
-                      Ver mais →
+                    <Link href="/operations/fleet/tires" className="text-xs font-medium text-brand-600 hover:underline">
+                      Ver detalhes →
                     </Link>
                   }
                 />
@@ -325,6 +511,68 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
                 </div>
               </Card>
             </div>
+          </section>
+
+          <section>
+            <Card>
+              <CardHeader
+                title="Pedágios"
+                description="Transações de pedágio e conformidade da cobrança no período/filtro selecionado."
+                action={
+                  <Link href="/operations/fleet/tolls" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              {tollsQuery.isLoading && (
+                <div className="p-5">
+                  <SkeletonCards count={4} />
+                </div>
+              )}
+              {tollsQuery.data && (
+                <div className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-4">
+                  <StatCard label="Transações" value={formatNumber(tollsQuery.data.totalCount)} />
+                  <StatCard label="Valor cobrado" value={formatCurrency(tollsQuery.data.totalChargedAmount)} />
+                  <StatCard
+                    label="Conformidade"
+                    value={`${formatNumber(tollsQuery.data.conformityPercentage, 1)}%`}
+                    tone={tollsQuery.data.conformityPercentage >= 90 ? 'success' : 'warning'}
+                  />
+                  <StatCard
+                    label="Cobranças acima do esperado"
+                    value={formatNumber(tollsQuery.data.overchargeCount)}
+                    tone={tollsQuery.data.overchargeCount > 0 ? 'danger' : 'success'}
+                  />
+                </div>
+              )}
+            </Card>
+          </section>
+
+          <section>
+            <Card>
+              <CardHeader
+                title="Composição"
+                description="Uso de veículo+carreta por viagem: disponibilidade e ranking de carretas no período/filtro selecionado."
+                action={
+                  <Link href="/operations/fleet/compositions" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              {compositionsQuery.isLoading && (
+                <div className="p-5">
+                  <SkeletonCards count={4} />
+                </div>
+              )}
+              {compositionsQuery.data && (
+                <div className="grid grid-cols-2 gap-4 p-5 sm:grid-cols-4">
+                  <StatCard label="Total de carretas" value={formatNumber(compositionsQuery.data.totalTrailers)} icon={Container} />
+                  <StatCard label="Ativas" value={formatNumber(compositionsQuery.data.activeCount)} tone="success" />
+                  <StatCard label="Em viagem" value={formatNumber(compositionsQuery.data.trailersOnTrip)} icon={RouteIcon} tone="info" />
+                  <StatCard label="Disponíveis" value={formatNumber(compositionsQuery.data.trailersAvailable)} />
+                </div>
+              )}
+            </Card>
           </section>
 
           <section>

@@ -1,7 +1,9 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiConflictResponse, ApiCreatedResponse, ApiNotFoundResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { CHECKLISTS_READ_ROLES, CHECKLISTS_WRITE_ROLES } from '../constants/checklist-roles.constants';
 import { CreateChecklistTemplateDto } from '../dto/create-checklist-template.dto';
 import { FindChecklistExecutionsQueryDto } from '../dto/find-checklist-executions-query.dto';
@@ -17,6 +19,7 @@ import { ChecklistTemplatesService } from '../services/checklist-templates.servi
 @ApiTags('checklists')
 @ApiBearerAuth()
 @Controller('checklists')
+@RequireModule(TenantModule.CHECKLIST)
 export class ChecklistsController {
   constructor(
     private readonly templatesService: ChecklistTemplatesService,

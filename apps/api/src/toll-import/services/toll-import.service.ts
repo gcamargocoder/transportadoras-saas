@@ -13,8 +13,15 @@ import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
+import { assertValidFileSignature, ValidatedFileKind } from '../../common/utils/file-signature.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PLAN_ERRORS } from '../../tenants/constants/plan-error.constants';
+import {
+  assertStorageUnderLimit,
+  getStorageUsedBytes,
+  runSerializable,
+} from '../../tenants/utils/plan-limit.util';
 import {
   classifyTollTransaction,
   computeDiscrepancy,
@@ -119,6 +126,11 @@ export class TollImportService {
     let fileType: ImportFileType;
     try {
       fileType = this.resolveFileType(file.originalname);
+      // Fase 46 -- extensao/nome do arquivo nunca provam o conteudo real
+      // (um executavel renomeado para ".csv"/".xlsx" passaria na checagem
+      // acima). So CSV/XLSX chegam aqui (unicas extensoes aceitas por este
+      // endpoint), ambas com ValidatedFileKind de mesmo nome literal.
+      await assertValidFileSignature(file.path, fileType as ValidatedFileKind);
     } catch (error) {
       await this.safeUnlink(file.path);
       throw error;
@@ -130,17 +142,31 @@ export class TollImportService {
       throw new NotFoundException('Operadora (providerId) nao encontrada.');
     }
 
-    const job = await this.prisma.importJob.create({
-      data: {
-        tenantId,
-        providerId: dto.providerId,
-        filename: file.filename,
-        originalFilename: file.originalname,
-        fileType,
-        status: ImportJobStatus.PENDING,
-        createdBy: actor.userId,
-      },
-      include: JOB_INCLUDE,
+    // Fase 48 -- limite de armazenamento do plano: checagem + create do
+    // ImportJob numa unica transacao Serializable, mesmo mecanismo dos
+    // outros limites. Se estourar, o arquivo ja gravado pelo multer e
+    // apagado (nunca fica persistido/referenciado por um ImportJob).
+    const job = await runSerializable(this.prisma, async (tx) => {
+      const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+      const usedBytes = await getStorageUsedBytes(tx, tenantId);
+      assertStorageUnderLimit(usedBytes, file.size, plan?.maxStorageMb, PLAN_ERRORS.STORAGE_LIMIT_REACHED);
+
+      return tx.importJob.create({
+        data: {
+          tenantId,
+          providerId: dto.providerId,
+          filename: file.filename,
+          originalFilename: file.originalname,
+          fileType,
+          status: ImportJobStatus.PENDING,
+          createdBy: actor.userId,
+          sizeBytes: file.size,
+        },
+        include: JOB_INCLUDE,
+      });
+    }).catch(async (error: unknown) => {
+      await this.safeUnlink(file.path);
+      throw error;
     });
 
     await this.audit.log({

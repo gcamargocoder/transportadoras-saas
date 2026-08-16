@@ -459,7 +459,11 @@ describe('Fleet Operations (e2e)', () => {
         totalStops: 0,
         totalDurationMinutes: 0,
         averageDurationMinutes: null,
+        maxDurationMinutes: null,
+        minDurationMinutes: null,
         topVehiclesByDuration: [],
+        driverRanking: [],
+        durationAlerts: [],
       });
       expect(dashboard.checklist).toMatchObject({
         totalExecutions: 0,
@@ -730,7 +734,7 @@ describe('Fleet Operations (e2e)', () => {
     it('agrupa duracao total por tipo e rankeia veiculos por tempo parado', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('Stops');
       const vehicleId = await createVehicle(adminAuth);
-      const { tripId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId, vehicleId);
+      const { tripId, driverId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId, vehicleId);
       await request(app.getHttpServer())
         .post(`/api/v1/driver/trips/${tripId}/start`)
         .set('Authorization', driverAuth)
@@ -748,12 +752,332 @@ describe('Fleet Operations (e2e)', () => {
       expect(dashboard.totalStops).toBe(2);
       expect(dashboard.totalDurationMinutes).toBe(60);
       expect(dashboard.averageDurationMinutes).toBe(30);
+      expect(dashboard.maxDurationMinutes).toBe(40);
+      expect(dashboard.minDurationMinutes).toBe(20);
 
       const byType = dashboard.byType as { type: string; count: number; totalDurationMinutes: number }[];
       expect(byType.find((t) => t.type === 'FUEL')).toMatchObject({ count: 1, totalDurationMinutes: 20 });
       expect(byType.find((t) => t.type === 'MEAL')).toMatchObject({ count: 1, totalDurationMinutes: 40 });
 
       expect(dashboard.topVehiclesByDuration[0]).toMatchObject({ vehicleId, value: 60, count: 2 });
+      expect(dashboard.driverRanking[0]).toMatchObject({
+        driverId,
+        stopsCount: 2,
+        totalDurationMinutes: 60,
+        averageDurationMinutes: 30,
+        maxDurationMinutes: 40,
+        minDurationMinutes: 20,
+        rankPosition: 1,
+      });
+    });
+  });
+
+  // ==========================================================================
+  // Fase 44 -- ranking de paradas por motorista
+  // ==========================================================================
+  describe('GET /fleet-operations/stops -- ranking por motorista', () => {
+    async function createAdminStop(
+      auth: string,
+      vehicleId: string,
+      driverId: string,
+      startedAt: string,
+      endedAt: string,
+      type = 'YARD',
+    ) {
+      await request(app.getHttpServer())
+        .post('/api/v1/trip-stops')
+        .set('Authorization', auth)
+        .send({ vehicleId, driverId, type, startedAt, endedAt })
+        .expect(201);
+    }
+
+    it('ordena por tempo total parado desc, com posicao no ranking', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DriverRank');
+      const vehicleA = await createVehicle(adminAuth);
+      const vehicleB = await createVehicle(adminAuth);
+      const driverA = await createDriver(adminAuth);
+      const driverB = await createDriver(adminAuth);
+
+      await createAdminStop(adminAuth, vehicleA, driverA, '2026-09-01T08:00:00.000Z', '2026-09-01T08:30:00.000Z'); // 30 min
+      await createAdminStop(adminAuth, vehicleB, driverB, '2026-09-01T08:00:00.000Z', '2026-09-01T09:30:00.000Z'); // 90 min
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      const ranking = res.body.data.driverRanking as { driverId: string; totalDurationMinutes: number; rankPosition: number }[];
+      expect(ranking).toHaveLength(2);
+      expect(ranking[0]).toMatchObject({ driverId: driverB, totalDurationMinutes: 90, rankPosition: 1 });
+      expect(ranking[1]).toMatchObject({ driverId: driverA, totalDurationMinutes: 30, rankPosition: 2 });
+    });
+
+    it('empate em tempo total desempata por quantidade de paradas', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DriverRankTie');
+      const vehicleA = await createVehicle(adminAuth);
+      const vehicleB = await createVehicle(adminAuth);
+      const driverA = await createDriver(adminAuth);
+      const driverB = await createDriver(adminAuth);
+
+      // driverA: 1 parada de 60min. driverB: 2 paradas de 30min (mesmo total).
+      await createAdminStop(adminAuth, vehicleA, driverA, '2026-09-01T08:00:00.000Z', '2026-09-01T09:00:00.000Z');
+      await createAdminStop(adminAuth, vehicleB, driverB, '2026-09-01T08:00:00.000Z', '2026-09-01T08:30:00.000Z');
+      await createAdminStop(adminAuth, vehicleB, driverB, '2026-09-02T08:00:00.000Z', '2026-09-02T08:30:00.000Z');
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      const ranking = res.body.data.driverRanking as { driverId: string; stopsCount: number }[];
+      expect(ranking[0]).toMatchObject({ driverId: driverB, stopsCount: 2 });
+      expect(ranking[1]).toMatchObject({ driverId: driverA, stopsCount: 1 });
+    });
+
+    it('motorista sem paradas no periodo filtrado nao aparece no ranking (nunca inventa 0)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DriverRankEmpty');
+      const vehicleA = await createVehicle(adminAuth);
+      const driverA = await createDriver(adminAuth);
+      await createDriver(adminAuth); // motorista sem nenhuma parada
+
+      await createAdminStop(adminAuth, vehicleA, driverA, '2026-09-01T08:00:00.000Z', '2026-09-01T08:30:00.000Z');
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      expect(res.body.data.driverRanking).toHaveLength(1);
+    });
+
+    it('respeita os mesmos filtros do dashboard (vehicleId/driverId/type/status/periodo)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DriverRankFilters');
+      const vehicleA = await createVehicle(adminAuth);
+      const vehicleB = await createVehicle(adminAuth);
+      const driverA = await createDriver(adminAuth);
+      const driverB = await createDriver(adminAuth);
+
+      await createAdminStop(adminAuth, vehicleA, driverA, '2026-09-01T08:00:00.000Z', '2026-09-01T08:30:00.000Z', 'FUEL');
+      await createAdminStop(adminAuth, vehicleB, driverB, '2026-10-01T08:00:00.000Z', '2026-10-01T09:00:00.000Z', 'MAINTENANCE');
+
+      const byVehicle = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .query({ vehicleId: vehicleA })
+        .expect(200);
+      expect(byVehicle.body.data.driverRanking).toEqual([expect.objectContaining({ driverId: driverA })]);
+
+      const byDriver = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .query({ driverId: driverB })
+        .expect(200);
+      expect(byDriver.body.data.driverRanking).toEqual([expect.objectContaining({ driverId: driverB })]);
+
+      const byType = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .query({ type: 'FUEL' })
+        .expect(200);
+      expect(byType.body.data.driverRanking).toEqual([expect.objectContaining({ driverId: driverA })]);
+
+      // endDate e comparado por lte contra o instante exato (meia-noite UTC do
+      // dia informado) -- nunca fim-do-dia (comportamento ja existente,
+      // compartilhado por todos os endpoints deste service); por isso o
+      // intervalo cobre ate o dia seguinte para incluir o evento das 08h.
+      const byPeriod = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .query({ startDate: '2026-10-01', endDate: '2026-10-02' })
+        .expect(200);
+      expect(byPeriod.body.data.driverRanking).toEqual([expect.objectContaining({ driverId: driverB })]);
+
+      const byStatusCompleted = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .query({ status: 'COMPLETED' })
+        .expect(200);
+      expect(byStatusCompleted.body.data.driverRanking).toHaveLength(2);
+    });
+
+    it('isolamento multi-tenant: ranking do tenant B nunca inclui motoristas do tenant A', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('DriverRankIsolA');
+      const vehicleA = await createVehicle(tenantA.adminAuth);
+      const driverA = await createDriver(tenantA.adminAuth);
+      await createAdminStop(tenantA.adminAuth, vehicleA, driverA, '2026-09-01T08:00:00.000Z', '2026-09-01T08:30:00.000Z');
+
+      const tenantB = await createTenantAndLoginAsAdmin('DriverRankIsolB');
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(res.body.data.driverRanking).toEqual([]);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 44 -- alertas de duracao longa + thresholds configuraveis por tenant
+  // ==========================================================================
+  describe('GET /fleet-operations/stops -- alertas de duracao longa', () => {
+    async function createCompletedStop(auth: string, vehicleId: string, type: string, durationMinutes: number) {
+      const startedAt = '2026-09-01T08:00:00.000Z';
+      const endedAt = new Date(new Date(startedAt).getTime() + durationMinutes * 60_000).toISOString();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/trip-stops')
+        .set('Authorization', auth)
+        .send({ vehicleId, type, startedAt, endedAt })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    it('abaixo do limite padrao: sem alerta', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('AlertBelow');
+      const vehicleId = await createVehicle(adminAuth);
+      await createCompletedStop(adminAuth, vehicleId, 'FUEL', 20); // limite padrao FUEL=30
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.durationAlerts).toEqual([]);
+    });
+
+    it('exatamente no limite: sem alerta (so acima dispara)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('AlertExact');
+      const vehicleId = await createVehicle(adminAuth);
+      await createCompletedStop(adminAuth, vehicleId, 'FUEL', 30);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.durationAlerts).toEqual([]);
+    });
+
+    it('acima do limite padrao: gera alerta com os campos esperados', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('AlertAbove');
+      const vehicleId = await createVehicle(adminAuth);
+      const { tripId, driverId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId, vehicleId);
+      await request(app.getHttpServer()).post(`/api/v1/driver/trips/${tripId}/start`).set('Authorization', driverAuth).expect(201);
+      await openAndCloseStop(driverAuth, tripId, '2026-09-01T08:00:00.000Z', '2026-09-01T09:15:00.000Z', 'FUEL'); // 75 min > 30
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      expect(res.body.data.durationAlerts).toHaveLength(1);
+      expect(res.body.data.durationAlerts[0]).toMatchObject({
+        type: 'FUEL',
+        durationMinutes: 75,
+        thresholdMinutes: 30,
+        excessMinutes: 45,
+        vehicleId,
+        driverId,
+        tripId,
+        status: 'COMPLETED',
+      });
+      expect(res.body.data.durationAlerts[0].vehiclePlate).toEqual(expect.any(String));
+      expect(res.body.data.durationAlerts[0].driverName).toEqual(expect.any(String));
+      expect(res.body.data.durationAlerts[0].tripReference).toContain(' -> ');
+    });
+
+    it('parada cancelada nunca gera alerta, mesmo com duracao registrada acima do limite', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('AlertCancelled');
+      const vehicleId = await createVehicle(adminAuth);
+      const stopId = await createCompletedStop(adminAuth, vehicleId, 'MAINTENANCE', 200); // limite padrao 180
+      await request(app.getHttpServer()).patch(`/api/v1/trip-stops/${stopId}/cancel`).set('Authorization', adminAuth).expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.durationAlerts).toEqual([]);
+    });
+
+    it('parada ainda aberta nunca gera alerta de duracao longa (fora do escopo -- ver STALLED_VEHICLE, alerta generico ja existente)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('AlertOpen');
+      const vehicleId = await createVehicle(adminAuth);
+      await request(app.getHttpServer())
+        .post('/api/v1/trip-stops')
+        .set('Authorization', adminAuth)
+        .send({ vehicleId, type: 'FUEL', startedAt: '2026-01-01T08:00:00.000Z' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.durationAlerts).toEqual([]);
+    });
+
+    it('tipos diferentes usam limites diferentes (FUEL=30 dispara em 40min; MAINTENANCE=180 nao dispara em 40min)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('AlertPerType');
+      const vehicleFuel = await createVehicle(adminAuth);
+      const vehicleMaint = await createVehicle(adminAuth);
+      await createCompletedStop(adminAuth, vehicleFuel, 'FUEL', 40);
+      await createCompletedStop(adminAuth, vehicleMaint, 'MAINTENANCE', 40);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      const alerts = res.body.data.durationAlerts as { type: string; vehicleId: string }[];
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toMatchObject({ type: 'FUEL', vehicleId: vehicleFuel });
+    });
+
+    it('tipo sem limite padrao (ex: OTHER) nunca gera alerta, salvo se o tenant configurar um', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('AlertNoDefault');
+      const vehicleId = await createVehicle(adminAuth);
+      await createCompletedStop(adminAuth, vehicleId, 'OTHER', 500);
+
+      const before = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(before.body.data.durationAlerts).toEqual([]);
+
+      await request(app.getHttpServer())
+        .patch('/api/v1/tenant-settings')
+        .set('Authorization', adminAuth)
+        .send({ preferences: { stopDurationThresholdsMinutes: { OTHER: 60 } } })
+        .expect(200);
+
+      const after = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(after.body.data.durationAlerts).toHaveLength(1);
+      expect(after.body.data.durationAlerts[0]).toMatchObject({ type: 'OTHER', thresholdMinutes: 60, excessMinutes: 440 });
+    });
+
+    it('threshold configurado no tenant A nunca vaza para o tenant B (usa o padrao)', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('AlertTenantA');
+      await request(app.getHttpServer())
+        .patch('/api/v1/tenant-settings')
+        .set('Authorization', tenantA.adminAuth)
+        .send({ preferences: { stopDurationThresholdsMinutes: { FUEL: 5 } } })
+        .expect(200);
+
+      const tenantB = await createTenantAndLoginAsAdmin('AlertTenantB');
+      const vehicleB = await createVehicle(tenantB.adminAuth);
+      await createCompletedStop(tenantB.adminAuth, vehicleB, 'FUEL', 20); // > padrao 5 do tenant A, < padrao 30 do tenant B
+
+      const resB = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(resB.body.data.durationAlerts).toEqual([]); // tenant B usa o padrao (30), nao o do tenant A (5)
+
+      const vehicleA = await createVehicle(tenantA.adminAuth);
+      await createCompletedStop(tenantA.adminAuth, vehicleA, 'FUEL', 20); // > 5 (override do tenant A)
+      const resA = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/stops')
+        .set('Authorization', tenantA.adminAuth)
+        .expect(200);
+      expect(resA.body.data.durationAlerts).toHaveLength(1);
     });
   });
 
@@ -792,6 +1116,8 @@ describe('Fleet Operations (e2e)', () => {
         .set('Authorization', tenantB.adminAuth)
         .expect(200);
       expect(stopsRes.body.data.totalStops).toBe(0);
+      expect(stopsRes.body.data.driverRanking).toEqual([]);
+      expect(stopsRes.body.data.durationAlerts).toEqual([]);
 
       const operationsRes = await request(app.getHttpServer())
         .get('/api/v1/fleet-operations/operations')

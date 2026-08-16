@@ -2,25 +2,36 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as driverChecklistApi from '../api/driverChecklist.api';
 import { ChecklistAnswerInput, ChecklistEvidenceType } from '../api/driverChecklist.types';
 import * as driverTripsApi from '../api/driverTrips.api';
-import { AxleEventSource, TrackingPointInput } from '../api/driverTrips.types';
+import { AxleEventSource, TrackingPointInput, TripStopType } from '../api/driverTrips.types';
 import { compact } from '../utils/compact';
 
 // Fila offline (Fase 25, secao 17/18) -- eventos de CRIACAO gerados pelo app
 // (localizacao, abertura de parada, abastecimento, abertura de excecao de
 // eixo) sao sempre tentados imediatamente; se a rede falhar, ficam aqui ate a
 // proxima chamada a flush() (reconexao). Idempotentes por deviceEventId no
-// backend -- reenviar nunca duplica. Fechamento de parada/eixo (que
-// depende do id gerado pelo servidor na abertura) fica fora desta fila por
-// simplicidade nesta fase -- ver comentario em close().
+// backend -- reenviar nunca duplica. Fechamento de eixo continua fora desta
+// fila (mesma limitacao original: depende do id gerado pelo servidor na
+// abertura). Fechamento de PARADA (Fase 43) passou a caber aqui via
+// 'stop-close', que fecha pelo deviceEventId USADO NA ABERTURA (rota POST
+// stops/close-by-device-event) -- nao pelo id do servidor, entao funciona
+// mesmo quando a propria abertura ainda esta pendente nesta fila.
 type PendingAction =
   | { kind: 'locations'; tripId: string; points: TrackingPointInput[] }
   | {
       kind: 'stop-open';
       tripId: string;
       deviceEventId: string;
+      type?: TripStopType;
       latitude: number;
       longitude: number;
       startedAt: string;
+    }
+  | {
+      kind: 'stop-close';
+      tripId: string;
+      deviceEventId: string;
+      endedAt: string;
+      type?: TripStopType;
     }
   | {
       kind: 'fuel-supply';
@@ -108,6 +119,14 @@ async function runAction(action: PendingAction): Promise<void> {
         latitude: action.latitude,
         longitude: action.longitude,
         startedAt: action.startedAt,
+        ...compact({ type: action.type }),
+      });
+      return;
+    case 'stop-close':
+      await driverTripsApi.closeStopByDeviceEvent(action.tripId, {
+        deviceEventId: action.deviceEventId,
+        endedAt: action.endedAt,
+        ...compact({ type: action.type }),
       });
       return;
     case 'fuel-supply':

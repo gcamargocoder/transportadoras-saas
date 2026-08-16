@@ -99,6 +99,34 @@ export const VehicleMaintenancePriority = {
 export type VehicleMaintenancePriority =
   (typeof VehicleMaintenancePriority)[keyof typeof VehicleMaintenancePriority];
 
+// Fase 45 -- catalogo de componentes/itens de manutencao.
+export const MaintenanceComponent = {
+  ENGINE: 'ENGINE',
+  TRANSMISSION: 'TRANSMISSION',
+  DIFFERENTIAL: 'DIFFERENTIAL',
+  BRAKES: 'BRAKES',
+  SUSPENSION: 'SUSPENSION',
+  CLUTCH: 'CLUTCH',
+  TIRES: 'TIRES',
+  COOLING: 'COOLING',
+  ELECTRICAL: 'ELECTRICAL',
+  ARLA: 'ARLA',
+  FILTERS: 'FILTERS',
+  ENGINE_OIL: 'ENGINE_OIL',
+  TRANSMISSION_OIL: 'TRANSMISSION_OIL',
+  DIFFERENTIAL_OIL: 'DIFFERENTIAL_OIL',
+  DIESEL_FILTER: 'DIESEL_FILTER',
+  AIR_FILTER: 'AIR_FILTER',
+  OIL_FILTER: 'OIL_FILTER',
+  BATTERY: 'BATTERY',
+  SPRINGS: 'SPRINGS',
+  SHOCK_ABSORBERS: 'SHOCK_ABSORBERS',
+  SIDER: 'SIDER',
+  TRAILER: 'TRAILER',
+  OTHER: 'OTHER',
+} as const;
+export type MaintenanceComponent = (typeof MaintenanceComponent)[keyof typeof MaintenanceComponent];
+
 export const TireStatus = {
   NEW: 'NEW',
   IN_USE: 'IN_USE',
@@ -309,7 +337,9 @@ export const DocumentType = {
 } as const;
 export type DocumentType = (typeof DocumentType)[keyof typeof DocumentType];
 
-// Fase 25 -- operacao da viagem (app do motorista).
+// Fase 25 -- operacao da viagem (app do motorista). Fase 43 amplia o
+// catalogo (aditivo, nenhum valor removido/renomeado -- espelha
+// TripStopType do schema.prisma).
 export const TripStopType = {
   UNKNOWN: 'UNKNOWN',
   FUEL: 'FUEL',
@@ -317,8 +347,45 @@ export const TripStopType = {
   MEAL: 'MEAL',
   MAINTENANCE: 'MAINTENANCE',
   OTHER: 'OTHER',
+  LOADING: 'LOADING',
+  UNLOADING: 'UNLOADING',
+  WAITING_LOADING: 'WAITING_LOADING',
+  WAITING_UNLOADING: 'WAITING_UNLOADING',
+  YARD: 'YARD',
+  CUSTOMER: 'CUSTOMER',
+  GARAGE: 'GARAGE',
+  BREAKDOWN: 'BREAKDOWN',
+  TIRE: 'TIRE',
+  CONGESTION: 'CONGESTION',
+  ACCIDENT: 'ACCIDENT',
+  ROAD_CLOSURE: 'ROAD_CLOSURE',
+  INSPECTION: 'INSPECTION',
+  PERSONAL_NEED: 'PERSONAL_NEED',
+  DOCUMENTATION: 'DOCUMENTATION',
+  WAITING_AUTHORIZATION: 'WAITING_AUTHORIZATION',
 } as const;
 export type TripStopType = (typeof TripStopType)[keyof typeof TripStopType];
+
+// Fase 43 -- espelha TripStopSource do schema.prisma.
+export const TripStopSource = {
+  MANUAL: 'MANUAL',
+  DRIVER_APP: 'DRIVER_APP',
+  GPS: 'GPS',
+  SYSTEM: 'SYSTEM',
+  IMPORT: 'IMPORT',
+  ADMIN: 'ADMIN',
+} as const;
+export type TripStopSource = (typeof TripStopSource)[keyof typeof TripStopSource];
+
+// Fase 43 -- espelha TripStopStatus (apps/api/src/trip-operations/entities/
+// trip-stop.entity.ts): sempre derivado (endedAt/cancelledAt), nunca uma
+// coluna propria.
+export const TripStopStatus = {
+  OPEN: 'OPEN',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type TripStopStatus = (typeof TripStopStatus)[keyof typeof TripStopStatus];
 
 export const AxleEventSource = {
   DRIVER_INPUT: 'DRIVER_INPUT',
@@ -384,3 +451,64 @@ export const ChecklistEvidenceType = {
   SIGNATURE: 'SIGNATURE',
 } as const;
 export type ChecklistEvidenceType = (typeof ChecklistEvidenceType)[keyof typeof ChecklistEvidenceType];
+
+// Fase 47 -- Super Administracao da Plataforma.
+export const TenantStatus = {
+  ACTIVE: 'ACTIVE',
+  TRIAL: 'TRIAL',
+  SUSPENDED: 'SUSPENDED',
+  EXPIRED: 'EXPIRED',
+} as const;
+export type TenantStatus = (typeof TenantStatus)[keyof typeof TenantStatus];
+
+export const TenantPlanTier = {
+  FREE: 'FREE',
+  STARTER: 'STARTER',
+  PROFESSIONAL: 'PROFESSIONAL',
+  ENTERPRISE: 'ENTERPRISE',
+} as const;
+export type TenantPlanTier = (typeof TenantPlanTier)[keyof typeof TenantPlanTier];
+
+export const TenantModule = {
+  TRIPS: 'TRIPS',
+  TOLLS: 'TOLLS',
+  FUEL: 'FUEL',
+  MAINTENANCE: 'MAINTENANCE',
+  TIRES: 'TIRES',
+  CHECKLIST: 'CHECKLIST',
+  STOPS: 'STOPS',
+  DASHBOARDS: 'DASHBOARDS',
+  REPORTS: 'REPORTS',
+} as const;
+export type TenantModule = (typeof TenantModule)[keyof typeof TenantModule];
+
+// Fase 50 -- Gestao Manual de Assinaturas e Cobranca.
+export const SubscriptionStatus = {
+  ACTIVE: 'ACTIVE',
+  PENDING: 'PENDING',
+  OVERDUE: 'OVERDUE',
+  SUSPENDED: 'SUSPENDED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type SubscriptionStatus = (typeof SubscriptionStatus)[keyof typeof SubscriptionStatus];
+
+export const SubscriptionPaymentMethod = {
+  PIX_SCHEDULED: 'PIX_SCHEDULED',
+  DIRECT_DEBIT: 'DIRECT_DEBIT',
+  STRIPE: 'STRIPE',
+} as const;
+export type SubscriptionPaymentMethod = (typeof SubscriptionPaymentMethod)[keyof typeof SubscriptionPaymentMethod];
+
+export const BillingPeriodicity = {
+  MONTHLY: 'MONTHLY',
+  YEARLY: 'YEARLY',
+} as const;
+export type BillingPeriodicity = (typeof BillingPeriodicity)[keyof typeof BillingPeriodicity];
+
+export const SubscriptionPaymentStatus = {
+  PENDING: 'PENDING',
+  PAID: 'PAID',
+  OVERDUE: 'OVERDUE',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type SubscriptionPaymentStatus = (typeof SubscriptionPaymentStatus)[keyof typeof SubscriptionPaymentStatus];

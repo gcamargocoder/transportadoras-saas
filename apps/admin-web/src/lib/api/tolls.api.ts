@@ -13,6 +13,7 @@ import { api } from './http';
 export interface FindTollTransactionsQuery extends PaginationParams {
   tripId?: string | undefined;
   vehicleId?: string | undefined;
+  fleetId?: string | undefined;
   driverId?: string | undefined;
   tagProviderId?: string | undefined;
   tollPlazaId?: string | undefined;

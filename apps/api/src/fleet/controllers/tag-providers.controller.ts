@@ -20,9 +20,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import { TenantModule, UserRole } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FLEET_READ_ROLES } from '../constants/fleet-roles.constants';
 import { CreateTagProviderDto } from '../dto/create-tag-provider.dto';
 import { UpdateTagProviderStatusDto } from '../dto/update-tag-provider-status.dto';
@@ -37,6 +38,7 @@ import { TagProvidersService } from '../services/tag-providers.service';
 @ApiTags('tag-providers')
 @ApiBearerAuth()
 @Controller('tag-providers')
+@RequireModule(TenantModule.TOLLS)
 export class TagProvidersController {
   constructor(
     private readonly tagProvidersService: TagProvidersService,

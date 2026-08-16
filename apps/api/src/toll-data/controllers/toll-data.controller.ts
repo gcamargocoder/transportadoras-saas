@@ -1,8 +1,10 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { TollDataProvider, UserRole } from '@prisma/client';
 import { IsEnum } from 'class-validator';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { ADMIN_THROTTLE } from '../../common/constants/throttle.constants';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { TenantContext } from '../../tenants/context/tenant-context';
@@ -53,6 +55,7 @@ export class TollDataController {
   @Post('sync')
   @HttpCode(HttpStatus.OK)
   @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
   @ApiOperation({
     summary:
       'Dispara sincronizacao manual de uma fonte oficial (secao 11). Somente SUPER_ADMIN -- ' +

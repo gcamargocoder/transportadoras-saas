@@ -148,6 +148,64 @@ export function mergeFuelByFleet(
 /// (completedAt preenchido e posterior a openedAt). Calculado em memoria
 /// porque Prisma nao agrega diferenca entre 2 colunas DateTime sem SQL
 /// bruto, que este projeto evita.
+// Fase 44 -- ranking de paradas por motorista. Entrada: linhas de
+// `tripStop.groupBy({ by: ['driverId'] })` (1 unica query, mesmo padrao de
+// mergeVehicleAmounts) + mapa driverId->nome ja resolvido em lote pelo
+// chamador (nunca 1 query por motorista). Pura -- nenhuma consulta ao banco
+// aqui, facil de testar isoladamente.
+export interface DriverStopRankingRow {
+  driverId: string | null;
+  _count: number;
+  _sum: { durationMinutes: number | null };
+  _max: { durationMinutes: number | null };
+  _min: { durationMinutes: number | null };
+}
+
+export interface DriverStopRankingEntry {
+  driverId: string;
+  driverName: string;
+  stopsCount: number;
+  totalDurationMinutes: number;
+  averageDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
+  minDurationMinutes: number | null;
+  rankPosition: number;
+}
+
+// Ordenacao (secao 2 do pedido Fase 44): tempo total parado desc; empate ->
+// quantidade de paradas desc; empate -> tempo medio desc; empate -> nome do
+// motorista asc. Paradas sem driverId (paradas administrativas sem
+// motorista vinculado, Fase 43) nunca aparecem aqui -- nao ha "motorista"
+// para rankear.
+export function buildDriverStopRanking(
+  rows: DriverStopRankingRow[],
+  nameByDriverId: Map<string, string>,
+): DriverStopRankingEntry[] {
+  const entries = rows
+    .filter((row): row is DriverStopRankingRow & { driverId: string } => row.driverId !== null)
+    .map((row) => {
+      const totalDurationMinutes = row._sum.durationMinutes ?? 0;
+      return {
+        driverId: row.driverId,
+        driverName: nameByDriverId.get(row.driverId) ?? '—',
+        stopsCount: row._count,
+        totalDurationMinutes,
+        averageDurationMinutes: safeAverage(totalDurationMinutes, row._count),
+        maxDurationMinutes: row._max.durationMinutes ?? null,
+        minDurationMinutes: row._min.durationMinutes ?? null,
+      };
+    })
+    .sort((a, b) => {
+      if (b.totalDurationMinutes !== a.totalDurationMinutes) return b.totalDurationMinutes - a.totalDurationMinutes;
+      if (b.stopsCount !== a.stopsCount) return b.stopsCount - a.stopsCount;
+      const avgDiff = (b.averageDurationMinutes ?? 0) - (a.averageDurationMinutes ?? 0);
+      if (avgDiff !== 0) return avgDiff;
+      return a.driverName.localeCompare(b.driverName, 'pt-BR');
+    });
+
+  return entries.map((entry, index) => ({ ...entry, rankPosition: index + 1 }));
+}
+
 export function computeAverageDurationHours(rows: { openedAt: Date; completedAt: Date | null }[]): number | null {
   const durationsHours = rows
     .filter((row): row is { openedAt: Date; completedAt: Date } => row.completedAt !== null)

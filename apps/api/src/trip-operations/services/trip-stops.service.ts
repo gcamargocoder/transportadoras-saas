@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { TripStop, TripStopSource, TripStopType } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AuditService } from '../../audit/services/audit.service';
@@ -15,7 +15,8 @@ import { CreateTripStopDto } from '../dto/create-trip-stop.dto';
 import { FindTripStopsQueryDto } from '../dto/find-trip-stops-query.dto';
 import { PaginatedTripStopsEntity } from '../entities/paginated-trip-stops.entity';
 import { TripStopEntity } from '../entities/trip-stop.entity';
-import { toTripStopEntity } from '../mappers/trip-stop.mapper';
+import { toTripStopEntity, toTripStopListItemEntity } from '../mappers/trip-stop.mapper';
+import { computeDurationMinutesOrThrow } from '../utils/trip-stop-duration.util';
 
 @Injectable()
 export class TripStopsService {
@@ -113,7 +114,7 @@ export class TripStopsService {
     let durationMinutes: number | null = null;
     if (dto.endedAt) {
       endedAt = new Date(dto.endedAt);
-      durationMinutes = this.computeDurationMinutesOrThrow(startedAt, endedAt);
+      durationMinutes = computeDurationMinutesOrThrow(startedAt, endedAt);
     } else {
       await this.assertNoOpenStopForVehicle(tenantId, dto.vehicleId);
     }
@@ -220,7 +221,7 @@ export class TripStopsService {
     }
 
     const endedAt = new Date(dto.endedAt);
-    const durationMinutes = this.computeDurationMinutesOrThrow(before.startedAt, endedAt);
+    const durationMinutes = computeDurationMinutesOrThrow(before.startedAt, endedAt);
 
     const stop = await this.prisma.tripStop.update({
       where: { id: before.id },
@@ -286,7 +287,11 @@ export class TripStopsService {
 
   // GET /trip-stops (Fase 43) -- lista paginada cross-frota. Gap real desde
   // a Fase 40 (findAll so filtrava por tripId, documentado em
-  // fleet-stops-dashboard.entity.ts).
+  // fleet-stops-dashboard.entity.ts). placa/motorista/referencia da viagem
+  // (secao 23 do pedido: colunas Veiculo/Placa/Motorista/Viagem) sao
+  // resolvidos em LOTE (3 queries a mais, nunca 1 por linha) -- limitado
+  // pelo tamanho da pagina (pageSize <= 100, ver PaginationQueryDto),
+  // nunca cresce com o total de registros da tabela.
   async findAllPaginated(tenantId: string, query: FindTripStopsQueryDto): Promise<PaginatedTripStopsEntity> {
     const where = this.buildListWhere(tenantId, query);
 
@@ -300,8 +305,33 @@ export class TripStopsService {
       this.prisma.tripStop.count({ where }),
     ]);
 
+    const vehicleIds = [...new Set(items.map((i) => i.vehicleId))];
+    const driverIds = [...new Set(items.map((i) => i.driverId).filter((id): id is string => id !== null))];
+    const tripIds = [...new Set(items.map((i) => i.tripId).filter((id): id is string => id !== null))];
+
+    const [vehicles, drivers, trips] = await Promise.all([
+      vehicleIds.length > 0 ? this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true } }) : [],
+      driverIds.length > 0 ? this.prisma.driver.findMany({ where: { id: { in: driverIds } }, select: { id: true, name: true } }) : [],
+      tripIds.length > 0
+        ? this.prisma.trip.findMany({
+            where: { id: { in: tripIds } },
+            select: { id: true, origin: { select: { name: true } }, destination: { select: { name: true } } },
+          })
+        : [],
+    ]);
+
+    const plateByVehicleId = new Map(vehicles.map((v) => [v.id, v.plate]));
+    const nameByDriverId = new Map(drivers.map((d) => [d.id, d.name]));
+    const referenceByTripId = new Map(trips.map((t) => [t.id, `${t.origin.name} -> ${t.destination.name}`]));
+
     const result = new PaginatedTripStopsEntity();
-    result.items = items.map(toTripStopEntity);
+    result.items = items.map((item) => {
+      const entity = toTripStopListItemEntity(item);
+      entity.vehiclePlate = plateByVehicleId.get(item.vehicleId) ?? '—';
+      entity.driverName = item.driverId ? (nameByDriverId.get(item.driverId) ?? null) : null;
+      entity.tripReference = item.tripId ? (referenceByTripId.get(item.tripId) ?? null) : null;
+      return entity;
+    });
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
@@ -332,14 +362,6 @@ export class TripStopsService {
       }),
       ...statusFilter,
     };
-  }
-
-  private computeDurationMinutesOrThrow(startedAt: Date, endedAt: Date): number {
-    const diffMs = endedAt.getTime() - startedAt.getTime();
-    if (diffMs < 0) {
-      throw new BadRequestException('endedAt nao pode ser anterior a startedAt.');
-    }
-    return Math.round(diffMs / 60_000);
   }
 
   // Impede duas paradas OPEN incompativeis para o mesmo veiculo (secao 11

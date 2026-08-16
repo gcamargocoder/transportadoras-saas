@@ -582,6 +582,28 @@ describe('Toll Import (e2e)', () => {
         .expect(400);
     });
 
+    // Fase 46 -- extensao correta (.csv) mas conteudo binario (nao texto) --
+    // extensao sozinha nunca prova o conteudo real. O arquivo nao pode
+    // ficar em disco apos a rejeicao.
+    it('rejeita conteudo binario disfarcado de CSV (extensao correta, assinatura invalida) com 400', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('FakeCsv');
+      const auth = `Bearer ${adminAccessToken}`;
+      const provider = await getSemParar(auth);
+      const fakeCsv = Buffer.from([0x4d, 0x5a, 0x00, 0x00, 0x01, 0x02, 0x00, 0x03]); // assinatura de executavel (MZ) + NUL
+
+      const jobsBefore = await prisma.importJob.count();
+
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-import')
+        .set('Authorization', auth)
+        .field('providerId', provider.id)
+        .attach('file', fakeCsv, 'extrato.csv')
+        .expect(400);
+
+      const jobsAfter = await prisma.importJob.count();
+      expect(jobsAfter).toBe(jobsBefore);
+    });
+
     it('rejeita operadora inexistente com 404', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('BadProvider');
       const auth = `Bearer ${adminAccessToken}`;

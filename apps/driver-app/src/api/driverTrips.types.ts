@@ -9,7 +9,34 @@ export type TripStatus =
   | 'COMPLETED'
   | 'CANCELLED';
 
-export type TripStopType = 'UNKNOWN' | 'FUEL' | 'REST' | 'MEAL' | 'MAINTENANCE' | 'OTHER';
+// Fase 43 -- catalogo ampliado (espelha o enum TripStopType do backend,
+// mesmo principio ja documentado em trip-stop-type-groups.constants.ts:
+// "admin-web/driver-app espelham este mesmo agrupamento em seus proprios
+// arquivos de labels"). Todos os valores anteriores (Fase 25) continuam
+// validos -- nenhum removido/renomeado.
+export type TripStopType =
+  | 'UNKNOWN'
+  | 'FUEL'
+  | 'REST'
+  | 'MEAL'
+  | 'MAINTENANCE'
+  | 'OTHER'
+  | 'LOADING'
+  | 'UNLOADING'
+  | 'WAITING_LOADING'
+  | 'WAITING_UNLOADING'
+  | 'YARD'
+  | 'CUSTOMER'
+  | 'GARAGE'
+  | 'BREAKDOWN'
+  | 'TIRE'
+  | 'CONGESTION'
+  | 'ACCIDENT'
+  | 'ROAD_CLOSURE'
+  | 'INSPECTION'
+  | 'PERSONAL_NEED'
+  | 'DOCUMENTATION'
+  | 'WAITING_AUTHORIZATION';
 export type AxleEventSource = 'DRIVER_INPUT' | 'TIMEOUT_DEFAULT';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 export type TripLoadStatus = 'LOADED' | 'EMPTY';

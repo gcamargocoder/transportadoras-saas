@@ -20,12 +20,20 @@ import type {
   ImportJobStatus,
   ImportRowIssueType,
   LocationType,
+  MaintenanceComponent,
   PaymentType,
   RevenueCategory,
   RouteTollEstimateSource,
   RouteVersionReason,
   SettlementStatus,
+  BillingPeriodicity,
+  SubscriptionPaymentMethod,
+  SubscriptionPaymentStatus,
+  SubscriptionStatus,
   SyncStatus,
+  TenantModule,
+  TenantPlanTier,
+  TenantStatus,
   TireLocationType,
   TireStatus,
   TollMatchStatus,
@@ -35,6 +43,8 @@ import type {
   TripLoadStatus,
   TripPriority,
   TripStatus,
+  TripStopSource,
+  TripStopStatus,
   TripStopType,
   UserRole,
   VehicleFuelType,
@@ -66,6 +76,20 @@ export interface TenantSettingsEntity {
   preferences: Record<string, unknown> | null;
 }
 
+// Fase 47 -- Super Administracao da Plataforma.
+export interface TenantPlanEntity {
+  tier: TenantPlanTier;
+  trialStartedAt: string | null;
+  trialEndsAt: string | null;
+  trialDaysRemaining: number | null;
+  trialExpiringSoon: boolean;
+  maxUsers: number | null;
+  maxVehicles: number | null;
+  maxDrivers: number | null;
+  maxStorageMb: number | null;
+  enabledModules: TenantModule[];
+}
+
 export interface TenantEntity {
   id: string;
   name: string;
@@ -74,9 +98,108 @@ export interface TenantEntity {
   slug: string;
   logoUrl: string | null;
   isActive: boolean;
+  status: TenantStatus;
   settings: TenantSettingsEntity | null;
+  plan: TenantPlanEntity | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// GET /tenants (SUPER_ADMIN) -- item da listagem, com contagens resolvidas
+// em lote para a pagina inteira (nunca 1 query por linha no backend).
+export interface TenantListItemEntity extends TenantEntity {
+  userCount: number;
+  vehicleCount: number;
+}
+
+// GET /tenants/:id/usage (SUPER_ADMIN).
+export interface TenantUsageEntity {
+  users: number;
+  drivers: number;
+  vehicles: number;
+  trips: number;
+  checklistExecutions: number;
+  fuelSupplies: number;
+  maintenances: number;
+  attachments: number;
+  storageUsedMb: number;
+}
+
+export interface PlatformTenantStatusBreakdownEntity {
+  status: TenantStatus;
+  count: number;
+}
+
+export interface PlatformPlanTierBreakdownEntity {
+  tier: TenantPlanTier;
+  count: number;
+}
+
+// GET /tenants/dashboard (SUPER_ADMIN) -- dashboard global da plataforma.
+export interface PlatformDashboardEntity {
+  totalTenants: number;
+  byStatus: PlatformTenantStatusBreakdownEntity[];
+  totalUsers: number;
+  totalVehicles: number;
+  totalDrivers: number;
+  byPlanTier: PlatformPlanTierBreakdownEntity[];
+  tripsCompletedLast30Days: number;
+  checklistsCompletedLast30Days: number;
+}
+
+// Fase 50 -- Gestao Manual de Assinaturas e Cobranca.
+export interface SubscriptionEntity {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  planTier: TenantPlanTier;
+  amount: number;
+  periodicity: BillingPeriodicity;
+  paymentMethod: SubscriptionPaymentMethod;
+  startDate: string;
+  dueDay: number;
+  nextDueDate: string;
+  status: SubscriptionStatus;
+  daysOverdue: number;
+  notes: string | null;
+  lastPaymentAt: string | null;
+  lastPaymentStatus: SubscriptionPaymentStatus | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubscriptionPaymentEntity {
+  id: string;
+  tenantId: string;
+  subscriptionId: string;
+  amount: number;
+  dueDate: string;
+  paidAt: string | null;
+  paymentMethod: SubscriptionPaymentMethod;
+  status: SubscriptionPaymentStatus;
+  reference: string | null;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+}
+
+export interface UpcomingDueEntity {
+  tenantId: string;
+  tenantName: string;
+  amount: number;
+  nextDueDate: string;
+}
+
+export interface BillingDashboardEntity {
+  monthlyProjectedRevenue: number;
+  annualProjectedRevenue: number;
+  receivedInPeriod: number;
+  pendingAmount: number;
+  overdueAmount: number;
+  activeSubscriptions: number;
+  totalSubscriptions: number;
+  overdueSubscriptions: number;
+  upcomingDueDates: UpcomingDueEntity[];
 }
 
 export interface DriverEntity {
@@ -217,6 +340,14 @@ export interface TripCompositionEntity {
   updatedAt: string;
 }
 
+export interface MaintenancePartEntity {
+  id: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
 export interface MaintenanceEntity {
   id: string;
   tenantId: string;
@@ -240,6 +371,28 @@ export interface MaintenanceEntity {
   serviceOrderNumber: string | null;
   warrantyUntil: string | null;
   nextReviewAt: string | null;
+  component: MaintenanceComponent | null;
+  nextOdometerKm: number | null;
+  downtimeMinutes: number | null;
+  invoiceNumber: string | null;
+  maintenancePlanId: string | null;
+  parts: MaintenancePartEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MaintenancePlanEntity {
+  id: string;
+  vehicleId: string;
+  name: string;
+  component: MaintenanceComponent;
+  maintenanceType: VehicleMaintenanceType;
+  intervalKm: number | null;
+  intervalDays: number | null;
+  intervalHours: number | null;
+  alertBeforeKm: number | null;
+  alertBeforeDays: number | null;
+  active: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -511,6 +664,7 @@ export interface TollDashboardEntity {
   overchargeCount: number;
   underchargeCount: number;
   conformityPercentage: number;
+  monthlyTrendChargedAmount: DashboardChartPointEntity[];
 }
 
 // Rota de pedagio (Fase 23) -- corredor operacional do tenant (distinto de
@@ -1081,19 +1235,62 @@ export interface FleetMaintenanceWorkshopBreakdownEntity {
   cost: number;
 }
 
+export interface FleetMaintenanceComponentBreakdownEntity {
+  component: MaintenanceComponent | null;
+  count: number;
+  cost: number;
+}
+
+export interface FleetMaintenanceCostPerKmEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface FleetMaintenancePlanStatusEntity {
+  planId: string;
+  vehicleId: string;
+  vehiclePlate: string;
+  name: string;
+  component: MaintenanceComponent;
+  dueOdometerKm: number | null;
+  dueDate: string | null;
+  overdueByKm: number | null;
+  overdueByDays: number | null;
+}
+
 export interface FleetMaintenanceDashboardEntity {
   totalCount: number;
   openCount: number;
   completedCount: number;
+  cancelledCount: number;
+  scheduledCount: number;
+  preventiveCount: number;
+  correctiveCount: number;
   totalCost: number;
+  laborCostTotal: number;
+  partsCostTotal: number;
   averageCostPerOccurrence: number | null;
   averageDurationHours: number | null;
+  totalDowntimeMinutes: number | null;
+  averageDowntimeMinutes: number | null;
+  costPerKm: FleetMaintenanceCostPerKmEntity;
+  overdueCount: number;
+  dueSoonCount: number;
   byType: FleetMaintenanceTypeBreakdownEntity[];
   byPriority: FleetMaintenancePriorityBreakdownEntity[];
   byWorkshop: FleetMaintenanceWorkshopBreakdownEntity[];
+  byComponent: FleetMaintenanceComponentBreakdownEntity[];
   topVehiclesByCost: FleetVehicleRankingEntryEntity[];
+  bottomVehiclesByCost: FleetVehicleRankingEntryEntity[];
   // Fase 41 -- "value"/"count" = nº de manutencoes do veiculo.
   topVehiclesByCount: FleetVehicleRankingEntryEntity[];
+  topVehiclesByDowntime: FleetVehicleRankingEntryEntity[];
+  topComponentsByCost: FleetMaintenanceComponentBreakdownEntity[];
+  topComponentsByCount: FleetMaintenanceComponentBreakdownEntity[];
+  overdueMaintenances: FleetMaintenancePlanStatusEntity[];
+  upcomingMaintenances: FleetMaintenancePlanStatusEntity[];
+  maintenanceAlerts: FleetAlertEntity[];
   monthlyTrend: DashboardChartPointEntity[];
 }
 
@@ -1103,12 +1300,50 @@ export interface FleetStopsTypeBreakdownEntity {
   totalDurationMinutes: number;
 }
 
+// Fase 44 -- ranking de paradas por motorista, ja ordenado pelo backend
+// (totalDurationMinutes desc; empate: stopsCount desc, depois
+// averageDurationMinutes desc, depois driverName asc).
+export interface FleetStopsDriverRankingEntryEntity {
+  driverId: string;
+  driverName: string;
+  stopsCount: number;
+  totalDurationMinutes: number;
+  averageDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
+  minDurationMinutes: number | null;
+  rankPosition: number;
+}
+
+// Fase 44 -- alerta de duracao longa: parada CONCLUIDA cuja duracao excedeu
+// o limite configurado (padrao ou por tenant) para o seu tipo. Ja ordenado
+// pelo backend por excessMinutes desc.
+export interface FleetStopDurationAlertEntity {
+  stopId: string;
+  type: TripStopType;
+  durationMinutes: number;
+  thresholdMinutes: number;
+  excessMinutes: number;
+  vehicleId: string;
+  vehiclePlate: string;
+  driverId: string | null;
+  driverName: string | null;
+  tripId: string | null;
+  tripReference: string | null;
+  startedAt: string;
+  endedAt: string;
+  status: string;
+}
+
 export interface FleetStopsDashboardEntity {
   totalStops: number;
   totalDurationMinutes: number;
   averageDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
+  minDurationMinutes: number | null;
   byType: FleetStopsTypeBreakdownEntity[];
   topVehiclesByDuration: FleetVehicleRankingEntryEntity[];
+  driverRanking: FleetStopsDriverRankingEntryEntity[];
+  durationAlerts: FleetStopDurationAlertEntity[];
   monthlyTrend: DashboardChartPointEntity[];
 }
 
@@ -1145,7 +1380,16 @@ export type FleetAlertType =
   | 'CONSUMPTION_OUTLIER_HIGH'
   | 'CONSUMPTION_OUTLIER_LOW'
   | 'SUPPLY_VOLUME_OUTLIER'
-  | 'ODOMETER_REGRESSION';
+  | 'ODOMETER_REGRESSION'
+  // Fase 45 -- alertas de manutencao.
+  | 'MAINTENANCE_OVERDUE'
+  | 'MAINTENANCE_DUE_SOON'
+  | 'HIGH_COST'
+  | 'EXCESSIVE_BREAKDOWN'
+  | 'EXCESSIVE_DOWNTIME'
+  | 'CRITICAL_COMPONENT'
+  | 'TIRE_NEAR_REPLACEMENT'
+  | 'DOWNTIME_COST_OUTLIER';
 
 export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
 
@@ -1250,6 +1494,26 @@ export interface FleetFuelPreviousPeriodEntity {
   supplyCountDeltaPercent: number | null;
 }
 
+// Nivel de tanque ESTIMADO (nunca sensor real) -- ver
+// docs/fleet-operations-dashboard.md, secao "Nivel de tanque (estimado)".
+export interface FleetFuelTankLevelEntity {
+  vehicleId: string;
+  plate: string;
+  capacityLiters: number | null;
+  estimatedLevelLiters: number | null;
+  percentage: number | null;
+  available: boolean;
+  reason: string | null;
+  lastSupplyAt: string | null;
+  kmSinceLastSupply: number | null;
+}
+
+export interface FleetFuelTankFleetAverageEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
 export interface FleetFuelAnalyticsEntity {
   summary: FleetFuelSummaryEntity;
   consumption: FleetFuelConsumptionEntity;
@@ -1262,6 +1526,198 @@ export interface FleetFuelAnalyticsEntity {
   rankings: FleetFuelRankingsEntity;
   alerts: FleetAlertEntity[];
   previousPeriod: FleetFuelPreviousPeriodEntity | null;
+  tankLevels: FleetFuelTankLevelEntity[];
+  tankFleetAverage: FleetFuelTankFleetAverageEntity;
+}
+
+// Composicao da frota (iteracao de redesign visual) -- foto do estado ATUAL
+// da frota (ignora startDate/endDate), distinta de FleetOverviewEntity
+// (dashboard consolidado, so contagem por status).
+export interface FleetVehicleTypeBreakdownEntity {
+  type: VehicleType;
+  count: number;
+}
+
+export interface FleetVehicleStatusBreakdownEntity {
+  status: VehicleStatus;
+  count: number;
+}
+
+export interface FleetVehicleFuelTypeBreakdownEntity {
+  fuelType: VehicleFuelType | null;
+  count: number;
+}
+
+export interface FleetVehicleFleetBreakdownEntity {
+  fleetId: string | null;
+  fleetName: string;
+  count: number;
+}
+
+export interface FleetVehicleAverageMetricEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface FleetVehiclesOverviewEntity {
+  totalVehicles: number;
+  activeCount: number;
+  inactiveCount: number;
+  maintenanceCount: number;
+  soldCount: number;
+  vehiclesOnTrip: number;
+  vehiclesAvailable: number;
+  byType: FleetVehicleTypeBreakdownEntity[];
+  byStatus: FleetVehicleStatusBreakdownEntity[];
+  byFuelType: FleetVehicleFuelTypeBreakdownEntity[];
+  byFleet: FleetVehicleFleetBreakdownEntity[];
+  averageAgeYears: FleetVehicleAverageMetricEntity;
+  averageOdometerKm: FleetVehicleAverageMetricEntity;
+  oldestVehicles: FleetVehicleRankingEntryEntity[];
+  newestVehicles: FleetVehicleRankingEntryEntity[];
+  topVehiclesByOdometer: FleetVehicleRankingEntryEntity[];
+}
+
+// Dashboard de pneus (iteracao de redesign visual). Distinto de
+// TireDashboardEntity (GET /tires/dashboard, sem filtro, reaproveitado tal
+// como esta no card "Pneus" do executivo).
+export interface FleetTireStatusBreakdownEntity {
+  status: TireStatus;
+  count: number;
+}
+
+export interface FleetTireFleetBreakdownEntity {
+  fleetId: string | null;
+  fleetName: string;
+  count: number;
+  cost: number;
+}
+
+export interface FleetTireWearEntity {
+  tireId: string;
+  fireNumber: string;
+  vehiclePlate: string | null;
+  position: string | null;
+  wearPercentRemaining: number | null;
+  currentTreadDepthMm: number | null;
+  initialTreadDepthMm: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface FleetTiresOverviewEntity {
+  totalTires: number;
+  newCount: number;
+  inUseCount: number;
+  stockCount: number;
+  retreadedCount: number;
+  scrappedCount: number;
+  investedValue: number;
+  retreadValue: number;
+  averageLifespanKm: number | null;
+  nearReplacementCount: number;
+  byStatus: FleetTireStatusBreakdownEntity[];
+  byFleet: FleetTireFleetBreakdownEntity[];
+  monthlyTrendCost: DashboardChartPointEntity[];
+  tireWear: FleetTireWearEntity[];
+  topVehiclesByTireCost: FleetVehicleRankingEntryEntity[];
+  tireAlerts: FleetAlertEntity[];
+}
+
+// Dashboard "Tempo parado e receita perdida". Tempo parado vem SOMENTE de
+// TripStop; receita perdida e uma ESTIMATIVA (horas paradas x taxa de
+// receita/hora do proprio veiculo, nunca R$/km).
+export type DowntimeCategory = 'MAINTENANCE' | 'BREAKDOWN' | 'FUEL' | 'OTHER';
+
+export interface FleetDowntimeCategoryEntity {
+  category: DowntimeCategory;
+  durationMinutes: number;
+  count: number;
+  estimatedLostRevenue: number | null;
+}
+
+export interface FleetRevenuePerHourEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+  basedOnTripCount: number;
+}
+
+export interface FleetEstimatedLostRevenueEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface FleetVehicleDowntimeCostEntity {
+  vehicleId: string;
+  plate: string;
+  totalDowntimeMinutes: number;
+  stopCount: number;
+  byCategory: FleetDowntimeCategoryEntity[];
+  revenuePerHour: FleetRevenuePerHourEntity;
+  estimatedLostRevenue: FleetEstimatedLostRevenueEntity;
+}
+
+export interface FleetDowntimeCostEntity {
+  totalStops: number;
+  totalDowntimeMinutes: number;
+  totalEstimatedLostRevenue: FleetEstimatedLostRevenueEntity;
+  byCategory: FleetDowntimeCategoryEntity[];
+  vehicles: FleetVehicleDowntimeCostEntity[];
+  topVehiclesByLostRevenue: FleetVehicleRankingEntryEntity[];
+  topVehiclesByDowntimeMinutes: FleetVehicleRankingEntryEntity[];
+  monthlyTrendDowntimeMinutes: DashboardChartPointEntity[];
+  downtimeCostAlerts: FleetAlertEntity[];
+}
+
+// Dashboard "Composicao" -- uso de veiculo+carreta por viagem. Trailer nao
+// tem campo de eixo proprio (eixo e atributo de AxleConfiguration, 1:1 com
+// TripComposition); TripStop nao tem trailerId (tempo parado por carreta so
+// cobre paradas com tripId); composicao com varias carretas (bitrem/
+// rodotrem) atribui a duracao INTEIRA a cada carreta (nunca dividida). Sem
+// estimativa de receita perdida por carreta (fora de escopo).
+export interface FleetTrailerTypeBreakdownEntity {
+  type: TrailerType;
+  count: number;
+}
+
+export interface FleetAxleCategoryBreakdownEntity {
+  billableCategory: string;
+  totalAxles: number;
+  count: number;
+}
+
+export interface FleetTrailerRankingEntryEntity {
+  trailerId: string;
+  plate: string;
+  type: TrailerType;
+  value: number;
+  count: number;
+}
+
+export interface FleetTrailerDowntimeEntity {
+  trailerId: string;
+  plate: string;
+  type: TrailerType;
+  inUseMinutes: number;
+  downtimeMinutes: number;
+  tripCount: number;
+}
+
+export interface FleetCompositionsOverviewEntity {
+  totalTrailers: number;
+  activeCount: number;
+  inactiveCount: number;
+  trailersOnTrip: number;
+  trailersAvailable: number;
+  byType: FleetTrailerTypeBreakdownEntity[];
+  axleCategoryBreakdown: FleetAxleCategoryBreakdownEntity[];
+  topTrailersByTripCount: FleetTrailerRankingEntryEntity[];
+  topTrailersByInUseMinutes: FleetTrailerRankingEntryEntity[];
+  trailers: FleetTrailerDowntimeEntity[];
+  monthlyTrendTripCount: DashboardChartPointEntity[];
 }
 
 // Fase 25 -- operacao da viagem (app do motorista), visibilidade
@@ -1276,20 +1732,40 @@ export interface TrackingPointEntity {
   recordedAt: string;
 }
 
+// Fase 43 -- tripId/driverId/latitude/longitude passaram a opcionais
+// (parada administrativa sem viagem/motorista associado); status/source/
+// notes/cancelledAt sao novos (espelha apps/api/src/trip-operations/
+// entities/trip-stop.entity.ts). status e SEMPRE derivado pelo backend
+// (endedAt/cancelledAt), nunca recalculado aqui.
 export interface TripStopEntity {
   id: string;
-  tripId: string;
+  tripId: string | null;
   vehicleId: string;
-  driverId: string;
+  driverId: string | null;
   type: TripStopType;
-  latitude: number;
-  longitude: number;
+  status: TripStopStatus;
+  source: TripStopSource;
+  latitude: number | null;
+  longitude: number | null;
   startedAt: string;
   endedAt: string | null;
   durationMinutes: number | null;
   locationLabel: string | null;
+  notes: string | null;
+  cancelledAt: string | null;
   syncStatus: SyncStatus;
+  deviceEventId: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 43 -- GET /trip-stops (listagem administrativa). Placa/motorista/
+// referencia da viagem resolvidos em lote pelo backend (nunca 1 query por
+// linha, ver TripStopsService.findAllPaginated).
+export interface TripStopListItemEntity extends TripStopEntity {
+  vehiclePlate: string;
+  driverName: string | null;
+  tripReference: string | null;
 }
 
 export interface AxleEventEntity {

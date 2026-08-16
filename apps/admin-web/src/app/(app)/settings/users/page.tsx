@@ -8,10 +8,12 @@ import { Badge } from '../../../../components/ui/badge';
 import { Button } from '../../../../components/ui/button';
 import { DataTable } from '../../../../components/ui/data-table';
 import { Dropdown } from '../../../../components/ui/dropdown';
+import { LimitIndicator } from '../../../../components/ui/limit-indicator';
 import { PageHeader } from '../../../../components/ui/page-header';
 import { Pagination } from '../../../../components/ui/pagination';
 import { useToast } from '../../../../components/ui/toast';
 import { CreateUserModal } from '../../../../features/settings/create-user-modal';
+import { useTenantPlan } from '../../../../hooks/use-tenant-plan';
 import { listUsers, updateUserStatus } from '../../../../lib/api/admin.api';
 import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { ROLE_LABELS } from '../../../../lib/labels';
@@ -22,6 +24,7 @@ const PAGE_SIZE = 20;
 export default function UsersSettingsPage(): JSX.Element {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { plan } = useTenantPlan();
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -91,10 +94,15 @@ export default function UsersSettingsPage(): JSX.Element {
         title="Usuários"
         description="Usuários com acesso ao painel administrativo."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus size={16} />
-            Novo usuário
-          </Button>
+          <>
+            {query.data && (
+              <LimitIndicator label="Usuários" current={query.data.meta.total} max={plan?.maxUsers} />
+            )}
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus size={16} />
+              Novo usuário
+            </Button>
+          </>
         }
       />
 

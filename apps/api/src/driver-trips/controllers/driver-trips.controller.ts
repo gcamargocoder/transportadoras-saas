@@ -16,7 +16,9 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { UPLOAD_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { CreateChecklistExecutionDto } from '../../checklists/dto/create-checklist-execution.dto';
 import { SubmitChecklistAnswersDto } from '../../checklists/dto/submit-checklist-answers.dto';
@@ -32,6 +34,7 @@ import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entit
 import { TrackingPointsSyncResultEntity } from '../../trip-operations/entities/tracking-point.entity';
 import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
 import { CloseAxleEventDto } from '../../trip-operations/dto/close-axle-event.dto';
+import { CloseTripStopByDeviceEventDto } from '../../trip-operations/dto/close-trip-stop-by-device-event.dto';
 import { CloseTripStopDto } from '../../trip-operations/dto/close-trip-stop.dto';
 import { CreateAxleEventDto } from '../../trip-operations/dto/create-axle-event.dto';
 import { CreateTrackingPointsDto } from '../../trip-operations/dto/create-tracking-points.dto';
@@ -301,6 +304,28 @@ export class DriverTripsController {
     return this.tripStopsService.findAll(tenantId, id);
   }
 
+  // Fase 43 -- fecha uma parada pelo deviceEventId usado na ABERTURA, nao
+  // pelo id do servidor (ver comentario em CloseTripStopByDeviceEventDto).
+  // Habilita a fila offline (syncQueue.ts) a enfileirar o fechamento sem
+  // depender de ter recebido resposta da abertura antes.
+  @Post('trips/:id/stops/close-by-device-event')
+  @ApiOperation({ summary: 'Fecha uma parada pelo deviceEventId usado na abertura (suporte a fechamento enfileirado offline).' })
+  @ApiOkResponse({ type: TripStopEntity })
+  async closeStopByDeviceEvent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CloseTripStopByDeviceEventDto,
+  ): Promise<TripStopEntity> {
+    const tenantId = this.tenantContext.requireTenantId();
+    await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
+    return this.tripStopsService.closeByDeviceEvent(
+      tenantId,
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
   @Post('trips/:id/fuel-supplies')
   @ApiOperation({
     summary:
@@ -421,6 +446,7 @@ export class DriverTripsController {
   }
 
   @Post('checklists/:id/evidence')
+  @Throttle(UPLOAD_THROTTLE)
   @UseInterceptors(FileInterceptor('file'))
   @UseFilters(MulterExceptionFilter)
   @ApiConsumes('multipart/form-data')

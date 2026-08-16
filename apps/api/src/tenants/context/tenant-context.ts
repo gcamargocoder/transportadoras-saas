@@ -1,6 +1,6 @@
 import { Inject, Injectable, Scope, UnauthorizedException } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
-import { Tenant } from '@prisma/client';
+import { Tenant, TenantPlan } from '@prisma/client';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AUTH_ERRORS } from '../../auth/constants/auth-error.constants';
 import { TenantRequest } from '../interfaces/tenant-request.interface';
@@ -23,6 +23,13 @@ export class TenantContext {
 
   get tenantId(): string | undefined {
     return this.request.tenant?.id ?? this.request.user?.tenantId ?? undefined;
+  }
+
+  // Fase 48 -- le o plano ja anexado pelo TenantGuard (request.tenant.plan),
+  // nunca faz consulta propria. `null` cobre tanto "tenant sem plano" quanto
+  // "fora de um request com tenant resolvido" (ex: rota publica).
+  get plan(): TenantPlan | null {
+    return this.request.tenant?.plan ?? null;
   }
 
   get userId(): string | undefined {

@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  MaintenanceComponent,
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
@@ -44,6 +45,11 @@ export class FindMaintenancesQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(VehicleMaintenancePriority)
   priority?: VehicleMaintenancePriority;
+
+  @ApiPropertyOptional({ enum: MaintenanceComponent })
+  @IsOptional()
+  @IsEnum(MaintenanceComponent)
+  component?: MaintenanceComponent;
 
   @ApiPropertyOptional({ format: 'uuid', description: 'Filtra por veiculo.' })
   @IsOptional()

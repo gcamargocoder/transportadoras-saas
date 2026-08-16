@@ -3,13 +3,18 @@ import {
   ChecklistExecutionStatus,
   ExpenseCategory,
   ExpenseStatus,
+  MaintenanceComponent,
   Prisma,
+  TireStatus,
+  TrailerType,
   TripStatus,
   TripStopType,
+  VehicleFuelType,
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
   VehicleStatus,
+  VehicleType,
 } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
@@ -23,12 +28,20 @@ import { DashboardChartPointEntity } from '../../dashboard/entities/dashboard-ch
 import { FindFuelSuppliesQueryDto } from '../../fuel-supplies/dto/find-fuel-supplies-query.dto';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { TiresService } from '../../tires/services/tires.service';
+import { NEAR_REPLACEMENT_THRESHOLD_MM, TiresService } from '../../tires/services/tires.service';
+import { TripStopStatus } from '../../trip-operations/entities/trip-stop.entity';
 import {
   CONSUMPTION_OUTLIER_MULTIPLIER,
   COST_OUTLIER_MULTIPLIER,
+  DOWNTIME_COST_OUTLIER_MULTIPLIER,
+  EXCESSIVE_BREAKDOWN_MULTIPLIER,
+  EXCESSIVE_DOWNTIME_MULTIPLIER,
+  LONG_STOP_DURATION_ALERTS_LIMIT,
   MAINTENANCE_COUNT_OUTLIER_MULTIPLIER,
+  MAINTENANCE_HIGH_COST_MULTIPLIER,
+  MAINTENANCE_PLAN_ALERTS_LIMIT,
   MIN_SUPPLIES_FOR_CONSUMPTION,
+  MIN_TRIPS_FOR_REVENUE_RATE,
   PRICE_PER_LITER_OUTLIER_MULTIPLIER,
   STALLED_STOP_MINUTES,
   STOP_TIME_OUTLIER_MULTIPLIER,
@@ -37,7 +50,23 @@ import {
 import { FleetOperationsQueryDto } from '../dto/fleet-operations-query.dto';
 import { FleetAlertEntity, FleetAlertSeverity, FleetAlertType } from '../entities/fleet-alert.entity';
 import { FleetChecklistSummaryEntity } from '../entities/fleet-checklist-summary.entity';
+import {
+  FleetAxleCategoryBreakdownEntity,
+  FleetCompositionsOverviewEntity,
+  FleetTrailerDowntimeEntity,
+  FleetTrailerRankingEntryEntity,
+  FleetTrailerTypeBreakdownEntity,
+} from '../entities/fleet-compositions-overview.entity';
 import { FleetCostCategoryEntity, FleetCostFleetEntity, FleetCostsEntity, FleetCostsPreviousPeriodEntity } from '../entities/fleet-costs.entity';
+import {
+  DOWNTIME_CATEGORIES,
+  DowntimeCategory,
+  FleetDowntimeCategoryEntity,
+  FleetDowntimeCostEntity,
+  FleetEstimatedLostRevenueEntity,
+  FleetRevenuePerHourEntity,
+  FleetVehicleDowntimeCostEntity,
+} from '../entities/fleet-downtime-cost.entity';
 import {
   FleetFuelAnalyticsEntity,
   FleetFuelCostPerKmEntity,
@@ -46,15 +75,37 @@ import {
   FleetFuelPreviousPeriodEntity,
   FleetFuelRankingsEntity,
   FleetFuelSummaryEntity,
+  FleetFuelTankFleetAverageEntity,
+  FleetFuelTankLevelEntity,
   FleetFuelVehicleBreakdownEntity,
 } from '../entities/fleet-fuel-analytics.entity';
-import { FleetMaintenanceDashboardEntity } from '../entities/fleet-maintenance-dashboard.entity';
+import {
+  FleetMaintenanceComponentBreakdownEntity,
+  FleetMaintenanceCostPerKmEntity,
+  FleetMaintenanceDashboardEntity,
+  FleetMaintenancePlanStatusEntity,
+} from '../entities/fleet-maintenance-dashboard.entity';
 import { FleetOperationalIndicatorsEntity } from '../entities/fleet-operational-indicators.entity';
 import { FleetOperationsDashboardEntity } from '../entities/fleet-operations-dashboard.entity';
 import { FleetOverviewEntity } from '../entities/fleet-overview.entity';
-import { FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
+import { FleetStopDurationAlertEntity, FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
+import {
+  FleetTireFleetBreakdownEntity,
+  FleetTireStatusBreakdownEntity,
+  FleetTireWearEntity,
+  FleetTiresOverviewEntity,
+} from '../entities/fleet-tires-overview.entity';
 import { FleetVehicleRankingEntryEntity } from '../entities/fleet-vehicle-ranking-entry.entity';
 import {
+  FleetVehicleAverageMetricEntity,
+  FleetVehicleFleetBreakdownEntity,
+  FleetVehicleFuelTypeBreakdownEntity,
+  FleetVehicleStatusBreakdownEntity,
+  FleetVehicleTypeBreakdownEntity,
+  FleetVehiclesOverviewEntity,
+} from '../entities/fleet-vehicles-overview.entity';
+import {
+  buildDriverStopRanking,
   computeAverageDurationHours,
   computeDeltaPercent,
   computePreviousPeriodRange,
@@ -69,19 +120,22 @@ import {
   VehicleRankingAccumulator,
   VehicleRankingEntry,
 } from '../utils/fleet-operations-metrics.util';
+import { getStopDurationThreshold, resolveStopDurationThresholds } from '../utils/stop-duration-thresholds.util';
+import { computeRevenuePerHour } from '../utils/downtime-revenue-rate.util';
+import { computeMaintenanceCostPerKmTotals } from '../utils/maintenance-cost-per-km.util';
+import { evaluateMaintenancePlan } from '../utils/maintenance-plan-status.util';
 
 const ACTIVE_TRIP_STATUSES: TripStatus[] = [TripStatus.IN_PROGRESS, TripStatus.PAUSED];
 
-// Mesma divisao binaria ja usada em DashboardService (Fase 19) --
-// OPEN/IN_PROGRESS/WAITING_PARTS = em aberto, COMPLETED/CANCELLED = encerrada.
+// OPEN/IN_PROGRESS/WAITING_PARTS = em aberto (mesma divisao ja usada em
+// DashboardService, Fase 19). Fase 45 -- completedCount/cancelledCount
+// passam a ser contados separadamente (groupBy(['status'])), nunca mais
+// somados num unico "encerrada" (CANCELLED nunca deve ser confundido com
+// COMPLETED em nenhum indicador).
 const OPEN_MAINTENANCE_STATUSES: VehicleMaintenanceStatus[] = [
   VehicleMaintenanceStatus.OPEN,
   VehicleMaintenanceStatus.IN_PROGRESS,
   VehicleMaintenanceStatus.WAITING_PARTS,
-];
-const CLOSED_MAINTENANCE_STATUSES: VehicleMaintenanceStatus[] = [
-  VehicleMaintenanceStatus.COMPLETED,
-  VehicleMaintenanceStatus.CANCELLED,
 ];
 
 // Categorias de TripExpense com fonte primaria propria neste dashboard --
@@ -109,6 +163,15 @@ interface FleetOperationsFilters {
   endDate?: Date;
   vehicleId?: string;
   fleetId?: string;
+  // Fase 44 -- so consumidos por computeStopsDashboard (ver comentario em
+  // FleetOperationsQueryDto).
+  driverId?: string;
+  type?: TripStopType;
+  status?: TripStopStatus;
+  vehicleType?: VehicleType;
+  vehicleStatus?: VehicleStatus;
+  tireStatus?: TireStatus;
+  trailerType?: TrailerType;
 }
 
 interface CostsResult {
@@ -195,15 +258,7 @@ export class FleetOperationsMetricsService {
 
     const [statusCounts, vehiclesOnTrip, activeTrips, activeDrivers, openAlerts] = await Promise.all([
       this.prisma.vehicle.groupBy({ by: ['status'], where: vehicleWhere, _count: true }),
-      // Fase 41 -- contagem relacional (sem N+1): veiculos ACTIVE com pelo
-      // menos 1 composicao vinculada a uma viagem em andamento agora.
-      this.prisma.vehicle.count({
-        where: {
-          ...vehicleWhere,
-          status: VehicleStatus.ACTIVE,
-          tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } },
-        },
-      }),
+      this.countVehiclesOnTrip(vehicleWhere),
       this.prisma.trip.count({
         where: { ...this.buildTripWhere(tenantId, filters, undefined), status: { in: ACTIVE_TRIP_STATUSES } },
       }),
@@ -226,6 +281,16 @@ export class FleetOperationsMetricsService {
     entity.activeDrivers = activeDrivers;
     entity.openAlerts = openAlerts;
     return entity;
+  }
+
+  // Fase 41 -- contagem relacional (sem N+1): veiculos ACTIVE com pelo menos
+  // 1 composicao vinculada a uma viagem em andamento agora. Extraida para
+  // ser reaproveitada por computeOverview E computeVehiclesOverview (mesma
+  // regra, nunca duplicada).
+  private countVehiclesOnTrip(vehicleWhere: Prisma.VehicleWhereInput): Promise<number> {
+    return this.prisma.vehicle.count({
+      where: { ...vehicleWhere, status: VehicleStatus.ACTIVE, tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } } },
+    });
   }
 
   // ==========================================================================
@@ -466,59 +531,143 @@ export class FleetOperationsMetricsService {
   ): Promise<MaintenanceResult> {
     const dateRange = this.dateRangeFilter(filters);
     const where = this.buildMaintenanceWhere(tenantId, filters, dateRange);
+    const whereAnyStatus = this.buildMaintenanceWhere(tenantId, filters, dateRange, false);
 
     const [
-      totalCount,
-      openCount,
-      completedCount,
+      statusGroups,
+      scheduledCount,
       totalAgg,
       byTypeRaw,
       byPriorityRaw,
       byWorkshopRaw,
+      byComponentRaw,
       byVehicleRaw,
+      correctiveByVehicleRaw,
       completedDurations,
+      costPerKmRows,
       monthlyTrendRows,
+      planStatus,
     ] = await Promise.all([
-      this.prisma.vehicleMaintenance.count({ where }),
-      this.prisma.vehicleMaintenance.count({ where: { ...where, status: { in: OPEN_MAINTENANCE_STATUSES } } }),
-      this.prisma.vehicleMaintenance.count({ where: { ...where, status: { in: CLOSED_MAINTENANCE_STATUSES } } }),
+      this.prisma.vehicleMaintenance.groupBy({ by: ['status'], where: whereAnyStatus, _count: true }),
+      this.prisma.vehicleMaintenance.count({
+        where: { ...where, scheduledAt: { not: null }, status: { in: OPEN_MAINTENANCE_STATUSES } },
+      }),
       this.prisma.vehicleMaintenance.aggregate({
         where,
-        _sum: { totalCost: true },
-        _count: { totalCost: true },
+        _sum: { totalCost: true, laborCost: true, partsCost: true, downtimeMinutes: true },
+        _count: { totalCost: true, downtimeMinutes: true },
       }),
       this.prisma.vehicleMaintenance.groupBy({ by: ['type'], where, _count: true, _sum: { totalCost: true } }),
       this.prisma.vehicleMaintenance.groupBy({ by: ['priority'], where, _count: true }),
       this.prisma.vehicleMaintenance.groupBy({ by: ['workshop'], where, _count: true, _sum: { totalCost: true } }),
-      this.prisma.vehicleMaintenance.groupBy({ by: ['vehicleId'], where, _count: true, _sum: { totalCost: true } }),
+      this.prisma.vehicleMaintenance.groupBy({ by: ['component'], where, _count: true, _sum: { totalCost: true } }),
+      this.prisma.vehicleMaintenance.groupBy({
+        by: ['vehicleId'],
+        where,
+        _count: true,
+        _sum: { totalCost: true, downtimeMinutes: true },
+      }),
+      this.prisma.vehicleMaintenance.groupBy({
+        by: ['vehicleId'],
+        where: { ...where, type: VehicleMaintenanceType.CORRECTIVE },
+        _count: true,
+      }),
       this.prisma.vehicleMaintenance.findMany({
         where: { ...where, status: VehicleMaintenanceStatus.COMPLETED, completedAt: { not: null } },
         select: { openedAt: true, completedAt: true },
       }),
       this.prisma.vehicleMaintenance.findMany({
+        where,
+        select: { vehicleId: true, odometerKm: true, totalCost: true },
+      }),
+      this.prisma.vehicleMaintenance.findMany({
         where: this.buildMaintenanceWhere(tenantId, filters, this.trendDateRange()),
         select: { openedAt: true, totalCost: true },
       }),
+      this.computeMaintenancePlanStatus(tenantId, filters),
     ]);
+
+    const countByStatus = new Map(statusGroups.map((row) => [row.status, row._count]));
+    const totalCount = [...countByStatus.entries()]
+      .filter(([status]) => status !== VehicleMaintenanceStatus.CANCELLED)
+      .reduce((sum, [, count]) => sum + count, 0);
+    const openCount = OPEN_MAINTENANCE_STATUSES.reduce((sum, status) => sum + (countByStatus.get(status) ?? 0), 0);
+    const completedCount = countByStatus.get(VehicleMaintenanceStatus.COMPLETED) ?? 0;
+    const cancelledCount = countByStatus.get(VehicleMaintenanceStatus.CANCELLED) ?? 0;
+    const preventiveCount = byTypeRaw.find((r) => r.type === VehicleMaintenanceType.PREVENTIVE)?._count ?? 0;
+    const correctiveCount = byTypeRaw.find((r) => r.type === VehicleMaintenanceType.CORRECTIVE)?._count ?? 0;
 
     const totalCost = toNumberOrNull(totalAgg._sum.totalCost) ?? 0;
     const costedCount = totalAgg._count.totalCost;
+    const totalDowntimeMinutes = totalAgg._sum.downtimeMinutes;
+    const downtimeCount = totalAgg._count.downtimeMinutes;
 
-    const merged = new Map<string, VehicleRankingAccumulator>();
-    mergeVehicleAmounts(merged, byVehicleRaw, (row) => toNumberOrNull(row._sum.totalCost) ?? 0);
+    const costMap = new Map<string, VehicleRankingAccumulator>();
+    mergeVehicleAmounts(costMap, byVehicleRaw, (row) => toNumberOrNull(row._sum.totalCost) ?? 0);
+    const downtimeMap = new Map<string, VehicleRankingAccumulator>();
+    mergeVehicleAmounts(downtimeMap, byVehicleRaw, (row) => row._sum.downtimeMinutes ?? 0);
+    const correctiveCountMap = new Map<string, VehicleRankingAccumulator>();
+    mergeVehicleAmounts(correctiveCountMap, correctiveByVehicleRaw, () => 0);
 
-    const [topVehiclesByCost, topVehiclesByCount] = await Promise.all([
-      this.attachPlates(rankTopVehicles(merged, TOP_VEHICLES_LIMIT)),
-      this.attachPlates(rankTopVehicles(merged, TOP_VEHICLES_LIMIT, 'count')),
+    const costPerKmTotals = computeMaintenanceCostPerKmTotals(
+      costPerKmRows.map((r) => ({
+        vehicleId: r.vehicleId,
+        odometerKm: toNumberOrNull(r.odometerKm),
+        totalCost: toNumberOrNull(r.totalCost) ?? 0,
+      })),
+    );
+
+    const criticalOpenRows = await this.prisma.vehicleMaintenance.findMany({
+      where: { ...where, priority: VehicleMaintenancePriority.CRITICAL, status: { in: OPEN_MAINTENANCE_STATUSES } },
+      select: { id: true, vehicleId: true, component: true },
+      take: ALERTS_LIMIT_PER_TYPE,
+    });
+
+    const allVehicleIds = [...new Set([...costMap.keys(), ...downtimeMap.keys(), ...criticalOpenRows.map((r) => r.vehicleId)])];
+    const plateById = await this.buildPlateMap(allVehicleIds);
+
+    const [topVehiclesByCost, bottomVehiclesByCost, topVehiclesByCount, topVehiclesByDowntime] = await Promise.all([
+      this.attachPlates(rankTopVehicles(costMap, TOP_VEHICLES_LIMIT)),
+      this.attachPlates(rankTopVehicles(costMap, TOP_VEHICLES_LIMIT, 'value', 'asc')),
+      this.attachPlates(rankTopVehicles(costMap, TOP_VEHICLES_LIMIT, 'count')),
+      this.attachPlates(rankTopVehicles(downtimeMap, TOP_VEHICLES_LIMIT)),
     ]);
+
+    const componentCostMap = new Map<string, VehicleRankingAccumulator>();
+    for (const row of byComponentRaw) {
+      if (!row.component) continue;
+      componentCostMap.set(row.component, { value: toNumberOrNull(row._sum.totalCost) ?? 0, count: row._count });
+    }
+    const topComponentsByCost = this.rankComponents(componentCostMap, TOP_VEHICLES_LIMIT, 'value');
+    const topComponentsByCount = this.rankComponents(componentCostMap, TOP_VEHICLES_LIMIT, 'count');
+
+    const maintenanceAlerts = this.computeMaintenanceOutlierAlerts(
+      costMap,
+      downtimeMap,
+      correctiveCountMap,
+      criticalOpenRows,
+      plateById,
+      planStatus,
+    );
 
     const entity = new FleetMaintenanceDashboardEntity();
     entity.totalCount = totalCount;
     entity.openCount = openCount;
     entity.completedCount = completedCount;
+    entity.cancelledCount = cancelledCount;
+    entity.scheduledCount = scheduledCount;
+    entity.preventiveCount = preventiveCount;
+    entity.correctiveCount = correctiveCount;
     entity.totalCost = totalCost;
+    entity.laborCostTotal = toNumberOrNull(totalAgg._sum.laborCost) ?? 0;
+    entity.partsCostTotal = toNumberOrNull(totalAgg._sum.partsCost) ?? 0;
     entity.averageCostPerOccurrence = safeAverage(totalCost, costedCount);
     entity.averageDurationHours = computeAverageDurationHours(completedDurations);
+    entity.totalDowntimeMinutes = downtimeCount > 0 ? totalDowntimeMinutes : null;
+    entity.averageDowntimeMinutes = safeAverage(totalDowntimeMinutes ?? 0, downtimeCount);
+    entity.costPerKm = this.buildMaintenanceCostPerKmEntity(costPerKmTotals);
+    entity.overdueCount = planStatus.overdue.length;
+    entity.dueSoonCount = planStatus.dueSoon.length;
     entity.byType = byTypeRaw.map((row) => ({
       type: row.type as VehicleMaintenanceType,
       count: row._count,
@@ -533,13 +682,218 @@ export class FleetOperationsMetricsService {
       count: row._count,
       cost: toNumberOrNull(row._sum.totalCost) ?? 0,
     }));
+    entity.byComponent = byComponentRaw.map((row) => ({
+      component: row.component,
+      count: row._count,
+      cost: toNumberOrNull(row._sum.totalCost) ?? 0,
+    }));
     entity.topVehiclesByCost = topVehiclesByCost;
+    entity.bottomVehiclesByCost = bottomVehiclesByCost;
     entity.topVehiclesByCount = topVehiclesByCount;
+    entity.topVehiclesByDowntime = topVehiclesByDowntime;
+    entity.topComponentsByCost = topComponentsByCost;
+    entity.topComponentsByCount = topComponentsByCount;
+    entity.overdueMaintenances = planStatus.overdue;
+    entity.upcomingMaintenances = planStatus.dueSoon;
+    entity.maintenanceAlerts = maintenanceAlerts;
     entity.monthlyTrend = aggregateMonthlySeries(
       monthlyTrendRows.map((r) => ({ date: r.openedAt, value: toNumberOrNull(r.totalCost) ?? 0 })),
       MONTHLY_TREND_MONTHS,
     );
-    return { entity, vehicleMap: merged };
+    return { entity, vehicleMap: costMap };
+  }
+
+  private buildMaintenanceCostPerKmEntity(totals: { totalCost: number; totalDistanceKm: number } | null): FleetMaintenanceCostPerKmEntity {
+    const entity = new FleetMaintenanceCostPerKmEntity();
+    if (!totals || totals.totalDistanceKm <= 0) {
+      entity.value = null;
+      entity.available = false;
+      entity.reason = 'INSUFFICIENT_ODOMETER_READINGS';
+      return entity;
+    }
+    entity.value = totals.totalCost / totals.totalDistanceKm;
+    entity.available = true;
+    entity.reason = null;
+    return entity;
+  }
+
+  // Fase 45 -- ranking de componentes (secao "Rankings" do pedido) --
+  // mesma logica de rankTopVehicles, mas chave e um MaintenanceComponent,
+  // nunca um vehicleId -- reimplementado localmente (pequeno demais para
+  // justificar generalizar rankTopVehicles).
+  private rankComponents(
+    merged: Map<string, VehicleRankingAccumulator>,
+    limit: number,
+    sortBy: 'value' | 'count',
+  ): FleetMaintenanceComponentBreakdownEntity[] {
+    return [...merged.entries()]
+      .sort((a, b) => b[1][sortBy] - a[1][sortBy])
+      .slice(0, limit)
+      .map(([component, agg]) => ({
+        component: component as MaintenanceComponent,
+        count: agg.count,
+        cost: agg.value,
+      }));
+  }
+
+  // Fase 45 -- planos de manutencao preventiva: vencidos/proximos. Le
+  // MaintenancePlan + a ultima VehicleMaintenance COMPLETED vinculada a
+  // cada plano + Vehicle.odometerKm atual, tudo em lote (3 queries fixas,
+  // nunca 1 por plano) -- ver evaluateMaintenancePlan (pura, testada
+  // isoladamente).
+  private async computeMaintenancePlanStatus(
+    tenantId: string,
+    filters: FleetOperationsFilters,
+  ): Promise<{ overdue: FleetMaintenancePlanStatusEntity[]; dueSoon: FleetMaintenancePlanStatusEntity[] }> {
+    const activePlans = await this.prisma.maintenancePlan.findMany({
+      where: { tenantId, active: true, ...compact({ vehicleId: filters.vehicleId }), ...this.vehicleFleetFilter(filters) },
+    });
+    if (activePlans.length === 0) return { overdue: [], dueSoon: [] };
+
+    const planIds = activePlans.map((p) => p.id);
+    const vehicleIds = [...new Set(activePlans.map((p) => p.vehicleId))];
+
+    const [lastCompletedRows, vehicles] = await Promise.all([
+      this.prisma.vehicleMaintenance.findMany({
+        where: { tenantId, maintenancePlanId: { in: planIds }, status: VehicleMaintenanceStatus.COMPLETED },
+        select: { maintenancePlanId: true, completedAt: true, odometerKm: true },
+        orderBy: { completedAt: 'desc' },
+      }),
+      this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true, odometerKm: true } }),
+    ]);
+
+    // Primeira ocorrencia por plano = a mais recente (rows ja vieram
+    // ordenadas desc por completedAt).
+    const lastByPlan = new Map<string, { completedAt: Date | null; odometerKm: number | null }>();
+    for (const row of lastCompletedRows) {
+      if (!row.maintenancePlanId || lastByPlan.has(row.maintenancePlanId)) continue;
+      lastByPlan.set(row.maintenancePlanId, { completedAt: row.completedAt, odometerKm: toNumberOrNull(row.odometerKm) });
+    }
+    const vehicleById = new Map(vehicles.map((v) => [v.id, { plate: v.plate, odometerKm: toNumberOrNull(v.odometerKm) }]));
+
+    const now = new Date();
+    const overdue: FleetMaintenancePlanStatusEntity[] = [];
+    const dueSoon: FleetMaintenancePlanStatusEntity[] = [];
+
+    for (const plan of activePlans) {
+      const lastService = lastByPlan.get(plan.id) ?? null;
+      const vehicleInfo = vehicleById.get(plan.vehicleId);
+      const evaluation = evaluateMaintenancePlan(
+        { intervalKm: plan.intervalKm, intervalDays: plan.intervalDays, alertBeforeKm: plan.alertBeforeKm, alertBeforeDays: plan.alertBeforeDays },
+        lastService,
+        vehicleInfo?.odometerKm ?? null,
+        now,
+      );
+      if (evaluation.status !== 'OVERDUE' && evaluation.status !== 'DUE_SOON') continue;
+
+      const statusEntity = new FleetMaintenancePlanStatusEntity();
+      statusEntity.planId = plan.id;
+      statusEntity.vehicleId = plan.vehicleId;
+      statusEntity.vehiclePlate = vehicleInfo?.plate ?? '—';
+      statusEntity.name = plan.name;
+      statusEntity.component = plan.component;
+      statusEntity.dueOdometerKm = evaluation.dueOdometerKm;
+      statusEntity.dueDate = evaluation.dueDate;
+      statusEntity.overdueByKm = evaluation.overdueByKm;
+      statusEntity.overdueByDays = evaluation.overdueByDays;
+
+      if (evaluation.status === 'OVERDUE') overdue.push(statusEntity);
+      else dueSoon.push(statusEntity);
+    }
+
+    overdue.sort((a, b) => (b.overdueByDays ?? 0) - (a.overdueByDays ?? 0) || (b.overdueByKm ?? 0) - (a.overdueByKm ?? 0));
+    return { overdue: overdue.slice(0, MAINTENANCE_PLAN_ALERTS_LIMIT), dueSoon: dueSoon.slice(0, MAINTENANCE_PLAN_ALERTS_LIMIT) };
+  }
+
+  // Fase 45 -- secao "Alertas" do pedido: HIGH_COST/EXCESSIVE_BREAKDOWN/
+  // EXCESSIVE_DOWNTIME (outliers por veiculo, mesmo padrao pushOutlierAlerts
+  // ja usado pelos demais dominios) + CRITICAL_COMPONENT (manutencao
+  // CRITICAL ainda aberta -- flag direta, sem multiplicador) +
+  // MAINTENANCE_OVERDUE/DUE_SOON (a partir de planStatus, ja calculado).
+  private computeMaintenanceOutlierAlerts(
+    costMap: Map<string, VehicleRankingAccumulator>,
+    downtimeMap: Map<string, VehicleRankingAccumulator>,
+    correctiveCountMap: Map<string, VehicleRankingAccumulator>,
+    criticalOpenRows: { id: string; vehicleId: string; component: MaintenanceComponent | null }[],
+    plateById: Map<string, string>,
+    planStatus: { overdue: FleetMaintenancePlanStatusEntity[]; dueSoon: FleetMaintenancePlanStatusEntity[] },
+  ): FleetAlertEntity[] {
+    const alerts: FleetAlertEntity[] = [];
+
+    for (const plan of planStatus.overdue.slice(0, ALERTS_LIMIT_PER_TYPE)) {
+      const detail = plan.overdueByDays !== null ? `${plan.overdueByDays} dia(s)` : `${plan.overdueByKm} km`;
+      alerts.push(
+        this.buildAlert(
+          'MAINTENANCE_OVERDUE',
+          'CRITICAL',
+          plan.vehicleId,
+          new Map([[plan.vehicleId, plan.vehiclePlate]]),
+          `${plan.name} (${plan.component}) vencida ha ${detail}.`,
+          plan.overdueByDays ?? plan.overdueByKm,
+        ),
+      );
+    }
+    for (const plan of planStatus.dueSoon.slice(0, ALERTS_LIMIT_PER_TYPE)) {
+      alerts.push(
+        this.buildAlert(
+          'MAINTENANCE_DUE_SOON',
+          'ATTENTION',
+          plan.vehicleId,
+          new Map([[plan.vehicleId, plan.vehiclePlate]]),
+          `${plan.name} (${plan.component}) proxima do vencimento.`,
+          null,
+        ),
+      );
+    }
+
+    const costAverage = safeAverage([...costMap.values()].reduce((sum, v) => sum + v.value, 0), costMap.size) ?? 0;
+    this.pushOutlierAlerts(alerts, costMap, plateById, costAverage, MAINTENANCE_HIGH_COST_MULTIPLIER, 'HIGH_COST', 'ATTENTION', (value) =>
+      `Custo de manutencao (${this.formatBrl(value)}) acima da media da frota.`,
+    );
+
+    const breakdownAverage =
+      safeAverage([...correctiveCountMap.values()].reduce((sum, v) => sum + v.count, 0), correctiveCountMap.size) ?? 0;
+    this.pushOutlierAlerts(
+      alerts,
+      correctiveCountMap,
+      plateById,
+      breakdownAverage,
+      EXCESSIVE_BREAKDOWN_MULTIPLIER,
+      'EXCESSIVE_BREAKDOWN',
+      'ATTENTION',
+      (value) => `${value} manutencoes corretivas no periodo -- acima da media da frota.`,
+      'count',
+    );
+
+    const downtimeAverage = safeAverage([...downtimeMap.values()].reduce((sum, v) => sum + v.value, 0), downtimeMap.size) ?? 0;
+    this.pushOutlierAlerts(
+      alerts,
+      downtimeMap,
+      plateById,
+      downtimeAverage,
+      EXCESSIVE_DOWNTIME_MULTIPLIER,
+      'EXCESSIVE_DOWNTIME',
+      'ATTENTION',
+      (value) => `${Math.round(value)} minutos parado no periodo -- acima da media da frota.`,
+    );
+
+    let criticalCount = 0;
+    for (const row of criticalOpenRows) {
+      if (criticalCount >= ALERTS_LIMIT_PER_TYPE) break;
+      alerts.push(
+        this.buildAlert(
+          'CRITICAL_COMPONENT',
+          'CRITICAL',
+          row.vehicleId,
+          plateById,
+          row.component ? `Manutencao CRITICA em aberto no componente ${row.component}.` : 'Manutencao CRITICA em aberto.',
+          null,
+        ),
+      );
+      criticalCount += 1;
+    }
+
+    return alerts;
   }
 
   // ==========================================================================
@@ -557,14 +911,34 @@ export class FleetOperationsMetricsService {
     const dateRange = this.dateRangeFilter(filters);
     const where = this.buildStopWhere(tenantId, filters, dateRange);
 
-    const [totalAgg, byTypeRaw, byVehicleRaw, monthlyTrendRows] = await Promise.all([
-      this.prisma.tripStop.aggregate({ where, _count: true, _sum: { durationMinutes: true } }),
+    const [totalAgg, byTypeRaw, byVehicleRaw, byDriverRaw, monthlyTrendRows, tenantSettings] = await Promise.all([
+      this.prisma.tripStop.aggregate({
+        where,
+        _count: true,
+        _sum: { durationMinutes: true },
+        _max: { durationMinutes: true },
+        _min: { durationMinutes: true },
+      }),
       this.prisma.tripStop.groupBy({ by: ['type'], where, _count: true, _sum: { durationMinutes: true } }),
       this.prisma.tripStop.groupBy({ by: ['vehicleId'], where, _count: true, _sum: { durationMinutes: true } }),
+      // Fase 44 -- ranking por motorista (secao 2 do pedido): 1 unica
+      // groupBy, mesmo padrao ja usado para veiculo/tipo acima -- nunca 1
+      // query por motorista.
+      this.prisma.tripStop.groupBy({
+        by: ['driverId'],
+        where,
+        _count: true,
+        _sum: { durationMinutes: true },
+        _max: { durationMinutes: true },
+        _min: { durationMinutes: true },
+      }),
       this.prisma.tripStop.findMany({
         where: this.buildStopWhere(tenantId, filters, this.trendDateRange()),
         select: { startedAt: true },
       }),
+      // Fase 44 -- limites de duracao por tipo (so `preferences`, nunca a
+      // linha inteira de TenantSettings).
+      this.prisma.tenantSettings.findUnique({ where: { tenantId }, select: { preferences: true } }),
     ]);
 
     const totalStops = totalAgg._count;
@@ -573,21 +947,122 @@ export class FleetOperationsMetricsService {
     const merged = new Map<string, VehicleRankingAccumulator>();
     mergeVehicleAmounts(merged, byVehicleRaw, (row) => row._sum.durationMinutes ?? 0);
 
+    const driverIds = [...new Set(byDriverRaw.map((r) => r.driverId).filter((id): id is string => id !== null))];
+    const [topVehiclesByDuration, driverNameMap, durationAlerts] = await Promise.all([
+      this.attachPlates(rankTopVehicles(merged, TOP_VEHICLES_LIMIT)),
+      this.buildDriverNameMap(driverIds),
+      this.computeStopDurationAlerts(where, resolveStopDurationThresholds(tenantSettings?.preferences)),
+    ]);
+
     const entity = new FleetStopsDashboardEntity();
     entity.totalStops = totalStops;
     entity.totalDurationMinutes = totalDurationMinutes;
     entity.averageDurationMinutes = safeAverage(totalDurationMinutes, totalStops);
+    // Fase 43 -- so entre paradas COM duracao calculada (COMPLETED); Prisma
+    // ignora nulos automaticamente em _max/_min, entao uma parada OPEN
+    // (durationMinutes null) nunca entra nesta conta. null quando nao ha
+    // nenhuma parada concluida no escopo (nunca inventa 0).
+    entity.maxDurationMinutes = totalAgg._max.durationMinutes ?? null;
+    entity.minDurationMinutes = totalAgg._min.durationMinutes ?? null;
     entity.byType = byTypeRaw.map((row) => ({
       type: row.type as TripStopType,
       count: row._count,
       totalDurationMinutes: row._sum.durationMinutes ?? 0,
     }));
-    entity.topVehiclesByDuration = await this.attachPlates(rankTopVehicles(merged, TOP_VEHICLES_LIMIT));
+    entity.topVehiclesByDuration = topVehiclesByDuration;
+    entity.driverRanking = buildDriverStopRanking(byDriverRaw, driverNameMap);
+    entity.durationAlerts = durationAlerts;
     entity.monthlyTrend = aggregateMonthlySeries(
       monthlyTrendRows.map((r) => ({ date: r.startedAt, value: 1 })),
       MONTHLY_TREND_MONTHS,
     );
     return { entity, vehicleMap: merged };
+  }
+
+  private async buildDriverNameMap(driverIds: string[]): Promise<Map<string, string>> {
+    if (driverIds.length === 0) return new Map();
+    const drivers = await this.prisma.driver.findMany({ where: { id: { in: driverIds } }, select: { id: true, name: true } });
+    return new Map(drivers.map((d) => [d.id, d.name]));
+  }
+
+  // Fase 44 -- secao 4/6 do pedido: paradas CONCLUIDAS (nunca aberta/
+  // cancelada -- where ja exclui cancelledAt, e o filtro abaixo exige
+  // endedAt preenchido) cuja duracao excede o limite configurado (por
+  // tenant) para o seu tipo. Pre-filtra pelo MENOR limite configurado (1
+  // query, nunca carrega a tabela inteira) e so refina em memoria -- nunca
+  // 1 query por parada/tipo. Sem nenhum limite configurado (nem padrao nem
+  // tenant), a query nem roda.
+  private async computeStopDurationAlerts(
+    stopWhere: Prisma.TripStopWhereInput,
+    thresholds: Partial<Record<TripStopType, number>>,
+  ): Promise<FleetStopDurationAlertEntity[]> {
+    const configuredThresholds = Object.values(thresholds).filter((v): v is number => typeof v === 'number');
+    if (configuredThresholds.length === 0) return [];
+    const minThreshold = Math.min(...configuredThresholds);
+
+    const candidates = await this.prisma.tripStop.findMany({
+      where: { ...stopWhere, endedAt: { not: null }, durationMinutes: { gt: minThreshold } },
+      select: {
+        id: true,
+        type: true,
+        durationMinutes: true,
+        vehicleId: true,
+        driverId: true,
+        tripId: true,
+        startedAt: true,
+        endedAt: true,
+      },
+      orderBy: { durationMinutes: 'desc' },
+      take: LONG_STOP_DURATION_ALERTS_LIMIT * 5, // margem antes do filtro por tipo, nunca ilimitado
+    });
+
+    const exceeded = candidates
+      .map((stop) => {
+        const threshold = getStopDurationThreshold(thresholds, stop.type);
+        const durationMinutes = stop.durationMinutes ?? 0;
+        if (threshold === null || durationMinutes <= threshold) return null;
+        return { stop, threshold, excessMinutes: durationMinutes - threshold };
+      })
+      .filter((row): row is { stop: (typeof candidates)[number]; threshold: number; excessMinutes: number } => row !== null)
+      .sort((a, b) => b.excessMinutes - a.excessMinutes)
+      .slice(0, LONG_STOP_DURATION_ALERTS_LIMIT);
+
+    if (exceeded.length === 0) return [];
+
+    const vehicleIds = [...new Set(exceeded.map((r) => r.stop.vehicleId))];
+    const driverIds = [...new Set(exceeded.map((r) => r.stop.driverId).filter((id): id is string => id !== null))];
+    const tripIds = [...new Set(exceeded.map((r) => r.stop.tripId).filter((id): id is string => id !== null))];
+
+    const [plateById, driverNameById, trips] = await Promise.all([
+      this.buildPlateMap(vehicleIds),
+      this.buildDriverNameMap(driverIds),
+      tripIds.length > 0
+        ? this.prisma.trip.findMany({
+            where: { id: { in: tripIds } },
+            select: { id: true, origin: { select: { name: true } }, destination: { select: { name: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+    const referenceByTripId = new Map(trips.map((t) => [t.id, `${t.origin.name} -> ${t.destination.name}`]));
+
+    return exceeded.map(({ stop, threshold, excessMinutes }) => {
+      const entity = new FleetStopDurationAlertEntity();
+      entity.stopId = stop.id;
+      entity.type = stop.type;
+      entity.durationMinutes = stop.durationMinutes ?? 0;
+      entity.thresholdMinutes = threshold;
+      entity.excessMinutes = excessMinutes;
+      entity.vehicleId = stop.vehicleId;
+      entity.vehiclePlate = plateById.get(stop.vehicleId) ?? '—';
+      entity.driverId = stop.driverId;
+      entity.driverName = stop.driverId ? (driverNameById.get(stop.driverId) ?? null) : null;
+      entity.tripId = stop.tripId;
+      entity.tripReference = stop.tripId ? (referenceByTripId.get(stop.tripId) ?? null) : null;
+      entity.startedAt = stop.startedAt;
+      entity.endedAt = stop.endedAt as Date;
+      entity.status = 'COMPLETED';
+      return entity;
+    });
   }
 
   // ==========================================================================
@@ -613,7 +1088,7 @@ export class FleetOperationsMetricsService {
     const dateRange = this.dateRangeFilter(filters);
     const where = this.buildFuelWhere(tenantId, filters, dateRange);
 
-    const [rows, monthlyTrendRows] = await Promise.all([
+    const [rows, monthlyTrendRows, tankLevelsResult] = await Promise.all([
       this.prisma.fuelSupply.findMany({
         where,
         select: { id: true, vehicleId: true, supplyDate: true, odometerKm: true, liters: true, totalAmount: true },
@@ -622,6 +1097,7 @@ export class FleetOperationsMetricsService {
         where: this.buildFuelWhere(tenantId, filters, this.trendDateRange()),
         select: { supplyDate: true, totalAmount: true, liters: true },
       }),
+      this.computeTankLevels(tenantId, filters),
     ]);
 
     const points = rows.map((r) => ({
@@ -788,7 +1264,129 @@ export class FleetOperationsMetricsService {
     entity.rankings = rankings;
     entity.alerts = alerts;
     entity.previousPeriod = previousPeriod;
+    entity.tankLevels = tankLevelsResult.tankLevels;
+    entity.tankFleetAverage = tankLevelsResult.tankFleetAverage;
     return entity;
+  }
+
+  // Iteracao de redesign visual -- nivel de tanque ESTIMADO por veiculo.
+  // Sempre "estado atual": ignora startDate/endDate (mesmo principio de
+  // monthlyTrendCost), so respeita vehicleId/fleetId. Duas queries no
+  // total, nenhuma por veiculo:
+  //   1) veiculos ativos no escopo com os campos necessarios;
+  //   2) ultimo abastecimento de cada veiculo em UMA query, via
+  //      distinct(['vehicleId']) + orderBy(supplyDate desc) -- o Prisma
+  //      retorna a primeira linha (mais recente) por grupo distinto.
+  private async computeTankLevels(
+    tenantId: string,
+    filters: FleetOperationsFilters,
+  ): Promise<{ tankLevels: FleetFuelTankLevelEntity[]; tankFleetAverage: FleetFuelTankFleetAverageEntity }> {
+    const vehicles = await this.prisma.vehicle.findMany({
+      where: {
+        tenantId,
+        status: VehicleStatus.ACTIVE,
+        deletedAt: null,
+        ...compact({ id: filters.vehicleId, fleetId: filters.fleetId }),
+      },
+      select: { id: true, plate: true, tankCapacityLiters: true, averageConsumptionKmL: true, odometerKm: true },
+    });
+
+    const vehicleIds = vehicles.map((v) => v.id);
+    const lastSupplies =
+      vehicleIds.length > 0
+        ? await this.prisma.fuelSupply.findMany({
+            where: { tenantId, vehicleId: { in: vehicleIds } },
+            distinct: ['vehicleId'],
+            orderBy: { supplyDate: 'desc' },
+            select: { vehicleId: true, supplyDate: true, odometerKm: true },
+          })
+        : [];
+    const lastSupplyByVehicle = new Map(lastSupplies.map((s) => [s.vehicleId, s]));
+
+    const tankLevels: FleetFuelTankLevelEntity[] = vehicles.map((vehicle) => {
+      const entity = new FleetFuelTankLevelEntity();
+      entity.vehicleId = vehicle.id;
+      entity.plate = vehicle.plate;
+      entity.capacityLiters = toNumberOrNull(vehicle.tankCapacityLiters);
+
+      const capacityLiters = entity.capacityLiters;
+      const averageConsumptionKmL = toNumberOrNull(vehicle.averageConsumptionKmL);
+      const lastSupply = lastSupplyByVehicle.get(vehicle.id);
+      const currentOdometerKm = toNumberOrNull(vehicle.odometerKm);
+
+      if (capacityLiters === null || capacityLiters <= 0) {
+        entity.estimatedLevelLiters = null;
+        entity.percentage = null;
+        entity.available = false;
+        entity.reason = 'TANK_CAPACITY_NOT_CONFIGURED';
+        entity.lastSupplyAt = lastSupply?.supplyDate.toISOString() ?? null;
+        entity.kmSinceLastSupply = null;
+        return entity;
+      }
+      if (!lastSupply) {
+        entity.estimatedLevelLiters = null;
+        entity.percentage = null;
+        entity.available = false;
+        entity.reason = 'NO_SUPPLY_RECORDED';
+        entity.lastSupplyAt = null;
+        entity.kmSinceLastSupply = null;
+        return entity;
+      }
+      if (averageConsumptionKmL === null || averageConsumptionKmL <= 0) {
+        entity.estimatedLevelLiters = null;
+        entity.percentage = null;
+        entity.available = false;
+        entity.reason = 'AVERAGE_CONSUMPTION_NOT_CONFIGURED';
+        entity.lastSupplyAt = lastSupply.supplyDate.toISOString();
+        entity.kmSinceLastSupply = null;
+        return entity;
+      }
+      if (currentOdometerKm === null) {
+        entity.estimatedLevelLiters = null;
+        entity.percentage = null;
+        entity.available = false;
+        entity.reason = 'VEHICLE_ODOMETER_NOT_AVAILABLE';
+        entity.lastSupplyAt = lastSupply.supplyDate.toISOString();
+        entity.kmSinceLastSupply = null;
+        return entity;
+      }
+
+      const lastSupplyOdometerKm = toNumberOrNull(lastSupply.odometerKm) ?? currentOdometerKm;
+      // Odometro atual menor que o do ultimo abastecimento e uma
+      // inconsistencia de dados -- tratado como "0 km rodado desde entao"
+      // (tanque cheio), nunca como consumo negativo inventado.
+      const kmSinceLastSupply = Math.max(0, currentOdometerKm - lastSupplyOdometerKm);
+      const estimatedLitersConsumed = kmSinceLastSupply / averageConsumptionKmL;
+      const estimatedLevelLiters = Math.min(capacityLiters, Math.max(0, capacityLiters - estimatedLitersConsumed));
+
+      entity.estimatedLevelLiters = Math.round(estimatedLevelLiters * 100) / 100;
+      entity.percentage = Math.round((estimatedLevelLiters / capacityLiters) * 100);
+      entity.available = true;
+      entity.reason = null;
+      entity.lastSupplyAt = lastSupply.supplyDate.toISOString();
+      entity.kmSinceLastSupply = Math.round(kmSinceLastSupply * 100) / 100;
+      return entity;
+    });
+
+    tankLevels.sort((a, b) => {
+      if (a.available && b.available) return (a.percentage ?? 0) - (b.percentage ?? 0);
+      if (a.available !== b.available) return a.available ? -1 : 1;
+      return a.plate.localeCompare(b.plate);
+    });
+
+    const available = tankLevels.filter((t) => t.available && t.percentage !== null);
+    const tankFleetAverage = new FleetFuelTankFleetAverageEntity();
+    if (available.length === 0) {
+      tankFleetAverage.value = null;
+      tankFleetAverage.available = false;
+      tankFleetAverage.reason = 'NO_VEHICLE_WITH_TANK_DATA';
+    } else {
+      tankFleetAverage.value = Math.round(available.reduce((sum, t) => sum + (t.percentage ?? 0), 0) / available.length);
+      tankFleetAverage.available = true;
+      tankFleetAverage.reason = null;
+    }
+
+    return { tankLevels, tankFleetAverage };
   }
 
   private toTotalsOrNull(totalDistanceKm: number, totalLiters: number): FuelConsumptionTotals | null {
@@ -1116,6 +1714,10 @@ export class FleetOperationsMetricsService {
         where: {
           tenantId,
           endedAt: null,
+          // Fase 43 -- uma parada cancelada enquanto aberta (correcao
+          // administrativa) nao e mais uma parada "em aberto" de verdade;
+          // nunca deve gerar o alerta de veiculo parado ha muito tempo.
+          cancelledAt: null,
           startedAt: { lte: new Date(Date.now() - STALLED_STOP_MINUTES * 60 * 1000) },
           ...this.vehicleFleetFilter(filters),
           ...compact({ vehicleId: filters.vehicleId }),
@@ -1295,6 +1897,13 @@ export class FleetOperationsMetricsService {
       endDate: query.endDate ? new Date(query.endDate) : undefined,
       vehicleId: query.vehicleId,
       fleetId: query.fleetId,
+      driverId: query.driverId,
+      type: query.type,
+      status: query.status,
+      vehicleType: query.vehicleType,
+      vehicleStatus: query.vehicleStatus,
+      tireStatus: query.tireStatus,
+      trailerType: query.trailerType,
     });
   }
 
@@ -1372,6 +1981,125 @@ export class FleetOperationsMetricsService {
     return { tenantId, deletedAt: null, ...compact({ id: filters.vehicleId, fleetId: filters.fleetId }) };
   }
 
+  // ==========================================================================
+  // VEICULOS/FROTA -- composicao da frota (iteracao de redesign visual).
+  // Endpoint proprio (GET /fleet-operations/vehicles), distinto do
+  // FleetOverviewEntity do dashboard consolidado (que so tem contagem por
+  // status): aqui entram tipo/combustivel/frota/idade/odometro. Sem filtro
+  // de periodo -- e uma foto do estado ATUAL da frota, nunca uma metrica de
+  // periodo (mesmo principio ja usado em monthlyTrendCost/tankLevels).
+  // Sempre 1 unica query de veiculos no escopo (select minimo) + resolucao
+  // de frotas em lote -- nunca 1 query por veiculo/tipo/frota.
+  // ==========================================================================
+  async getVehiclesOverview(tenantId: string, query: FleetOperationsQueryDto): Promise<FleetVehiclesOverviewEntity> {
+    return this.computeVehiclesOverview(tenantId, this.parseFilters(query));
+  }
+
+  private buildVehiclesOverviewWhere(tenantId: string, filters: FleetOperationsFilters): Prisma.VehicleWhereInput {
+    return { ...this.buildVehicleWhere(tenantId, filters), ...compact({ type: filters.vehicleType, status: filters.vehicleStatus }) };
+  }
+
+  private async computeVehiclesOverview(tenantId: string, filters: FleetOperationsFilters): Promise<FleetVehiclesOverviewEntity> {
+    const vehicleWhere = this.buildVehiclesOverviewWhere(tenantId, filters);
+
+    const [vehicles, vehiclesOnTrip] = await Promise.all([
+      this.prisma.vehicle.findMany({
+        where: vehicleWhere,
+        select: { id: true, plate: true, type: true, status: true, fuelType: true, fleetId: true, manufactureYear: true, odometerKm: true },
+      }),
+      this.countVehiclesOnTrip(vehicleWhere),
+    ]);
+
+    const fleetIds = [...new Set(vehicles.map((v) => v.fleetId).filter((id): id is string => id !== null))];
+    const fleets = fleetIds.length > 0 ? await this.prisma.fleet.findMany({ where: { id: { in: fleetIds } }, select: { id: true, name: true } }) : [];
+    const fleetNameById = new Map(fleets.map((f) => [f.id, f.name]));
+    const fleetName = (fleetId: string | null): string => (fleetId ? (fleetNameById.get(fleetId) ?? '—') : 'Sem frota');
+    const plateById = new Map(vehicles.map((v) => [v.id, v.plate]));
+
+    const countByStatus = new Map<VehicleStatus, number>();
+    const countByType = new Map<VehicleType, number>();
+    const countByFuelType = new Map<VehicleFuelType | null, number>();
+    const countByFleet = new Map<string | null, number>();
+    let ageSum = 0;
+    let ageCount = 0;
+    let odometerSum = 0;
+    let odometerCount = 0;
+    const yearMap = new Map<string, VehicleRankingAccumulator>();
+    const odometerMap = new Map<string, VehicleRankingAccumulator>();
+    const currentYear = new Date().getFullYear();
+
+    for (const v of vehicles) {
+      countByStatus.set(v.status, (countByStatus.get(v.status) ?? 0) + 1);
+      countByType.set(v.type, (countByType.get(v.type) ?? 0) + 1);
+      countByFuelType.set(v.fuelType, (countByFuelType.get(v.fuelType) ?? 0) + 1);
+      countByFleet.set(v.fleetId, (countByFleet.get(v.fleetId) ?? 0) + 1);
+
+      if (v.manufactureYear !== null) {
+        ageSum += currentYear - v.manufactureYear;
+        ageCount += 1;
+        yearMap.set(v.id, { value: v.manufactureYear, count: v.manufactureYear });
+      }
+      const odometerKm = toNumberOrNull(v.odometerKm);
+      if (odometerKm !== null) {
+        odometerSum += odometerKm;
+        odometerCount += 1;
+        odometerMap.set(v.id, { value: odometerKm, count: odometerKm });
+      }
+    }
+
+    const entity = new FleetVehiclesOverviewEntity();
+    entity.totalVehicles = vehicles.length;
+    entity.activeCount = countByStatus.get(VehicleStatus.ACTIVE) ?? 0;
+    entity.inactiveCount = countByStatus.get(VehicleStatus.INACTIVE) ?? 0;
+    entity.maintenanceCount = countByStatus.get(VehicleStatus.MAINTENANCE) ?? 0;
+    entity.soldCount = countByStatus.get(VehicleStatus.SOLD) ?? 0;
+    entity.vehiclesOnTrip = vehiclesOnTrip;
+    entity.vehiclesAvailable = Math.max(entity.activeCount - vehiclesOnTrip, 0);
+
+    entity.byType = [...countByType.entries()].map(([type, count]) => {
+      const row = new FleetVehicleTypeBreakdownEntity();
+      row.type = type;
+      row.count = count;
+      return row;
+    });
+    entity.byStatus = [...countByStatus.entries()].map(([status, count]) => {
+      const row = new FleetVehicleStatusBreakdownEntity();
+      row.status = status;
+      row.count = count;
+      return row;
+    });
+    entity.byFuelType = [...countByFuelType.entries()].map(([fuelType, count]) => {
+      const row = new FleetVehicleFuelTypeBreakdownEntity();
+      row.fuelType = fuelType;
+      row.count = count;
+      return row;
+    });
+    entity.byFleet = [...countByFleet.entries()].map(([fleetId, count]) => {
+      const row = new FleetVehicleFleetBreakdownEntity();
+      row.fleetId = fleetId;
+      row.fleetName = fleetName(fleetId);
+      row.count = count;
+      return row;
+    });
+
+    entity.averageAgeYears = this.buildAverageMetricEntity(safeAverage(ageSum, ageCount), 'NO_VEHICLE_WITH_MANUFACTURE_YEAR');
+    entity.averageOdometerKm = this.buildAverageMetricEntity(safeAverage(odometerSum, odometerCount), 'NO_VEHICLE_WITH_ODOMETER');
+
+    entity.oldestVehicles = this.toRankingEntities(rankTopVehicles(yearMap, TOP_VEHICLES_LIMIT, 'value', 'asc'), plateById);
+    entity.newestVehicles = this.toRankingEntities(rankTopVehicles(yearMap, TOP_VEHICLES_LIMIT, 'value', 'desc'), plateById);
+    entity.topVehiclesByOdometer = this.toRankingEntities(rankTopVehicles(odometerMap, TOP_VEHICLES_LIMIT, 'value', 'desc'), plateById);
+
+    return entity;
+  }
+
+  private buildAverageMetricEntity(value: number | null, reasonWhenUnavailable: string): FleetVehicleAverageMetricEntity {
+    const entity = new FleetVehicleAverageMetricEntity();
+    entity.value = value;
+    entity.available = value !== null;
+    entity.reason = value === null ? reasonWhenUnavailable : null;
+    return entity;
+  }
+
   // Trip nao tem vehicleId/fleetId diretos -- sempre via composition (mesmo
   // padrao ja usado por DashboardService.buildTripWhere). dateRange
   // aplicado sobre createdAt quando informado (undefined = contagem de
@@ -1411,15 +2139,24 @@ export class FleetOperationsMetricsService {
     };
   }
 
+  // Fase 45 -- bug real corrigido: ate a Fase 44, este where NUNCA excluia
+  // CANCELLED -- toda a camada de indicadores/rankings (totalCost,
+  // byType/byPriority/byWorkshop, topVehiclesByCost/Count, monthlyTrend)
+  // contava manutencao cancelada, mesmo principio do bug ja corrigido para
+  // TripStop na Fase 44 (buildStopWhere). `excludeCancelled=false` existe
+  // so para a query que PRECISA enxergar cancelada (contagem separada de
+  // cancelledCount).
   private buildMaintenanceWhere(
     tenantId: string,
     filters: FleetOperationsFilters,
     dateRange: Prisma.DateTimeFilter | undefined,
+    excludeCancelled = true,
   ): Prisma.VehicleMaintenanceWhereInput {
     return {
       tenantId,
       ...compact({ vehicleId: filters.vehicleId, openedAt: dateRange }),
       ...this.vehicleFleetFilter(filters),
+      ...(excludeCancelled ? { status: { not: VehicleMaintenanceStatus.CANCELLED } } : {}),
     };
   }
 
@@ -1453,6 +2190,222 @@ export class FleetOperationsMetricsService {
     };
   }
 
+  // ==========================================================================
+  // PNEUS -- dashboard novo (iteracao de redesign visual), distinto de
+  // TireDashboardEntity (GET /tires/dashboard, sem filtro nenhum, ver
+  // TiresService.getDashboard -- nao alterado, so reaproveitado tal como
+  // esta no card "Pneus" do executivo). Aqui entram filtros
+  // (vehicleId/fleetId/tireStatus/periodo), breakdown por frota, evolucao
+  // mensal, gauge de desgaste por pneu (leitura direta de inspecao, nunca
+  // estimado) e ranking de veiculos por custo de pneu.
+  // ==========================================================================
+  async getTiresOverview(tenantId: string, query: FleetOperationsQueryDto): Promise<FleetTiresOverviewEntity> {
+    return this.computeTiresOverview(tenantId, this.parseFilters(query));
+  }
+
+  private buildTiresOverviewWhere(tenantId: string, filters: FleetOperationsFilters): Prisma.TireWhereInput {
+    return { ...this.buildTireWhere(tenantId, filters, undefined), ...compact({ status: filters.tireStatus }) };
+  }
+
+  private async computeTiresOverview(tenantId: string, filters: FleetOperationsFilters): Promise<FleetTiresOverviewEntity> {
+    const dateRange = this.dateRangeFilter(filters);
+    const overviewWhere = this.buildTiresOverviewWhere(tenantId, filters);
+
+    const [tires, investedAgg, retreadAgg, monthlyTrendCost] = await Promise.all([
+      this.prisma.tire.findMany({
+        where: overviewWhere,
+        select: {
+          id: true,
+          fireNumber: true,
+          status: true,
+          vehicleId: true,
+          position: true,
+          purchasePrice: true,
+          expectedLifespanKm: true,
+          initialTreadDepthMm: true,
+          currentTreadDepthMm: true,
+        },
+      }),
+      this.prisma.tire.aggregate({ where: this.buildTireWhere(tenantId, filters, dateRange), _sum: { purchasePrice: true } }),
+      this.prisma.tireRetread.aggregate({ where: this.buildTireRetreadWhere(tenantId, filters, dateRange), _sum: { cost: true } }),
+      this.computeTiresMonthlyTrend(tenantId, filters),
+    ]);
+
+    const vehicleIds = [...new Set(tires.map((t) => t.vehicleId).filter((id): id is string => id !== null))];
+    const vehicles =
+      vehicleIds.length > 0 ? await this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true, fleetId: true } }) : [];
+    const plateById = new Map(vehicles.map((v) => [v.id, v.plate]));
+    const fleetIdByVehicle = new Map(vehicles.map((v) => [v.id, v.fleetId]));
+    const fleetIds = [...new Set(vehicles.map((v) => v.fleetId).filter((id): id is string => id !== null))];
+    const fleets = fleetIds.length > 0 ? await this.prisma.fleet.findMany({ where: { id: { in: fleetIds } }, select: { id: true, name: true } }) : [];
+    const fleetNameById = new Map(fleets.map((f) => [f.id, f.name]));
+    const fleetName = (fleetId: string | null): string => (fleetId ? (fleetNameById.get(fleetId) ?? '—') : 'Sem frota');
+
+    const countByStatus = new Map<TireStatus, number>();
+    let lifespanSum = 0;
+    let lifespanCount = 0;
+    let nearReplacementCount = 0;
+    const byFleetMap = new Map<string | null, { count: number; cost: number }>();
+    const vehicleCostMap = new Map<string, VehicleRankingAccumulator>();
+    const tireWear: FleetTireWearEntity[] = [];
+
+    for (const tire of tires) {
+      countByStatus.set(tire.status, (countByStatus.get(tire.status) ?? 0) + 1);
+
+      const expectedLifespanKm = toNumberOrNull(tire.expectedLifespanKm);
+      if (expectedLifespanKm !== null) {
+        lifespanSum += expectedLifespanKm;
+        lifespanCount += 1;
+      }
+
+      if (tire.vehicleId !== null) {
+        const fleetId = fleetIdByVehicle.get(tire.vehicleId) ?? null;
+        const purchasePrice = toNumberOrNull(tire.purchasePrice) ?? 0;
+
+        const fleetAgg = byFleetMap.get(fleetId) ?? { count: 0, cost: 0 };
+        fleetAgg.count += 1;
+        fleetAgg.cost += purchasePrice;
+        byFleetMap.set(fleetId, fleetAgg);
+
+        const vehicleAgg = vehicleCostMap.get(tire.vehicleId) ?? { value: 0, count: 0 };
+        vehicleAgg.value += purchasePrice;
+        vehicleAgg.count += 1;
+        vehicleCostMap.set(tire.vehicleId, vehicleAgg);
+      }
+
+      if (tire.status === TireStatus.IN_USE) {
+        tireWear.push(this.buildTireWearEntity(tire, plateById));
+        const currentTreadDepthMm = toNumberOrNull(tire.currentTreadDepthMm);
+        if (currentTreadDepthMm !== null && currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM) {
+          nearReplacementCount += 1;
+        }
+      }
+    }
+
+    // Disponiveis primeiro, ordenados por desgaste ascendente (mais gasto
+    // primeiro); indisponiveis por ultimo, ordem estavel por fireNumber
+    // (mesmo criterio de desempate ja usado para tankLevels).
+    tireWear.sort((a, b) => {
+      if (a.available && b.available) return (a.wearPercentRemaining ?? 0) - (b.wearPercentRemaining ?? 0);
+      if (a.available !== b.available) return a.available ? -1 : 1;
+      return a.fireNumber.localeCompare(b.fireNumber);
+    });
+
+    const entity = new FleetTiresOverviewEntity();
+    entity.totalTires = tires.length;
+    entity.newCount = countByStatus.get(TireStatus.NEW) ?? 0;
+    entity.inUseCount = countByStatus.get(TireStatus.IN_USE) ?? 0;
+    entity.stockCount = countByStatus.get(TireStatus.STOCK) ?? 0;
+    entity.retreadedCount = countByStatus.get(TireStatus.RETREADED) ?? 0;
+    entity.scrappedCount = countByStatus.get(TireStatus.SCRAPPED) ?? 0;
+    entity.investedValue = toNumberOrNull(investedAgg._sum.purchasePrice) ?? 0;
+    entity.retreadValue = toNumberOrNull(retreadAgg._sum.cost) ?? 0;
+    entity.averageLifespanKm = safeAverage(lifespanSum, lifespanCount);
+    entity.nearReplacementCount = nearReplacementCount;
+
+    entity.byStatus = [...countByStatus.entries()].map(([status, count]) => {
+      const row = new FleetTireStatusBreakdownEntity();
+      row.status = status;
+      row.count = count;
+      return row;
+    });
+    entity.byFleet = [...byFleetMap.entries()].map(([fleetId, agg]) => {
+      const row = new FleetTireFleetBreakdownEntity();
+      row.fleetId = fleetId;
+      row.fleetName = fleetName(fleetId);
+      row.count = agg.count;
+      row.cost = agg.cost;
+      return row;
+    });
+    entity.monthlyTrendCost = monthlyTrendCost;
+    entity.tireWear = tireWear;
+    entity.topVehiclesByTireCost = this.toRankingEntities(rankTopVehicles(vehicleCostMap, TOP_VEHICLES_LIMIT, 'value', 'desc'), plateById);
+    entity.tireAlerts = this.computeTireAlerts(tires, plateById);
+
+    return entity;
+  }
+
+  private buildTireWearEntity(
+    tire: {
+      id: string;
+      fireNumber: string;
+      vehicleId: string | null;
+      position: string | null;
+      initialTreadDepthMm: Prisma.Decimal | null;
+      currentTreadDepthMm: Prisma.Decimal | null;
+    },
+    plateById: Map<string, string>,
+  ): FleetTireWearEntity {
+    const entity = new FleetTireWearEntity();
+    entity.tireId = tire.id;
+    entity.fireNumber = tire.fireNumber;
+    entity.vehiclePlate = tire.vehicleId ? (plateById.get(tire.vehicleId) ?? null) : null;
+    entity.position = tire.position;
+
+    const initialTreadDepthMm = toNumberOrNull(tire.initialTreadDepthMm);
+    const currentTreadDepthMm = toNumberOrNull(tire.currentTreadDepthMm);
+    entity.initialTreadDepthMm = initialTreadDepthMm;
+    entity.currentTreadDepthMm = currentTreadDepthMm;
+
+    if (initialTreadDepthMm === null || initialTreadDepthMm <= 0) {
+      entity.wearPercentRemaining = null;
+      entity.available = false;
+      entity.reason = 'INITIAL_TREAD_DEPTH_NOT_CONFIGURED';
+      return entity;
+    }
+    if (currentTreadDepthMm === null) {
+      entity.wearPercentRemaining = null;
+      entity.available = false;
+      entity.reason = 'NO_INSPECTION_RECORDED';
+      return entity;
+    }
+
+    entity.wearPercentRemaining = Math.round(Math.min(100, Math.max(0, (currentTreadDepthMm / initialTreadDepthMm) * 100)));
+    entity.available = true;
+    entity.reason = null;
+    return entity;
+  }
+
+  private computeTireAlerts(
+    tires: { fireNumber: string; status: TireStatus; vehicleId: string | null; currentTreadDepthMm: Prisma.Decimal | null }[],
+    plateById: Map<string, string>,
+  ): FleetAlertEntity[] {
+    const alerts: FleetAlertEntity[] = [];
+    for (const tire of tires) {
+      if (alerts.length >= ALERTS_LIMIT_PER_TYPE) break;
+      if (tire.status !== TireStatus.IN_USE || !tire.vehicleId) continue;
+      const currentTreadDepthMm = toNumberOrNull(tire.currentTreadDepthMm);
+      if (currentTreadDepthMm === null || currentTreadDepthMm > NEAR_REPLACEMENT_THRESHOLD_MM) continue;
+      alerts.push(
+        this.buildAlert(
+          'TIRE_NEAR_REPLACEMENT',
+          'ATTENTION',
+          tire.vehicleId,
+          plateById,
+          `Pneu ${tire.fireNumber} com ${currentTreadDepthMm.toFixed(1)}mm de sulco -- próximo da troca.`,
+          currentTreadDepthMm,
+        ),
+      );
+    }
+    return alerts;
+  }
+
+  // Mesma metodologia de computeCostsMonthlyTrend, so para as 2 fontes de
+  // custo de pneu (compra + recapagem) -- sempre ultimos 12 meses, ignora
+  // startDate/endDate.
+  private async computeTiresMonthlyTrend(tenantId: string, filters: FleetOperationsFilters): Promise<DashboardChartPointEntity[]> {
+    const trendRange = this.trendDateRange();
+    const [tireRows, retreadRows] = await Promise.all([
+      this.prisma.tire.findMany({ where: this.buildTireWhere(tenantId, filters, trendRange), select: { purchaseDate: true, purchasePrice: true } }),
+      this.prisma.tireRetread.findMany({ where: this.buildTireRetreadWhere(tenantId, filters, trendRange), select: { retreadDate: true, cost: true } }),
+    ]);
+    const rows = [
+      ...tireRows.filter((r) => r.purchaseDate !== null).map((r) => ({ date: r.purchaseDate as Date, value: toNumberOrNull(r.purchasePrice) ?? 0 })),
+      ...retreadRows.map((r) => ({ date: r.retreadDate, value: toNumberOrNull(r.cost) ?? 0 })),
+    ];
+    return aggregateMonthlySeries(rows, MONTHLY_TREND_MONTHS);
+  }
+
   private buildTollWhere(
     tenantId: string,
     filters: FleetOperationsFilters,
@@ -1479,6 +2432,15 @@ export class FleetOperationsMetricsService {
     };
   }
 
+  // Fase 43 -- cancelledAt: null e OBRIGATORIO aqui: uma parada cancelada
+  // (registro indevido corrigido pelo admin) nunca pode entrar em
+  // indicadores/rankings/alertas (mesma regra ja documentada em
+  // TripStopsService.cancel()). Fase 44 acrescenta driverId/type/status
+  // (mesmo escopo usado pelo ranking por motorista e pelos alertas de
+  // duracao longa -- nunca uma segunda interpretacao de filtro). Pedir
+  // status=CANCELLED aqui sempre resulta em 0 linhas (cancelledAt: null E
+  // cancelledAt: {not: null} sao mutuamente exclusivos) -- comportamento
+  // correto por design: este dashboard nunca mostra dado cancelado.
   private buildStopWhere(
     tenantId: string,
     filters: FleetOperationsFilters,
@@ -1486,8 +2448,411 @@ export class FleetOperationsMetricsService {
   ): Prisma.TripStopWhereInput {
     return {
       tenantId,
-      ...compact({ vehicleId: filters.vehicleId, startedAt: dateRange }),
+      cancelledAt: null,
+      ...compact({ vehicleId: filters.vehicleId, driverId: filters.driverId, type: filters.type, startedAt: dateRange }),
       ...this.vehicleFleetFilter(filters),
+      ...this.stopStatusFilter(filters.status),
     };
+  }
+
+  private stopStatusFilter(status: TripStopStatus | undefined): Prisma.TripStopWhereInput {
+    if (status === 'OPEN') return { endedAt: null };
+    if (status === 'COMPLETED') return { endedAt: { not: null } };
+    if (status === 'CANCELLED') return { cancelledAt: { not: null } };
+    return {};
+  }
+
+  // ==========================================================================
+  // TEMPO PARADO E RECEITA PERDIDA -- dashboard novo. Tempo parado vem
+  // SOMENTE de TripStop (buildStopWhere, ja existente, reaproveitado tal
+  // como esta -- nunca somado com VehicleMaintenance.downtimeMinutes, que
+  // e uma fonte manual e desvinculada; somar as duas contaria a mesma
+  // parada real duas vezes). Receita perdida estimada = horas paradas x
+  // taxa de receita/hora do PROPRIO veiculo (historico COMPLETO de
+  // viagens concluidas, ignora startDate/endDate -- uma taxa nao deve
+  // variar conforme o periodo do relatorio, mesmo principio ja usado em
+  // tankLevels/computeVehiclesOverview). Nunca R$/km -- Vehicle/
+  // TripMetrics.actualDistanceKm nunca e escrito por nenhum service
+  // (auditado, ver docs/fleet-operations-dashboard.md).
+  // ==========================================================================
+  async getDowntimeCost(tenantId: string, query: FleetOperationsQueryDto): Promise<FleetDowntimeCostEntity> {
+    return this.computeDowntimeCost(tenantId, this.parseFilters(query));
+  }
+
+  private categorizeStopType(type: TripStopType): DowntimeCategory {
+    if (type === TripStopType.MAINTENANCE) return 'MAINTENANCE';
+    if (type === TripStopType.BREAKDOWN) return 'BREAKDOWN';
+    if (type === TripStopType.FUEL) return 'FUEL';
+    return 'OTHER';
+  }
+
+  private async computeDowntimeCost(tenantId: string, filters: FleetOperationsFilters): Promise<FleetDowntimeCostEntity> {
+    const dateRange = this.dateRangeFilter(filters);
+
+    const [stops, monthlyTrendStops, completedTrips] = await Promise.all([
+      this.prisma.tripStop.findMany({
+        where: { ...this.buildStopWhere(tenantId, filters, dateRange), durationMinutes: { not: null } },
+        select: { vehicleId: true, type: true, durationMinutes: true },
+      }),
+      this.prisma.tripStop.findMany({
+        where: { ...this.buildStopWhere(tenantId, filters, this.trendDateRange()), durationMinutes: { not: null } },
+        select: { startedAt: true, durationMinutes: true },
+      }),
+      this.prisma.trip.findMany({
+        where: { ...this.buildTripWhere(tenantId, filters, undefined), status: TripStatus.COMPLETED },
+        select: { id: true, composition: { select: { vehicleId: true } }, metrics: { select: { actualDurationMin: true } } },
+      }),
+    ]);
+
+    const tripIds = completedTrips.map((t) => t.id);
+    const revenueByTrip =
+      tripIds.length > 0
+        ? await this.prisma.tripRevenue.groupBy({ by: ['tripId'], where: { tenantId, tripId: { in: tripIds } }, _sum: { amount: true } })
+        : [];
+    const revenueByTripId = new Map(revenueByTrip.map((r) => [r.tripId, toNumberOrNull(r._sum.amount) ?? 0]));
+
+    // ---- taxa de receita/hora por veiculo (historico completo) ----
+    const vehicleTripAgg = new Map<string, { totalRevenue: number; totalDurationMin: number; tripCount: number }>();
+    for (const trip of completedTrips) {
+      const vehicleId = trip.composition?.vehicleId;
+      const actualDurationMin = trip.metrics?.actualDurationMin ?? null;
+      if (!vehicleId || actualDurationMin === null) continue;
+      const agg = vehicleTripAgg.get(vehicleId) ?? { totalRevenue: 0, totalDurationMin: 0, tripCount: 0 };
+      agg.totalRevenue += revenueByTripId.get(trip.id) ?? 0;
+      agg.totalDurationMin += actualDurationMin;
+      agg.tripCount += 1;
+      vehicleTripAgg.set(vehicleId, agg);
+    }
+
+    // ---- tempo parado por veiculo x categoria ----
+    const vehicleStopAgg = new Map<string, Map<DowntimeCategory, { durationMinutes: number; count: number }>>();
+    for (const stop of stops) {
+      const durationMinutes = stop.durationMinutes ?? 0;
+      const category = this.categorizeStopType(stop.type);
+      const byCategory = vehicleStopAgg.get(stop.vehicleId) ?? new Map<DowntimeCategory, { durationMinutes: number; count: number }>();
+      const current = byCategory.get(category) ?? { durationMinutes: 0, count: 0 };
+      current.durationMinutes += durationMinutes;
+      current.count += 1;
+      byCategory.set(category, current);
+      vehicleStopAgg.set(stop.vehicleId, byCategory);
+    }
+
+    const vehicleIds = [...vehicleStopAgg.keys()];
+    const vehicleRecords =
+      vehicleIds.length > 0 ? await this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true } }) : [];
+    const plateById = new Map(vehicleRecords.map((v) => [v.id, v.plate]));
+
+    const vehicles: FleetVehicleDowntimeCostEntity[] = [];
+    const lostRevenueMap = new Map<string, VehicleRankingAccumulator>();
+    const downtimeMap = new Map<string, VehicleRankingAccumulator>();
+    const byCategoryTotals = new Map<DowntimeCategory, { durationMinutes: number; count: number; lostRevenue: number; hasLostRevenue: boolean }>();
+    for (const category of DOWNTIME_CATEGORIES) byCategoryTotals.set(category, { durationMinutes: 0, count: 0, lostRevenue: 0, hasLostRevenue: false });
+
+    for (const [vehicleId, byCategory] of vehicleStopAgg) {
+      const tripAgg = vehicleTripAgg.get(vehicleId);
+      const rate = computeRevenuePerHour(
+        tripAgg?.totalRevenue ?? 0,
+        tripAgg?.totalDurationMin ?? 0,
+        tripAgg?.tripCount ?? 0,
+        MIN_TRIPS_FOR_REVENUE_RATE,
+      );
+
+      let totalDowntimeMinutes = 0;
+      let stopCount = 0;
+      const categoryEntities: FleetDowntimeCategoryEntity[] = [];
+      for (const category of DOWNTIME_CATEGORIES) {
+        const agg = byCategory.get(category) ?? { durationMinutes: 0, count: 0 };
+        totalDowntimeMinutes += agg.durationMinutes;
+        stopCount += agg.count;
+
+        const categoryEntity = new FleetDowntimeCategoryEntity();
+        categoryEntity.category = category;
+        categoryEntity.durationMinutes = agg.durationMinutes;
+        categoryEntity.count = agg.count;
+        categoryEntity.estimatedLostRevenue =
+          rate.available && rate.value !== null ? Math.round((agg.durationMinutes / 60) * rate.value * 100) / 100 : null;
+        categoryEntities.push(categoryEntity);
+
+        const totals = byCategoryTotals.get(category);
+        if (totals) {
+          totals.durationMinutes += agg.durationMinutes;
+          totals.count += agg.count;
+          if (categoryEntity.estimatedLostRevenue !== null) {
+            totals.lostRevenue += categoryEntity.estimatedLostRevenue;
+            totals.hasLostRevenue = true;
+          }
+        }
+      }
+
+      const entity = new FleetVehicleDowntimeCostEntity();
+      entity.vehicleId = vehicleId;
+      entity.plate = plateById.get(vehicleId) ?? '—';
+      entity.totalDowntimeMinutes = totalDowntimeMinutes;
+      entity.stopCount = stopCount;
+      entity.byCategory = categoryEntities;
+
+      const revenuePerHour = new FleetRevenuePerHourEntity();
+      revenuePerHour.value = rate.value;
+      revenuePerHour.available = rate.available;
+      revenuePerHour.reason = rate.reason;
+      revenuePerHour.basedOnTripCount = tripAgg?.tripCount ?? 0;
+      entity.revenuePerHour = revenuePerHour;
+
+      const estimatedLostRevenue = new FleetEstimatedLostRevenueEntity();
+      if (rate.available && rate.value !== null) {
+        estimatedLostRevenue.value = Math.round((totalDowntimeMinutes / 60) * rate.value * 100) / 100;
+        estimatedLostRevenue.available = true;
+        estimatedLostRevenue.reason = null;
+        lostRevenueMap.set(vehicleId, { value: estimatedLostRevenue.value, count: totalDowntimeMinutes });
+      } else {
+        estimatedLostRevenue.value = null;
+        estimatedLostRevenue.available = false;
+        estimatedLostRevenue.reason = rate.reason;
+      }
+      entity.estimatedLostRevenue = estimatedLostRevenue;
+
+      downtimeMap.set(vehicleId, { value: totalDowntimeMinutes, count: stopCount });
+      vehicles.push(entity);
+    }
+
+    // Disponiveis primeiro (por receita perdida desc), indisponiveis por
+    // ultimo (por tempo parado desc) -- mesmo criterio de desempate
+    // determinístico ja usado em tankLevels/tireWear.
+    vehicles.sort((a, b) => {
+      if (a.estimatedLostRevenue.available && b.estimatedLostRevenue.available) {
+        return (b.estimatedLostRevenue.value ?? 0) - (a.estimatedLostRevenue.value ?? 0);
+      }
+      if (a.estimatedLostRevenue.available !== b.estimatedLostRevenue.available) {
+        return a.estimatedLostRevenue.available ? -1 : 1;
+      }
+      return b.totalDowntimeMinutes - a.totalDowntimeMinutes;
+    });
+
+    const entity = new FleetDowntimeCostEntity();
+    entity.totalStops = stops.length;
+    entity.totalDowntimeMinutes = stops.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+
+    const totalEstimatedLostRevenue = new FleetEstimatedLostRevenueEntity();
+    const availableVehicles = vehicles.filter((v) => v.estimatedLostRevenue.available);
+    if (availableVehicles.length > 0) {
+      totalEstimatedLostRevenue.value =
+        Math.round(availableVehicles.reduce((sum, v) => sum + (v.estimatedLostRevenue.value ?? 0), 0) * 100) / 100;
+      totalEstimatedLostRevenue.available = true;
+      totalEstimatedLostRevenue.reason = null;
+    } else {
+      totalEstimatedLostRevenue.value = null;
+      totalEstimatedLostRevenue.available = false;
+      totalEstimatedLostRevenue.reason = 'NO_VEHICLE_WITH_REVENUE_RATE';
+    }
+    entity.totalEstimatedLostRevenue = totalEstimatedLostRevenue;
+
+    entity.byCategory = DOWNTIME_CATEGORIES.map((category) => {
+      const totals = byCategoryTotals.get(category);
+      const row = new FleetDowntimeCategoryEntity();
+      row.category = category;
+      row.durationMinutes = totals?.durationMinutes ?? 0;
+      row.count = totals?.count ?? 0;
+      row.estimatedLostRevenue = totals?.hasLostRevenue ? Math.round(totals.lostRevenue * 100) / 100 : null;
+      return row;
+    });
+
+    entity.vehicles = vehicles;
+    entity.topVehiclesByLostRevenue = this.toRankingEntities(rankTopVehicles(lostRevenueMap, TOP_VEHICLES_LIMIT, 'value', 'desc'), plateById);
+    entity.topVehiclesByDowntimeMinutes = this.toRankingEntities(rankTopVehicles(downtimeMap, TOP_VEHICLES_LIMIT, 'value', 'desc'), plateById);
+    entity.monthlyTrendDowntimeMinutes = aggregateMonthlySeries(
+      monthlyTrendStops.map((s) => ({ date: s.startedAt, value: s.durationMinutes ?? 0 })),
+      MONTHLY_TREND_MONTHS,
+    );
+
+    const alerts: FleetAlertEntity[] = [];
+    const lostRevenueAverage = safeAverage([...lostRevenueMap.values()].reduce((sum, v) => sum + v.value, 0), lostRevenueMap.size) ?? 0;
+    this.pushOutlierAlerts(
+      alerts,
+      lostRevenueMap,
+      plateById,
+      lostRevenueAverage,
+      DOWNTIME_COST_OUTLIER_MULTIPLIER,
+      'DOWNTIME_COST_OUTLIER',
+      'ATTENTION',
+      (value) => `Receita perdida estimada (${this.formatBrl(value)}) acima da media da frota.`,
+    );
+    entity.downtimeCostAlerts = alerts;
+
+    return entity;
+  }
+
+  // ==========================================================================
+  // COMPOSICAO -- uso de veiculo+carreta por viagem (dashboard novo).
+  // Endpoint proprio (GET /fleet-operations/compositions). Auditoria do
+  // schema confirmou 3 limitacoes estruturais, documentadas em
+  // docs/fleet-operations-dashboard.md: (1) Trailer nao tem campo de eixo
+  // proprio -- eixo e atributo de AxleConfiguration, 1:1 com TripComposition,
+  // nunca da carreta isolada; (2) TripStop nao tem trailerId -- atribuicao de
+  // parada a carreta so via TripStop.tripId -> Trip.composition.trailers,
+  // paradas administrativas sem tripId nunca sao atribuidas a nenhuma
+  // carreta; (3) composicao pode ter varias carretas (bitrem/rodotrem) --
+  // duracao de parada/uso e atribuida INTEIRA a cada carreta da composicao
+  // (nunca dividida, elas se movem juntas como uma unidade fisica real).
+  // Sem estimativa de receita perdida por carreta (ratear entre carretas da
+  // mesma composicao seria uma alocacao inventada, fora de escopo).
+  // ==========================================================================
+  async getCompositionsOverview(tenantId: string, query: FleetOperationsQueryDto): Promise<FleetCompositionsOverviewEntity> {
+    return this.computeCompositionsOverview(tenantId, this.parseFilters(query));
+  }
+
+  private buildTrailerWhere(tenantId: string, filters: FleetOperationsFilters): Prisma.TrailerWhereInput {
+    return { tenantId, deletedAt: null, ...compact({ type: filters.trailerType }) };
+  }
+
+  private countTrailersOnTrip(trailerWhere: Prisma.TrailerWhereInput): Promise<number> {
+    return this.prisma.trailer.count({
+      where: {
+        ...trailerWhere,
+        isActive: true,
+        tripCompositionTrailers: { some: { tripComposition: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } } },
+      },
+    });
+  }
+
+  private async buildTrailerInfoMap(trailerIds: string[]): Promise<Map<string, { plate: string; type: TrailerType }>> {
+    if (trailerIds.length === 0) return new Map();
+    const trailers = await this.prisma.trailer.findMany({ where: { id: { in: trailerIds } }, select: { id: true, plate: true, type: true } });
+    return new Map(trailers.map((t) => [t.id, { plate: t.plate, type: t.type }]));
+  }
+
+  private async computeCompositionsOverview(tenantId: string, filters: FleetOperationsFilters): Promise<FleetCompositionsOverviewEntity> {
+    const dateRange = this.dateRangeFilter(filters);
+    const trailerWhere = this.buildTrailerWhere(tenantId, filters);
+
+    const [trailers, trailersOnTrip, axleTrips, completedTrips, stops, monthlyTrendTrips] = await Promise.all([
+      this.prisma.trailer.findMany({ where: trailerWhere, select: { id: true, plate: true, type: true, isActive: true } }),
+      this.countTrailersOnTrip(trailerWhere),
+      this.prisma.trip.findMany({
+        where: this.buildTripWhere(tenantId, filters, dateRange),
+        select: { composition: { select: { axleConfiguration: { select: { totalAxles: true, billableCategory: true } } } } },
+      }),
+      this.prisma.trip.findMany({
+        where: { ...this.buildTripWhere(tenantId, filters, undefined), status: TripStatus.COMPLETED },
+        select: {
+          id: true,
+          composition: { select: { trailers: { select: { trailerId: true } } } },
+          metrics: { select: { actualDurationMin: true } },
+        },
+      }),
+      this.prisma.tripStop.findMany({
+        where: { ...this.buildStopWhere(tenantId, filters, dateRange), tripId: { not: null }, durationMinutes: { not: null } },
+        select: { tripId: true, durationMinutes: true },
+      }),
+      this.prisma.trip.findMany({
+        where: { ...this.buildTripWhere(tenantId, filters, this.trendDateRange()), status: TripStatus.COMPLETED },
+        select: { createdAt: true, composition: { select: { trailers: { select: { trailerId: true } } } } },
+      }),
+    ]);
+
+    // ---- estado atual da frota de carretas (ignora periodo) ----
+    const byTypeMap = new Map<TrailerType, number>();
+    for (const t of trailers) byTypeMap.set(t.type, (byTypeMap.get(t.type) ?? 0) + 1);
+    const activeCount = trailers.filter((t) => t.isActive).length;
+
+    // ---- configuracao de eixos das composicoes de viagens no escopo ----
+    const axleMap = new Map<string, { totalAxles: number; count: number }>();
+    for (const trip of axleTrips) {
+      const cfg = trip.composition?.axleConfiguration;
+      if (!cfg) continue;
+      const current = axleMap.get(cfg.billableCategory) ?? { totalAxles: cfg.totalAxles, count: 0 };
+      current.count += 1;
+      axleMap.set(cfg.billableCategory, current);
+    }
+
+    // ---- tempo em uso por carreta (viagens concluidas, duracao inteira p/ cada carreta da composicao) ----
+    const trailerUsageMap = new Map<string, VehicleRankingAccumulator>();
+    for (const trip of completedTrips) {
+      const trailerIds = trip.composition?.trailers.map((tc) => tc.trailerId) ?? [];
+      const actualDurationMin = trip.metrics?.actualDurationMin ?? null;
+      if (trailerIds.length === 0 || actualDurationMin === null) continue;
+      for (const trailerId of trailerIds) {
+        const current = trailerUsageMap.get(trailerId) ?? { value: 0, count: 0 };
+        current.value += actualDurationMin;
+        current.count += 1;
+        trailerUsageMap.set(trailerId, current);
+      }
+    }
+
+    // ---- tempo parado por carreta (so paradas com tripId -- limitacao 2 acima) ----
+    const stopTripIds = [...new Set(stops.map((s) => s.tripId).filter((id): id is string => id !== null))];
+    const stopTrips =
+      stopTripIds.length > 0
+        ? await this.prisma.trip.findMany({
+            where: { id: { in: stopTripIds } },
+            select: { id: true, composition: { select: { trailers: { select: { trailerId: true } } } } },
+          })
+        : [];
+    const trailerIdsByTripId = new Map(stopTrips.map((t) => [t.id, t.composition?.trailers.map((tc) => tc.trailerId) ?? []]));
+    const trailerDowntimeMap = new Map<string, number>();
+    for (const stop of stops) {
+      if (!stop.tripId) continue;
+      const trailerIds = trailerIdsByTripId.get(stop.tripId) ?? [];
+      for (const trailerId of trailerIds) {
+        trailerDowntimeMap.set(trailerId, (trailerDowntimeMap.get(trailerId) ?? 0) + (stop.durationMinutes ?? 0));
+      }
+    }
+
+    const trailerIdsInvolved = [...new Set([...trailerUsageMap.keys(), ...trailerDowntimeMap.keys()])];
+    const trailerInfoMap = await this.buildTrailerInfoMap(trailerIdsInvolved);
+
+    const toTrailerEntry = (entry: VehicleRankingEntry): FleetTrailerRankingEntryEntity => {
+      const info = trailerInfoMap.get(entry.vehicleId);
+      const row = new FleetTrailerRankingEntryEntity();
+      row.trailerId = entry.vehicleId;
+      row.plate = info?.plate ?? '—';
+      row.type = info?.type ?? TrailerType.OTHER;
+      row.value = entry.value;
+      row.count = entry.count;
+      return row;
+    };
+
+    const entity = new FleetCompositionsOverviewEntity();
+    entity.totalTrailers = trailers.length;
+    entity.activeCount = activeCount;
+    entity.inactiveCount = trailers.length - activeCount;
+    entity.trailersOnTrip = trailersOnTrip;
+    entity.trailersAvailable = Math.max(activeCount - trailersOnTrip, 0);
+    entity.byType = [...byTypeMap.entries()].map(([type, count]) => {
+      const row = new FleetTrailerTypeBreakdownEntity();
+      row.type = type;
+      row.count = count;
+      return row;
+    });
+    entity.axleCategoryBreakdown = [...axleMap.entries()]
+      .map(([billableCategory, agg]) => {
+        const row = new FleetAxleCategoryBreakdownEntity();
+        row.billableCategory = billableCategory;
+        row.totalAxles = agg.totalAxles;
+        row.count = agg.count;
+        return row;
+      })
+      .sort((a, b) => b.count - a.count);
+    entity.topTrailersByTripCount = rankTopVehicles(trailerUsageMap, TOP_VEHICLES_LIMIT, 'count', 'desc').map(toTrailerEntry);
+    entity.topTrailersByInUseMinutes = rankTopVehicles(trailerUsageMap, TOP_VEHICLES_LIMIT, 'value', 'desc').map(toTrailerEntry);
+    entity.trailers = trailerIdsInvolved
+      .map((trailerId) => {
+        const usage = trailerUsageMap.get(trailerId);
+        const info = trailerInfoMap.get(trailerId);
+        const row = new FleetTrailerDowntimeEntity();
+        row.trailerId = trailerId;
+        row.plate = info?.plate ?? '—';
+        row.type = info?.type ?? TrailerType.OTHER;
+        row.inUseMinutes = usage?.value ?? 0;
+        row.tripCount = usage?.count ?? 0;
+        row.downtimeMinutes = trailerDowntimeMap.get(trailerId) ?? 0;
+        return row;
+      })
+      .sort((a, b) => b.downtimeMinutes - a.downtimeMinutes || b.inUseMinutes - a.inUseMinutes);
+    entity.monthlyTrendTripCount = aggregateMonthlySeries(
+      monthlyTrendTrips.filter((t) => (t.composition?.trailers.length ?? 0) > 0).map((t) => ({ date: t.createdAt, value: 1 })),
+      MONTHLY_TREND_MONTHS,
+    );
+
+    return entity;
   }
 }

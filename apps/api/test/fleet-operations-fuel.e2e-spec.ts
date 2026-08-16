@@ -578,6 +578,136 @@ describe('Fleet Operations Fuel Analytics (e2e)', () => {
   });
 
   // ==========================================================================
+  // Iteracao de redesign visual -- nivel de tanque ESTIMADO (tankLevels /
+  // tankFleetAverage). Nunca um sensor real (Telemetry.fuelLevel nao e
+  // populado em lugar nenhum do sistema) -- estimativa: assume tanque cheio
+  // a cada abastecimento, desconta consumo estimado desde entao usando
+  // Vehicle.averageConsumptionKmL. So calculado quando TODOS os dados
+  // existem; caso contrario available=false com reason explicito.
+  // ==========================================================================
+  describe('nivel de tanque (tankLevels)', () => {
+    it('calcula o nivel estimado quando ha capacidade, consumo, odometro atual e abastecimento', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TankOk');
+      const v = await setupVehicleWithDriverAndStation(adminAuth, {
+        tankCapacityLiters: 400,
+        averageConsumptionKmL: 4,
+        odometerKm: 100000,
+      });
+      await createFuelSupply(adminAuth, v.vehicleId, v.driverId, v.fuelStationId, 50, 5, 100000, '2026-01-01T10:00:00.000Z');
+      // Avanca o odometro do veiculo 400km sem novo abastecimento (edicao
+      // administrativa do cadastro -- nao dispara um novo abastecimento).
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${v.vehicleId}`)
+        .set('Authorization', adminAuth)
+        .send({ odometerKm: 100400 })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/fuel')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const tank = res.body.data.tankLevels.find((t: { vehicleId: string }) => t.vehicleId === v.vehicleId);
+
+      // 400km / 4km/L = 100L consumidos; 400 - 100 = 300L restantes = 75%.
+      expect(tank).toMatchObject({
+        available: true,
+        reason: null,
+        capacityLiters: 400,
+        estimatedLevelLiters: 300,
+        percentage: 75,
+        kmSinceLastSupply: 400,
+      });
+      expect(tank.lastSupplyAt).toBeTruthy();
+      expect(res.body.data.tankFleetAverage).toMatchObject({ value: 75, available: true, reason: null });
+    });
+
+    it('fica indisponivel por falta de capacidade, consumo medio ou abastecimento -- nunca inventa numero', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TankGaps');
+
+      const noCapacity = await setupVehicleWithDriverAndStation(adminAuth, { averageConsumptionKmL: 4, odometerKm: 1000 });
+      await createFuelSupply(adminAuth, noCapacity.vehicleId, noCapacity.driverId, noCapacity.fuelStationId, 50, 5, 1000, '2026-01-01T10:00:00.000Z');
+
+      const noConsumption = await setupVehicleWithDriverAndStation(adminAuth, { tankCapacityLiters: 400, odometerKm: 1000 });
+      await createFuelSupply(adminAuth, noConsumption.vehicleId, noConsumption.driverId, noConsumption.fuelStationId, 50, 5, 1000, '2026-01-01T10:00:00.000Z');
+
+      const noSupply = await setupVehicleWithDriverAndStation(adminAuth, { tankCapacityLiters: 400, averageConsumptionKmL: 4, odometerKm: 1000 });
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/fuel')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const tankLevels = res.body.data.tankLevels as { vehicleId: string; available: boolean; reason: string | null; percentage: number | null }[];
+
+      const findTank = (vehicleId: string) => tankLevels.find((t) => t.vehicleId === vehicleId);
+      expect(findTank(noCapacity.vehicleId)).toMatchObject({ available: false, reason: 'TANK_CAPACITY_NOT_CONFIGURED', percentage: null });
+      expect(findTank(noConsumption.vehicleId)).toMatchObject({ available: false, reason: 'AVERAGE_CONSUMPTION_NOT_CONFIGURED', percentage: null });
+      expect(findTank(noSupply.vehicleId)).toMatchObject({ available: false, reason: 'NO_SUPPLY_RECORDED', percentage: null });
+    });
+
+    it('trata odometro atual menor que o do ultimo abastecimento como 0km rodado (nunca consumo negativo)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TankRegression');
+      const v = await setupVehicleWithDriverAndStation(adminAuth, { tankCapacityLiters: 400, averageConsumptionKmL: 4, odometerKm: 100000 });
+      await createFuelSupply(adminAuth, v.vehicleId, v.driverId, v.fuelStationId, 50, 5, 100000, '2026-01-01T10:00:00.000Z');
+      // Corrige o cadastro para um odometro MENOR que o do ultimo abastecimento (inconsistencia de dados).
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${v.vehicleId}`)
+        .set('Authorization', adminAuth)
+        .send({ odometerKm: 99000 })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/fuel')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const tank = res.body.data.tankLevels.find((t: { vehicleId: string }) => t.vehicleId === v.vehicleId);
+
+      expect(tank).toMatchObject({ available: true, kmSinceLastSupply: 0, estimatedLevelLiters: 400, percentage: 100 });
+    });
+
+    it('ordena disponiveis por percentage ascendente (mais urgente primeiro), indisponiveis por ultimo', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TankOrder');
+      const low = await setupVehicleWithDriverAndStation(adminAuth, { tankCapacityLiters: 400, averageConsumptionKmL: 4, odometerKm: 100000 });
+      await createFuelSupply(adminAuth, low.vehicleId, low.driverId, low.fuelStationId, 50, 5, 100000, '2026-01-01T10:00:00.000Z');
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${low.vehicleId}`)
+        .set('Authorization', adminAuth)
+        .send({ odometerKm: 101400 }) // 1400km / 4km/L = 350L consumidos -> 50L restantes = 12.5% -> 13%
+        .expect(200);
+
+      const high = await setupVehicleWithDriverAndStation(adminAuth, { tankCapacityLiters: 400, averageConsumptionKmL: 4, odometerKm: 100000 });
+      await createFuelSupply(adminAuth, high.vehicleId, high.driverId, high.fuelStationId, 50, 5, 100000, '2026-01-01T10:00:00.000Z');
+      // Sem PATCH -- 0km desde o abastecimento -> 100%.
+
+      const unconfigured = await setupVehicleWithDriverAndStation(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/fuel')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const tankLevels = res.body.data.tankLevels as { vehicleId: string; available: boolean }[];
+
+      const availableIds = tankLevels.filter((t) => t.available).map((t) => t.vehicleId);
+      expect(availableIds).toEqual([low.vehicleId, high.vehicleId]);
+      expect(tankLevels[tankLevels.length - 1]).toMatchObject({ vehicleId: unconfigured.vehicleId, available: false });
+    });
+
+    it('tenant B nunca ve tankLevels do tenant A', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('TankIsolA');
+      const v = await setupVehicleWithDriverAndStation(tenantA.adminAuth, { tankCapacityLiters: 400, averageConsumptionKmL: 4, odometerKm: 1000 });
+      await createFuelSupply(tenantA.adminAuth, v.vehicleId, v.driverId, v.fuelStationId, 50, 5, 1000, '2026-01-01T10:00:00.000Z');
+
+      const tenantB = await createTenantAndLoginAsAdmin('TankIsolB');
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/fuel')
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+
+      expect(res.body.data.tankLevels).toEqual([]);
+      expect(res.body.data.tankFleetAverage).toMatchObject({ value: null, available: false, reason: 'NO_VEHICLE_WITH_TANK_DATA' });
+    });
+  });
+
+  // ==========================================================================
   // Caso 24 -- verificacao real de ausencia de N+1: conta as queries Prisma
   // efetivamente executadas por GET /fleet-operations/fuel com 10 vs 50
   // veiculos, usando um client Prisma instrumentado via $extends SOMENTE

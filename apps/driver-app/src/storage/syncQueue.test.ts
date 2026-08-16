@@ -239,6 +239,103 @@ describe('syncQueue -- pause/resume/complete', () => {
     });
   });
 
+  // Fase 43 -- controle de paradas offline-first. stop-open ja existia
+  // como kind desde a Fase 25 (so nao era usado por nenhuma tela); stop-close
+  // e novo: fecha pelo deviceEventId da ABERTURA (nao pelo id do servidor),
+  // por isso funciona mesmo quando a propria abertura ainda esta pendente.
+  describe('STOP-OPEN/STOP-CLOSE', () => {
+    it('STOP-OPEN online: envia imediatamente e nao enfileira', async () => {
+      api.openStop.mockResolvedValue({} as never);
+
+      const result = await submitOrQueue({
+        kind: 'stop-open',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-open-1',
+        type: 'LOADING',
+        latitude: -23.5,
+        longitude: -46.6,
+        startedAt: '2026-09-01T08:00:00.000Z',
+      });
+
+      expect(result.queued).toBe(false);
+      expect(api.openStop).toHaveBeenCalledWith('trip-1', {
+        deviceEventId: 'dev-open-1',
+        type: 'LOADING',
+        latitude: -23.5,
+        longitude: -46.6,
+        startedAt: '2026-09-01T08:00:00.000Z',
+      });
+    });
+
+    it('STOP-OPEN offline: entra na fila e nao lanca erro', async () => {
+      api.openStop.mockRejectedValue(new Error('network down'));
+
+      const result = await submitOrQueue({
+        kind: 'stop-open',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-open-2',
+        latitude: -23.5,
+        longitude: -46.6,
+        startedAt: '2026-09-01T08:00:00.000Z',
+      });
+
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(1);
+    });
+
+    it('STOP-CLOSE online: fecha pelo deviceEventId usado na abertura', async () => {
+      api.closeStopByDeviceEvent.mockResolvedValue({} as never);
+
+      const result = await submitOrQueue({
+        kind: 'stop-close',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-open-1',
+        endedAt: '2026-09-01T08:30:00.000Z',
+      });
+
+      expect(result.queued).toBe(false);
+      expect(api.closeStopByDeviceEvent).toHaveBeenCalledWith('trip-1', {
+        deviceEventId: 'dev-open-1',
+        endedAt: '2026-09-01T08:30:00.000Z',
+      });
+    });
+
+    it('STOP-CLOSE offline: entra na fila mesmo com a abertura ainda pendente (mesmo deviceEventId)', async () => {
+      api.openStop.mockRejectedValue(new Error('network down'));
+      await submitOrQueue({
+        kind: 'stop-open',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-open-3',
+        latitude: -23.5,
+        longitude: -46.6,
+        startedAt: '2026-09-01T08:00:00.000Z',
+      });
+
+      api.closeStopByDeviceEvent.mockRejectedValue(new Error('network down'));
+      const result = await submitOrQueue({
+        kind: 'stop-close',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-open-3',
+        endedAt: '2026-09-01T08:15:00.000Z',
+      });
+
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(2);
+
+      // Reconexao: flush processa na ordem (abertura antes do fechamento).
+      api.openStop.mockResolvedValue({} as never);
+      api.closeStopByDeviceEvent.mockResolvedValue({} as never);
+      const flushResult = await flushQueue();
+
+      expect(flushResult.sent).toBe(2);
+      expect(flushResult.remaining).toBe(0);
+      // 2 chamadas cada -- a 1a tentativa (offline, rejeitada) + o retry no
+      // flush (mesmo padrao de CHECKLIST-EVIDENCE acima).
+      expect(api.openStop).toHaveBeenCalledTimes(2);
+      expect(api.closeStopByDeviceEvent).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('CHECKLIST-EVIDENCE', () => {
     it('online: envia o arquivo local (path persistido) imediatamente', async () => {
       checklistApi.uploadChecklistEvidence.mockResolvedValue({} as never);

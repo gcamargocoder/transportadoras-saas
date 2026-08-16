@@ -1,0 +1,198 @@
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { MaintenancePlan, Prisma } from '@prisma/client';
+import { AuditService } from '../../audit/services/audit.service';
+import { RequestMetadata } from '../../auth/utils/request-metadata.util';
+import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
+import { AuditActor } from '../../common/interfaces/audit-actor.interface';
+import { compact } from '../../common/utils/compact.util';
+import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateMaintenancePlanDto } from '../dto/create-maintenance-plan.dto';
+import { FindMaintenancePlansQueryDto } from '../dto/find-maintenance-plans-query.dto';
+import { UpdateMaintenancePlanDto } from '../dto/update-maintenance-plan.dto';
+import { MaintenancePlanEntity } from '../entities/maintenance-plan.entity';
+import { PaginatedMaintenancePlansEntity } from '../entities/paginated-maintenance-plans.entity';
+import { toMaintenancePlanEntity } from '../mappers/maintenance-plan.mapper';
+
+// Fase 45 -- CRUD de planos de manutencao preventiva. Nao gera
+// VehicleMaintenance sozinho -- so alimenta o calculo de vencidas/proximas
+// em FleetOperationsMetricsService (que le MaintenancePlan + VehicleMaintenance
+// em lote, nunca por plano).
+@Injectable()
+export class MaintenancePlansService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
+
+  async findAll(tenantId: string, query: FindMaintenancePlansQueryDto): Promise<PaginatedMaintenancePlansEntity> {
+    const where: Prisma.MaintenancePlanWhereInput = {
+      tenantId,
+      ...compact({ vehicleId: query.vehicleId, component: query.component, active: query.active }),
+    };
+
+    const [items, total] = await Promise.all([
+      this.prisma.maintenancePlan.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.maintenancePlan.count({ where }),
+    ]);
+
+    const result = new PaginatedMaintenancePlansEntity();
+    result.items = items.map(toMaintenancePlanEntity);
+    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
+    return result;
+  }
+
+  async findOne(tenantId: string, id: string): Promise<MaintenancePlanEntity> {
+    return toMaintenancePlanEntity(await this.findOwnedOrThrow(tenantId, id));
+  }
+
+  async create(
+    tenantId: string,
+    dto: CreateMaintenancePlanDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenancePlanEntity> {
+    await this.assertVehicleExists(tenantId, dto.vehicleId);
+    this.assertHasAtLeastOneInterval(dto.intervalKm, dto.intervalDays, dto.intervalHours);
+
+    const plan = await this.prisma.maintenancePlan.create({
+      data: {
+        tenantId,
+        vehicleId: dto.vehicleId,
+        name: dto.name,
+        component: dto.component,
+        ...compact({
+          maintenanceType: dto.maintenanceType,
+          intervalKm: dto.intervalKm,
+          intervalDays: dto.intervalDays,
+          intervalHours: dto.intervalHours,
+          alertBeforeKm: dto.alertBeforeKm,
+          alertBeforeDays: dto.alertBeforeDays,
+          active: dto.active,
+        }),
+      },
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'maintenance_plan.created',
+      entityName: 'MaintenancePlan',
+      entityId: plan.id,
+      newValue: toJsonSafe({ vehicleId: plan.vehicleId, component: plan.component, name: plan.name }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toMaintenancePlanEntity(plan);
+  }
+
+  async update(
+    tenantId: string,
+    id: string,
+    dto: UpdateMaintenancePlanDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenancePlanEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+
+    if (dto.vehicleId && dto.vehicleId !== before.vehicleId) {
+      await this.assertVehicleExists(tenantId, dto.vehicleId);
+    }
+
+    const effectiveIntervalKm = dto.intervalKm ?? before.intervalKm ?? undefined;
+    const effectiveIntervalDays = dto.intervalDays ?? before.intervalDays ?? undefined;
+    const effectiveIntervalHours = dto.intervalHours ?? before.intervalHours ?? undefined;
+    this.assertHasAtLeastOneInterval(effectiveIntervalKm, effectiveIntervalDays, effectiveIntervalHours);
+
+    const plan = await this.prisma.maintenancePlan.update({
+      where: { id },
+      data: compact({
+        vehicleId: dto.vehicleId,
+        name: dto.name,
+        component: dto.component,
+        maintenanceType: dto.maintenanceType,
+        intervalKm: dto.intervalKm,
+        intervalDays: dto.intervalDays,
+        intervalHours: dto.intervalHours,
+        alertBeforeKm: dto.alertBeforeKm,
+        alertBeforeDays: dto.alertBeforeDays,
+        active: dto.active,
+      }),
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'maintenance_plan.updated',
+      entityName: 'MaintenancePlan',
+      entityId: id,
+      previousValue: toJsonSafe(before),
+      newValue: toJsonSafe(plan),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return toMaintenancePlanEntity(plan);
+  }
+
+  async remove(tenantId: string, id: string, actor: AuditActor, metadata: RequestMetadata): Promise<void> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+
+    const linkedRecordsCount = await this.prisma.vehicleMaintenance.count({ where: { tenantId, maintenancePlanId: id } });
+    if (linkedRecordsCount > 0) {
+      throw new ConflictException(
+        `Nao e possivel excluir este plano: existem ${linkedRecordsCount} manutencao(oes) vinculada(s) a ele.`,
+      );
+    }
+
+    await this.prisma.maintenancePlan.delete({ where: { id } });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'maintenance_plan.deleted',
+      entityName: 'MaintenancePlan',
+      entityId: id,
+      previousValue: toJsonSafe({ vehicleId: before.vehicleId, component: before.component, name: before.name }),
+      newValue: null,
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+  }
+
+  private async findOwnedOrThrow(tenantId: string, id: string): Promise<MaintenancePlan> {
+    const plan = await this.prisma.maintenancePlan.findFirst({ where: { id, tenantId } });
+    if (!plan) {
+      throw new NotFoundException('Plano de manutencao nao encontrado nesta empresa.');
+    }
+    return plan;
+  }
+
+  private async assertVehicleExists(tenantId: string, vehicleId: string): Promise<void> {
+    const vehicle = await this.prisma.vehicle.findFirst({ where: { id: vehicleId, tenantId, deletedAt: null } });
+    if (!vehicle) {
+      throw new NotFoundException('Veiculo nao encontrado nesta empresa.');
+    }
+  }
+
+  // Um plano sem NENHUM criterio de vencimento nunca poderia gerar
+  // MAINTENANCE_OVERDUE/MAINTENANCE_DUE_SOON -- rejeitado na origem, nunca
+  // um plano "morto" salvo silenciosamente.
+  private assertHasAtLeastOneInterval(
+    intervalKm: number | undefined,
+    intervalDays: number | undefined,
+    intervalHours: number | undefined,
+  ): void {
+    if (intervalKm === undefined && intervalDays === undefined && intervalHours === undefined) {
+      throw new BadRequestException(
+        'Informe ao menos um intervalo de recorrencia (intervalKm, intervalDays ou intervalHours).',
+      );
+    }
+  }
+}

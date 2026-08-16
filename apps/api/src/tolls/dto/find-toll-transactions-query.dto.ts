@@ -20,6 +20,11 @@ export class FindTollTransactionsQueryDto extends PaginationQueryDto {
   @IsUUID('4', { message: 'vehicleId deve ser um UUID valido.' })
   vehicleId?: string;
 
+  @ApiPropertyOptional({ format: 'uuid', description: 'Filtra por frota (Vehicle.fleetId).' })
+  @IsOptional()
+  @IsUUID('4', { message: 'fleetId deve ser um UUID valido.' })
+  fleetId?: string;
+
   @ApiPropertyOptional({ format: 'uuid', description: 'Filtra por motorista.' })
   @IsOptional()
   @IsUUID('4', { message: 'driverId deve ser um UUID valido.' })

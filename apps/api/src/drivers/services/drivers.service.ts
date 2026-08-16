@@ -7,6 +7,8 @@ import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PLAN_ERRORS } from '../../tenants/constants/plan-error.constants';
+import { assertUnderLimit, runSerializable } from '../../tenants/utils/plan-limit.util';
 import { CreateDriverDto } from '../dto/create-driver.dto';
 import { FindDriversQueryDto } from '../dto/find-drivers-query.dto';
 import { LinkDriverUserDto } from '../dto/link-driver-user.dto';
@@ -79,30 +81,40 @@ export class DriversService {
     metadata: RequestMetadata,
   ): Promise<DriverEntity> {
     const cpf = normalizeCpf(dto.cpf);
-    await this.assertCpfAndCnhAvailable(tenantId, cpf, dto.cnhNumber);
 
-    const driver = await this.prisma.driver.create({
-      data: {
-        tenantId,
-        name: dto.name,
-        cpf,
-        cnhNumber: dto.cnhNumber,
-        cnhCategory: dto.cnhCategory.toUpperCase(),
-        cnhExpiresAt: new Date(dto.cnhExpiresAt),
-        isActive: true,
-        ...compact({
-          rg: dto.rg,
-          birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
-          phone: dto.phone,
-          email: dto.email,
-          address: dto.address,
-          city: dto.city,
-          state: dto.state?.toUpperCase(),
-          zipCode: dto.zipCode,
-          notes: dto.notes,
-          admissionDate: dto.admissionDate ? new Date(dto.admissionDate) : undefined,
-        }),
-      },
+    // Fase 48 -- checagem de duplicidade + limite do plano + create numa
+    // unica transacao Serializable: garante que duas criacoes concorrentes
+    // nunca ultrapassem juntas o limite de motoristas do tenant.
+    const driver = await runSerializable(this.prisma, async (tx) => {
+      await this.assertCpfAndCnhAvailable(tenantId, cpf, dto.cnhNumber, undefined, tx);
+
+      const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+      const count = await tx.driver.count({ where: { tenantId, deletedAt: null } });
+      assertUnderLimit(count, plan?.maxDrivers, PLAN_ERRORS.DRIVER_LIMIT_REACHED);
+
+      return tx.driver.create({
+        data: {
+          tenantId,
+          name: dto.name,
+          cpf,
+          cnhNumber: dto.cnhNumber,
+          cnhCategory: dto.cnhCategory.toUpperCase(),
+          cnhExpiresAt: new Date(dto.cnhExpiresAt),
+          isActive: true,
+          ...compact({
+            rg: dto.rg,
+            birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
+            phone: dto.phone,
+            email: dto.email,
+            address: dto.address,
+            city: dto.city,
+            state: dto.state?.toUpperCase(),
+            zipCode: dto.zipCode,
+            notes: dto.notes,
+            admissionDate: dto.admissionDate ? new Date(dto.admissionDate) : undefined,
+          }),
+        },
+      });
     });
 
     await this.audit.log({
@@ -326,14 +338,19 @@ export class DriversService {
     return driver;
   }
 
+  // Fase 48 -- aceita opcionalmente o client de uma transacao (`tx`) para
+  // create() poder rodar esta checagem dentro da mesma transacao
+  // Serializable do limite do plano; update() continua chamando sem client
+  // (default this.prisma), comportamento identico ao anterior.
   private async assertCpfAndCnhAvailable(
     tenantId: string,
     cpf: string | undefined,
     cnhNumber: string | undefined,
     before?: Driver,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<void> {
     if (cpf && cpf !== before?.cpf) {
-      const existing = await this.prisma.driver.findUnique({
+      const existing = await client.driver.findUnique({
         where: { tenantId_cpf: { tenantId, cpf } },
       });
       if (existing) {
@@ -341,7 +358,7 @@ export class DriversService {
       }
     }
     if (cnhNumber && cnhNumber !== before?.cnhNumber) {
-      const existing = await this.prisma.driver.findUnique({
+      const existing = await client.driver.findUnique({
         where: { tenantId_cnhNumber: { tenantId, cnhNumber } },
       });
       if (existing) {

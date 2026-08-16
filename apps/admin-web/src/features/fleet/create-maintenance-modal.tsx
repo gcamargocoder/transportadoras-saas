@@ -13,11 +13,15 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { createMaintenance, listVehicles } from '../../lib/api/fleet.api';
-import { MAINTENANCE_TYPE_LABELS } from '../../lib/labels';
+import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_TYPE_LABELS } from '../../lib/labels';
+import type { MaintenanceComponent } from '../../types/enums';
+
+const COMPONENT_VALUES = Object.keys(MAINTENANCE_COMPONENT_LABELS) as [string, ...string[]];
 
 const schema = z.object({
   vehicleId: z.string().uuid('Selecione o veículo.'),
   type: z.enum(['PREVENTIVE', 'CORRECTIVE', 'INSPECTION', 'EMERGENCY', 'OTHER']),
+  component: z.enum(COMPONENT_VALUES).optional().or(z.literal('')),
   workshop: z.string().optional(),
   description: z.string().optional(),
   laborCost: z.coerce.number().optional(),
@@ -44,7 +48,11 @@ export function CreateMaintenanceModal({
   } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { type: 'PREVENTIVE' } });
 
   const mutation = useMutation({
-    mutationFn: (values: FormValues) => createMaintenance(values),
+    mutationFn: (values: FormValues) =>
+      createMaintenance({
+        ...values,
+        component: values.component ? (values.component as MaintenanceComponent) : undefined,
+      }),
     onSuccess: () => {
       toast.success('Manutenção registrada com sucesso.');
       queryClient.invalidateQueries({ queryKey: ['maintenances'] });
@@ -108,6 +116,16 @@ export function CreateMaintenanceModal({
         <FormField label="Tipo" htmlFor="type" required>
           <Select id="type" {...register('type')}>
             {Object.entries(MAINTENANCE_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Componente" htmlFor="component" hint="Opcional">
+          <Select id="component" {...register('component')}>
+            <option value="">Não informado</option>
+            {Object.entries(MAINTENANCE_COMPONENT_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>

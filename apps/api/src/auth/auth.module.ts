@@ -6,6 +6,7 @@ import { AuthController } from './controllers/auth.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { AuthService } from './services/auth.service';
+import { LoginProtectionService } from './services/login-protection.service';
 import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
 
 @Module({
@@ -19,6 +20,7 @@ import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
   controllers: [AuthController],
   providers: [
     AuthService,
+    LoginProtectionService,
     JwtAccessStrategy,
     // Guards globais: JwtAuthGuard roda primeiro (popula request.user),
     // RolesGuard depois (le request.user.role quando a rota tem @Roles()).

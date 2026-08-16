@@ -1,6 +1,6 @@
 import { TripStop } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
-import { TripStopEntity, TripStopStatus } from '../entities/trip-stop.entity';
+import { TripStopEntity, TripStopListItemEntity, TripStopStatus } from '../entities/trip-stop.entity';
 
 // Fase 43 -- status e SEMPRE derivado, nunca uma coluna propria (evita
 // desincronizacao entre coluna e realidade). CANCELLED tem prioridade sobre
@@ -32,6 +32,21 @@ export function toTripStopEntity(stop: TripStop): TripStopEntity {
   entity.notes = stop.notes;
   entity.cancelledAt = stop.cancelledAt;
   entity.syncStatus = stop.syncStatus;
+  entity.deviceEventId = stop.deviceEventId;
   entity.createdAt = stop.createdAt;
+  entity.updatedAt = stop.updatedAt;
+  return entity;
+}
+
+// Fase 43 -- base para TripStopListItemEntity; vehiclePlate/driverName/
+// tripReference sao preenchidos pelo CHAMADOR (TripStopsService.findAllPaginated),
+// que ja resolveu tudo em lote -- este mapper nunca consulta o banco.
+export function toTripStopListItemEntity(stop: TripStop): TripStopListItemEntity {
+  const base = toTripStopEntity(stop);
+  const entity = new TripStopListItemEntity();
+  Object.assign(entity, base);
+  entity.vehiclePlate = '—';
+  entity.driverName = null;
+  entity.tripReference = null;
   return entity;
 }

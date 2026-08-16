@@ -62,7 +62,7 @@ const DISPOSAL_INCLUDE = { creator: true } satisfies Prisma.TireDisposalInclude;
 // entao usamos um valor fixo, documentado, comum na industria (abaixo do
 // minimo legal de 1.6mm ja e critico; 3mm e uma margem de seguranca usual
 // antes da troca programada).
-const NEAR_REPLACEMENT_THRESHOLD_MM = 3;
+export const NEAR_REPLACEMENT_THRESHOLD_MM = 3;
 
 @Injectable()
 export class TiresService {

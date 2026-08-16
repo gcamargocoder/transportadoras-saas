@@ -857,6 +857,34 @@ describe('Checklists (e2e)', () => {
       expect(attachment!.entityId).toBe(executionId);
     });
 
+    // Fase 46 -- extensao correta (.png) mas conteudo nao e um PNG real --
+    // extensao/nome do arquivo nunca provam o conteudo.
+    it('rejeita conteudo invalido disfarcado de PNG (extensao correta, assinatura invalida) com 400', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('EvidFake');
+      const { driverAuth } = await setupDriver(adminAuth, tenantId);
+      const { templateId } = await createPublishedTemplateWithPhotoItem(adminAuth);
+
+      const execRes = await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId })
+        .expect(201);
+      const executionId = execRes.body.data.id as string;
+
+      const fakePng = Buffer.from('isto nao e um png de verdade, so texto simulando uma foto');
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/evidence`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', randomUUID())
+        .field('type', 'GENERAL')
+        .attach('file', fakePng, 'foto.png')
+        .expect(400);
+
+      const count = await prisma.checklistEvidence.count({ where: { executionId } });
+      expect(count).toBe(0);
+    });
+
     it('reenvio do mesmo deviceEventId nao duplica a evidencia (idempotente)', async () => {
       const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Evid2');
       const { driverAuth } = await setupDriver(adminAuth, tenantId);

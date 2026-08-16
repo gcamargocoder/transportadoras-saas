@@ -21,8 +21,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import {
   FUEL_STATION_READ_ROLES,
   FUEL_STATION_WRITE_ROLES,
@@ -37,6 +39,7 @@ import { FuelStationsService } from '../services/fuel-stations.service';
 @ApiTags('fuel-stations')
 @ApiBearerAuth()
 @Controller('fuel-stations')
+@RequireModule(TenantModule.FUEL)
 export class FuelStationsController {
   constructor(
     private readonly fuelStationsService: FuelStationsService,

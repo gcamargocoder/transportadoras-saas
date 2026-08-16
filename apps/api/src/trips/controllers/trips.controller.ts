@@ -25,6 +25,8 @@ import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-lo
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
+import { TenantModule } from '@prisma/client';
 import { FindTripExpensesQueryDto } from '../../trip-expenses/dto/find-trip-expenses-query.dto';
 import { PaginatedTripExpensesEntity } from '../../trip-expenses/entities/paginated-trip-expenses.entity';
 import { TripFinancialSummaryEntity } from '../../trip-expenses/entities/trip-financial-summary.entity';
@@ -68,6 +70,7 @@ import { TripsService } from '../services/trips.service';
 @ApiTags('trips')
 @ApiBearerAuth()
 @Controller('trips')
+@RequireModule(TenantModule.TRIPS)
 export class TripsController {
   constructor(
     private readonly tripsService: TripsService,

@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, VehicleMaintenance, VehicleMaintenanceStatus } from '@prisma/client';
+import { MaintenancePart, Prisma, VehicleMaintenance, VehicleMaintenanceStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
@@ -10,6 +10,7 @@ import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateMaintenanceDto } from '../dto/create-maintenance.dto';
 import { FindMaintenancesQueryDto } from '../dto/find-maintenances-query.dto';
+import { MaintenancePartInputDto } from '../dto/maintenance-part-input.dto';
 import { UpdateMaintenanceStatusDto } from '../dto/update-maintenance-status.dto';
 import { UpdateMaintenanceDto } from '../dto/update-maintenance.dto';
 import { MaintenanceEntity } from '../entities/maintenance.entity';
@@ -38,6 +39,7 @@ export class MaintenancesService {
       ...(query.status ? { status: query.status } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.priority ? { priority: query.priority } : {}),
+      ...(query.component ? { component: query.component } : {}),
       ...(query.workshop
         ? { workshop: { contains: query.workshop, mode: Prisma.QueryMode.insensitive } }
         : {}),
@@ -81,6 +83,7 @@ export class MaintenancesService {
     const [items, total] = await Promise.all([
       this.prisma.vehicleMaintenance.findMany({
         where,
+        include: { parts: true },
         orderBy: { [query.sortBy]: query.sortOrder },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -125,8 +128,12 @@ export class MaintenancesService {
     if (dto.responsibleUserId) {
       await this.assertResponsibleUserBelongsToTenant(tenantId, dto.responsibleUserId);
     }
+    if (dto.maintenancePlanId) {
+      await this.assertMaintenancePlanBelongsToTenant(tenantId, dto.maintenancePlanId);
+    }
 
-    const totalCost = this.computeTotalCost(dto.laborCost, dto.partsCost);
+    const { partsCost, partsItems } = this.resolvePartsCost(dto.parts, dto.partsCost);
+    const totalCost = this.computeTotalCost(dto.laborCost, partsCost);
 
     const maintenance = await this.prisma.vehicleMaintenance.create({
       data: {
@@ -145,13 +152,20 @@ export class MaintenancesService {
           description: dto.description,
           notes: dto.notes,
           laborCost: dto.laborCost,
-          partsCost: dto.partsCost,
+          partsCost,
           totalCost,
           serviceOrderNumber: dto.serviceOrderNumber,
           warrantyUntil: dto.warrantyUntil ? new Date(dto.warrantyUntil) : undefined,
           nextReviewAt: dto.nextReviewAt ? new Date(dto.nextReviewAt) : undefined,
+          component: dto.component,
+          nextOdometerKm: dto.nextOdometerKm,
+          downtimeMinutes: dto.downtimeMinutes,
+          invoiceNumber: dto.invoiceNumber,
+          maintenancePlanId: dto.maintenancePlanId,
         }),
+        ...(partsItems ? { parts: { create: partsItems } } : {}),
       },
+      include: { parts: true },
     });
 
     await this.audit.log({
@@ -187,37 +201,53 @@ export class MaintenancesService {
     if (dto.responsibleUserId && dto.responsibleUserId !== before.responsibleUserId) {
       await this.assertResponsibleUserBelongsToTenant(tenantId, dto.responsibleUserId);
     }
+    if (dto.maintenancePlanId && dto.maintenancePlanId !== before.maintenancePlanId) {
+      await this.assertMaintenancePlanBelongsToTenant(tenantId, dto.maintenancePlanId);
+    }
 
     const effectiveOpenedAt = dto.openedAt ? new Date(dto.openedAt) : before.openedAt;
     this.assertDatesConsistent(effectiveOpenedAt, before.completedAt);
 
-    const totalCost = this.computeTotalCost(
-      dto.laborCost ?? toNumberOrNull(before.laborCost) ?? undefined,
+    const { partsCost, partsItems } = this.resolvePartsCost(
+      dto.parts,
       dto.partsCost ?? toNumberOrNull(before.partsCost) ?? undefined,
     );
+    const totalCost = this.computeTotalCost(dto.laborCost ?? toNumberOrNull(before.laborCost) ?? undefined, partsCost);
 
     const maintenance = await this.prisma.vehicleMaintenance.update({
       where: { id },
-      data: compact({
-        vehicleId: dto.vehicleId,
-        type: dto.type,
-        priority: dto.priority,
-        openedAt: dto.openedAt ? new Date(dto.openedAt) : undefined,
-        scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : undefined,
-        odometerKm: dto.odometerKm,
-        workshop: dto.workshop,
-        supplier: dto.supplier,
-        mechanic: dto.mechanic,
-        responsibleUserId: dto.responsibleUserId,
-        description: dto.description,
-        notes: dto.notes,
-        laborCost: dto.laborCost,
-        partsCost: dto.partsCost,
-        totalCost,
-        serviceOrderNumber: dto.serviceOrderNumber,
-        warrantyUntil: dto.warrantyUntil ? new Date(dto.warrantyUntil) : undefined,
-        nextReviewAt: dto.nextReviewAt ? new Date(dto.nextReviewAt) : undefined,
-      }),
+      data: {
+        ...compact({
+          vehicleId: dto.vehicleId,
+          type: dto.type,
+          priority: dto.priority,
+          openedAt: dto.openedAt ? new Date(dto.openedAt) : undefined,
+          scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : undefined,
+          odometerKm: dto.odometerKm,
+          workshop: dto.workshop,
+          supplier: dto.supplier,
+          mechanic: dto.mechanic,
+          responsibleUserId: dto.responsibleUserId,
+          description: dto.description,
+          notes: dto.notes,
+          laborCost: dto.laborCost,
+          partsCost,
+          totalCost,
+          serviceOrderNumber: dto.serviceOrderNumber,
+          warrantyUntil: dto.warrantyUntil ? new Date(dto.warrantyUntil) : undefined,
+          nextReviewAt: dto.nextReviewAt ? new Date(dto.nextReviewAt) : undefined,
+          component: dto.component,
+          nextOdometerKm: dto.nextOdometerKm,
+          downtimeMinutes: dto.downtimeMinutes,
+          invoiceNumber: dto.invoiceNumber,
+          maintenancePlanId: dto.maintenancePlanId,
+        }),
+        // Fase 45 -- quando `parts` e enviado (mesmo vazio, para limpar a
+        // lista), substitui TODAS as linhas -- nunca mescla com o que ja
+        // existia (reenvio parcial nunca deve deixar itens orfaos).
+        ...(partsItems ? { parts: { deleteMany: {}, create: partsItems } } : {}),
+      },
+      include: { parts: true },
     });
 
     await this.audit.log({
@@ -329,9 +359,13 @@ export class MaintenancesService {
     });
   }
 
-  private async findOwnedOrThrow(tenantId: string, id: string): Promise<VehicleMaintenance> {
+  private async findOwnedOrThrow(
+    tenantId: string,
+    id: string,
+  ): Promise<VehicleMaintenance & { parts: MaintenancePart[] }> {
     const maintenance = await this.prisma.vehicleMaintenance.findFirst({
       where: { id, tenantId },
+      include: { parts: true },
     });
     if (!maintenance) {
       throw new NotFoundException('Manutencao nao encontrada.');
@@ -351,6 +385,34 @@ export class MaintenancesService {
         'Usuario responsavel (responsibleUserId) nao encontrado nesta empresa.',
       );
     }
+  }
+
+  private async assertMaintenancePlanBelongsToTenant(tenantId: string, maintenancePlanId: string): Promise<void> {
+    const plan = await this.prisma.maintenancePlan.findFirst({ where: { id: maintenancePlanId, tenantId } });
+    if (!plan) {
+      throw new NotFoundException('Plano de manutencao (maintenancePlanId) nao encontrado nesta empresa.');
+    }
+  }
+
+  // Fase 45 -- quando `parts` e enviado, ele SEMPRE vence sobre um
+  // `partsCost` enviado junto (nunca os dois divergindo): partsCost passa a
+  // ser a soma calculada, nunca o valor solto do body. Sem `parts`, o
+  // comportamento e o mesmo desde a Fase 13 (partsCost aceito diretamente).
+  private resolvePartsCost(
+    parts: MaintenancePartInputDto[] | undefined,
+    fallbackPartsCost: number | undefined,
+  ): { partsCost: number | undefined; partsItems: Prisma.MaintenancePartCreateWithoutMaintenanceInput[] | undefined } {
+    if (parts === undefined) {
+      return { partsCost: fallbackPartsCost, partsItems: undefined };
+    }
+    const partsItems = parts.map((part) => ({
+      name: part.name,
+      quantity: part.quantity,
+      unitPrice: part.unitPrice,
+      totalPrice: Math.round(part.quantity * part.unitPrice * 100) / 100,
+    }));
+    const partsCost = Math.round(partsItems.reduce((sum, item) => sum + item.totalPrice, 0) * 100) / 100;
+    return { partsCost, partsItems };
   }
 
   private assertDatesConsistent(openedAt: Date, completedAt: Date | null): void {

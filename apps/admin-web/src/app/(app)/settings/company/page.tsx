@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
+import { Badge } from '../../../../components/ui/badge';
 import { Button } from '../../../../components/ui/button';
 import { Card, CardBody, CardHeader } from '../../../../components/ui/card';
 import { ErrorState } from '../../../../components/ui/error-state';
@@ -17,6 +18,30 @@ import { useAuth } from '../../../../hooks/use-auth';
 import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { getMyTenant, updateMyTenant } from '../../../../lib/api/admin.api';
 import { ADMIN_ROLES, hasRole } from '../../../../lib/auth/roles';
+import { TENANT_STATUS_LABELS, TENANT_STATUS_TONE } from '../../../../lib/labels';
+import type { TenantEntity } from '../../../../types/entities';
+
+// Fase 49 -- mensagem objetiva de ciclo de vida, pedida explicitamente por
+// status. dias restantes vem sempre calculado pelo backend
+// (plan.trialDaysRemaining) -- nunca calculado aqui a partir do relogio do
+// navegador.
+function lifecycleMessage(tenant: TenantEntity): string {
+  switch (tenant.status) {
+    case 'TRIAL': {
+      const days = tenant.plan?.trialDaysRemaining;
+      return days != null
+        ? `Seu período de avaliação termina em ${days} dia${days === 1 ? '' : 's'}.`
+        : 'Você está no período de avaliação.';
+    }
+    case 'EXPIRED':
+      return 'Período de avaliação encerrado.';
+    case 'SUSPENDED':
+      return 'Esta conta está suspensa.';
+    case 'ACTIVE':
+    default:
+      return 'Plano ativo.';
+  }
+}
 
 const schema = z.object({
   name: z.string().min(1, 'Informe a razão social.'),
@@ -68,6 +93,17 @@ export default function CompanySettingsPage(): JSX.Element {
   return (
     <div>
       <PageHeader title="Empresa" description="Dados cadastrais da transportadora." />
+
+      <Card className="mb-6 max-w-2xl">
+        <CardBody>
+          <div className="flex items-center gap-3">
+            <Badge tone={TENANT_STATUS_TONE[tenantQuery.data.status]}>
+              {TENANT_STATUS_LABELS[tenantQuery.data.status]}
+            </Badge>
+            <p className="text-sm text-ink-muted">{lifecycleMessage(tenantQuery.data)}</p>
+          </div>
+        </CardBody>
+      </Card>
 
       <Card className="max-w-2xl">
         <CardHeader

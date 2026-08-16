@@ -1,5 +1,5 @@
 import type { Paginated, PaginationParams } from '../../types/api';
-import type { TenantEntity, UserEntity } from '../../types/entities';
+import type { TenantEntity, TenantSettingsEntity, UserEntity } from '../../types/entities';
 import type { UserRole } from '../../types/enums';
 import { api } from './http';
 
@@ -56,4 +56,18 @@ export interface UpdateTenantPayload {
 
 export function updateMyTenant(payload: UpdateTenantPayload) {
   return api.patch<TenantEntity>('/tenants/me', payload);
+}
+
+// Fase 44 -- reaproveita o recurso ja existente GET/PATCH /tenant-settings
+// (Fase 8), so consumido aqui para ler/gravar
+// preferences.stopDurationThresholdsMinutes (limites de duracao de parada
+// por tipo). Nenhum endpoint novo -- PATCH sempre substitui `preferences`
+// por inteiro (comportamento ja existente do backend), entao o chamador
+// deve mesclar com o valor atual antes de enviar.
+export function getTenantSettings() {
+  return api.get<TenantSettingsEntity>('/tenant-settings');
+}
+
+export function updateTenantSettings(payload: { preferences: Record<string, unknown> }) {
+  return api.patch<TenantSettingsEntity>('/tenant-settings', payload);
 }

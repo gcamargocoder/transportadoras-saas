@@ -99,7 +99,7 @@ export function getNearbyTollPlazas(
 
 export function openStop(
   tripId: string,
-  input: { deviceEventId: string; latitude: number; longitude: number; startedAt: string },
+  input: { deviceEventId: string; type?: TripStopType; latitude: number; longitude: number; startedAt: string },
 ): Promise<TripStop> {
   return apiRequest<TripStop>(`/driver/trips/${tripId}/stops`, { method: 'POST', body: input });
 }
@@ -111,6 +111,19 @@ export function closeStop(
 ): Promise<TripStop> {
   return apiRequest<TripStop>(`/driver/trips/${tripId}/stops/${stopId}/close`, {
     method: 'PATCH',
+    body: input,
+  });
+}
+
+// Fase 43 -- fecha pelo deviceEventId usado na ABERTURA (nao pelo id do
+// servidor), unica forma de a fila offline (syncQueue.ts) enfileirar um
+// fechamento sem depender de ja ter recebido resposta da abertura.
+export function closeStopByDeviceEvent(
+  tripId: string,
+  input: { deviceEventId: string; endedAt: string; type?: TripStopType; locationLabel?: string },
+): Promise<TripStop> {
+  return apiRequest<TripStop>(`/driver/trips/${tripId}/stops/close-by-device-event`, {
+    method: 'POST',
     body: input,
   });
 }

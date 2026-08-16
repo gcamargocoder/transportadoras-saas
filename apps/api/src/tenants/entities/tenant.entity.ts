@@ -1,4 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { TenantStatus } from '@prisma/client';
+import { TenantPlanEntity } from './tenant-plan.entity';
 import { TenantSettingsEntity } from './tenant-settings.entity';
 
 // Representacao publica do tenant (id/name/document/slug/status + settings
@@ -26,8 +28,14 @@ export class TenantEntity {
   @ApiProperty()
   isActive!: boolean;
 
+  @ApiProperty({ enum: TenantStatus, description: 'Fase 47 -- status de ciclo de vida na plataforma.' })
+  status!: TenantStatus;
+
   @ApiProperty({ type: TenantSettingsEntity, nullable: true })
   settings!: TenantSettingsEntity | null;
+
+  @ApiProperty({ type: TenantPlanEntity, nullable: true })
+  plan!: TenantPlanEntity | null;
 
   @ApiProperty()
   createdAt!: Date;

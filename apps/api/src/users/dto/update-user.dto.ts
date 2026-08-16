@@ -1,6 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import {
+  PASSWORD_COMPLEXITY_MESSAGE,
+  PASSWORD_COMPLEXITY_REGEX,
+  PASSWORD_MIN_LENGTH,
+} from '../../auth/constants/password-policy.constants';
 
 export class UpdateUserDto {
   @ApiPropertyOptional({ example: 'João Operador' })
@@ -20,11 +25,12 @@ export class UpdateUserDto {
   role?: UserRole;
 
   @ApiPropertyOptional({
-    minLength: 8,
+    minLength: PASSWORD_MIN_LENGTH,
     description: 'Se informado, redefine a senha do usuario (uso administrativo).',
   })
   @IsOptional()
   @IsString()
-  @MinLength(8, { message: 'A senha deve ter no minimo 8 caracteres.' })
+  @MinLength(PASSWORD_MIN_LENGTH, { message: `A senha deve ter no minimo ${PASSWORD_MIN_LENGTH} caracteres.` })
+  @Matches(PASSWORD_COMPLEXITY_REGEX, { message: PASSWORD_COMPLEXITY_MESSAGE })
   password?: string;
 }

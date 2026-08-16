@@ -16,6 +16,8 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { compact } from '../../common/utils/compact.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PLAN_ERRORS } from '../../tenants/constants/plan-error.constants';
+import { assertUnderLimit, runSerializable } from '../../tenants/utils/plan-limit.util';
 import { CreateVehicleDto } from '../dto/create-vehicle.dto';
 import { FindVehiclesQueryDto } from '../dto/find-vehicles-query.dto';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto';
@@ -118,41 +120,52 @@ export class VehiclesService {
   ): Promise<VehicleEntity> {
     const plate = normalizePlate(dto.plate);
     this.assertYearConsistency(dto.manufactureYear, dto.modelYear);
-    await this.assertUniqueFields(tenantId, {
-      plate,
-      renavam: dto.renavam,
-      chassisNumber: dto.chassisNumber,
-    });
-    if (dto.fleetId) {
-      await this.assertFleetBelongsToTenant(tenantId, dto.fleetId);
-    }
 
-    const vehicle = await this.prisma.vehicle.create({
-      data: {
+    // Fase 48 -- checagem de duplicidade + limite do plano + create numa
+    // unica transacao Serializable: garante que duas criacoes concorrentes
+    // nunca ultrapassem juntas o limite de veiculos do tenant.
+    const vehicle = await runSerializable(this.prisma, async (tx) => {
+      await this.assertUniqueFields(
         tenantId,
-        plate,
-        type: dto.type,
-        brand: dto.brand,
-        model: dto.model,
-        ...compact({
-          fleetId: dto.fleetId,
-          renavam: dto.renavam,
-          chassisNumber: dto.chassisNumber,
-          manufactureYear: dto.manufactureYear,
-          modelYear: dto.modelYear,
-          color: dto.color,
-          category: dto.category,
-          fuelType: dto.fuelType,
-          tankCapacityLiters: dto.tankCapacityLiters,
-          averageConsumptionKmL: dto.averageConsumptionKmL,
-          odometerKm: dto.odometerKm,
-          grossWeightKg: dto.grossWeightKg,
-          netWeightKg: dto.netWeightKg,
-          cargoCapacityKg: dto.cargoCapacityKg,
-          axleCount: dto.axleCount,
-          notes: dto.notes,
-        }),
-      },
+        { plate, renavam: dto.renavam, chassisNumber: dto.chassisNumber },
+        undefined,
+        tx,
+      );
+      if (dto.fleetId) {
+        await this.assertFleetBelongsToTenant(tenantId, dto.fleetId, tx);
+      }
+
+      const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+      const count = await tx.vehicle.count({ where: { tenantId, deletedAt: null } });
+      assertUnderLimit(count, plan?.maxVehicles, PLAN_ERRORS.VEHICLE_LIMIT_REACHED);
+
+      return tx.vehicle.create({
+        data: {
+          tenantId,
+          plate,
+          type: dto.type,
+          brand: dto.brand,
+          model: dto.model,
+          ...compact({
+            fleetId: dto.fleetId,
+            renavam: dto.renavam,
+            chassisNumber: dto.chassisNumber,
+            manufactureYear: dto.manufactureYear,
+            modelYear: dto.modelYear,
+            color: dto.color,
+            category: dto.category,
+            fuelType: dto.fuelType,
+            tankCapacityLiters: dto.tankCapacityLiters,
+            averageConsumptionKmL: dto.averageConsumptionKmL,
+            odometerKm: dto.odometerKm,
+            grossWeightKg: dto.grossWeightKg,
+            netWeightKg: dto.netWeightKg,
+            cargoCapacityKg: dto.cargoCapacityKg,
+            axleCount: dto.axleCount,
+            notes: dto.notes,
+          }),
+        },
+      });
     });
 
     await this.audit.log({
@@ -362,8 +375,16 @@ export class VehiclesService {
     }
   }
 
-  private async assertFleetBelongsToTenant(tenantId: string, fleetId: string): Promise<void> {
-    const fleet = await this.prisma.fleet.findFirst({
+  // Fase 48 -- aceita opcionalmente o client de uma transacao (`tx`) para
+  // create() poder rodar esta checagem dentro da mesma transacao
+  // Serializable do limite do plano; update() continua chamando sem client
+  // (default this.prisma), comportamento identico ao anterior.
+  private async assertFleetBelongsToTenant(
+    tenantId: string,
+    fleetId: string,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<void> {
+    const fleet = await client.fleet.findFirst({
       where: { id: fleetId, tenantId, deletedAt: null },
     });
     if (!fleet) {
@@ -379,23 +400,24 @@ export class VehiclesService {
       chassisNumber?: string | undefined;
     },
     before?: Vehicle,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<void> {
     if (fields.plate && fields.plate !== before?.plate) {
-      const existing = await this.prisma.vehicle.findUnique({
+      const existing = await client.vehicle.findUnique({
         where: { tenantId_plate: { tenantId, plate: fields.plate } },
       });
       if (existing)
         throw new ConflictException('Ja existe um veiculo com esta placa nesta empresa.');
     }
     if (fields.renavam && fields.renavam !== before?.renavam) {
-      const existing = await this.prisma.vehicle.findUnique({
+      const existing = await client.vehicle.findUnique({
         where: { tenantId_renavam: { tenantId, renavam: fields.renavam } },
       });
       if (existing)
         throw new ConflictException('Ja existe um veiculo com este RENAVAM nesta empresa.');
     }
     if (fields.chassisNumber && fields.chassisNumber !== before?.chassisNumber) {
-      const existing = await this.prisma.vehicle.findUnique({
+      const existing = await client.vehicle.findUnique({
         where: { tenantId_chassisNumber: { tenantId, chassisNumber: fields.chassisNumber } },
       });
       if (existing)

@@ -10,12 +10,14 @@ import { Button } from '../../../components/ui/button';
 import { DataTable } from '../../../components/ui/data-table';
 import { FilterBar } from '../../../components/ui/filter-bar';
 import { FormField } from '../../../components/ui/form-field';
+import { LimitIndicator } from '../../../components/ui/limit-indicator';
 import { PageHeader } from '../../../components/ui/page-header';
 import { Pagination } from '../../../components/ui/pagination';
 import { SearchInput } from '../../../components/ui/search-input';
 import { Select } from '../../../components/ui/select';
 import { useAuth } from '../../../hooks/use-auth';
 import { useDebounce } from '../../../hooks/use-debounce';
+import { useTenantPlan } from '../../../hooks/use-tenant-plan';
 import { listVehicles } from '../../../lib/api/fleet.api';
 import { FLEET_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { CreateVehicleModal } from '../../../features/fleet/create-vehicle-modal';
@@ -30,6 +32,7 @@ const PAGE_SIZE = 20;
 export default function VehiclesPage(): JSX.Element {
   const router = useRouter();
   const { user } = useAuth();
+  const { plan } = useTenantPlan();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<VehicleStatus | ''>('');
@@ -83,12 +86,17 @@ export default function VehiclesPage(): JSX.Element {
         title="Veículos"
         description="Frota de veículos cadastrados na transportadora."
         actions={
-          hasRole(user?.role, FLEET_WRITE_ROLES) && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus size={16} />
-              Novo veículo
-            </Button>
-          )
+          <>
+            {query.data && (
+              <LimitIndicator label="Veículos" current={query.data.meta.total} max={plan?.maxVehicles} />
+            )}
+            {hasRole(user?.role, FLEET_WRITE_ROLES) && (
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus size={16} />
+                Novo veículo
+              </Button>
+            )}
+          </>
         }
       />
 

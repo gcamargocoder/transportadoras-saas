@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { TollTransactionStatus } from '@prisma/client';
+import { DashboardChartPointEntity } from '../../dashboard/entities/dashboard-charts.entity';
 
 export class TollDashboardGroupEntity {
   @ApiProperty({ format: 'uuid', nullable: true })
@@ -84,4 +85,10 @@ export class TollDashboardEntity {
     description: 'correctCount / conferredCount * 100. 0 quando conferredCount = 0 (nunca NaN).',
   })
   conformityPercentage!: number;
+
+  @ApiProperty({
+    type: [DashboardChartPointEntity],
+    description: 'Ultimos 12 meses, sempre (ignora chargedFrom/chargedTo). Soma de chargedAmount por mes.',
+  })
+  monthlyTrendChargedAmount!: DashboardChartPointEntity[];
 }

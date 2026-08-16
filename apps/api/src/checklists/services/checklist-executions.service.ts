@@ -1,12 +1,21 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ChecklistExecutionStatus, ChecklistTemplateStatus, Prisma } from '@prisma/client';
+import { promises as fs } from 'fs';
+import { extname } from 'path';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { compact } from '../../common/utils/compact.util';
+import { assertValidFileSignature, ValidatedFileKind } from '../../common/utils/file-signature.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PLAN_ERRORS } from '../../tenants/constants/plan-error.constants';
+import {
+  assertStorageUnderLimit,
+  getStorageUsedBytes,
+  runSerializable,
+} from '../../tenants/utils/plan-limit.util';
 import { CreateChecklistExecutionDto } from '../dto/create-checklist-execution.dto';
 import { FindChecklistExecutionsQueryDto } from '../dto/find-checklist-executions-query.dto';
 import { SubmitChecklistAnswersDto } from '../dto/submit-checklist-answers.dto';
@@ -196,6 +205,19 @@ export class ChecklistExecutionsService {
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<ChecklistEvidenceEntity> {
+    // Fase 46 -- extensao do nome de arquivo (ja validada pelo fileFilter
+    // do multer) nunca prova o conteudo real; so .jpg/.jpeg/.png sao
+    // aceitas aqui (ALLOWED_CHECKLIST_EVIDENCE_EXTENSIONS). Confere a
+    // assinatura binaria do arquivo ja salvo em disco ANTES de qualquer
+    // escrita no banco -- apaga e rejeita se nao bater.
+    const kind: ValidatedFileKind = extname(file.originalname).toLowerCase() === '.png' ? 'PNG' : 'JPEG';
+    try {
+      await assertValidFileSignature(file.path, kind);
+    } catch (error) {
+      await fs.unlink(file.path).catch(() => undefined);
+      throw error;
+    }
+
     const execution = await this.findOwnedOrThrow(tenantId, driverId, executionId);
 
     const existing = await this.prisma.checklistEvidence.findFirst({
@@ -221,7 +243,16 @@ export class ChecklistExecutionsService {
       }
     }
 
-    const evidence = await this.prisma.$transaction(async (tx) => {
+    // Fase 48 -- limite de armazenamento do plano: checagem + create do
+    // Attachment numa unica transacao Serializable, mesmo mecanismo dos
+    // limites de usuarios/veiculos/motoristas. O multer ja gravou o arquivo
+    // em disco antes deste metodo rodar -- se o limite estourar, o arquivo
+    // e apagado (nunca fica persistido/referenciado por um Attachment).
+    const evidence = await runSerializable(this.prisma, async (tx) => {
+      const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+      const usedBytes = await getStorageUsedBytes(tx, tenantId);
+      assertStorageUnderLimit(usedBytes, file.size, plan?.maxStorageMb, PLAN_ERRORS.STORAGE_LIMIT_REACHED);
+
       const attachment = await tx.attachment.create({
         data: {
           tenantId,
@@ -229,6 +260,7 @@ export class ChecklistExecutionsService {
           entityId: executionId,
           storageKey: file.filename,
           uploadedById: actor.userId,
+          sizeBytes: file.size,
         },
       });
       return tx.checklistEvidence.create({
@@ -247,6 +279,9 @@ export class ChecklistExecutionsService {
           }),
         },
       });
+    }).catch(async (error: unknown) => {
+      await fs.unlink(file.path).catch(() => undefined);
+      throw error;
     });
 
     await this.audit.log({

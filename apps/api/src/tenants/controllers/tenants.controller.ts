@@ -29,16 +29,22 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Public } from '../../auth/decorators/public.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { extractRequestMetadata } from '../../auth/utils/request-metadata.util';
+import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
 import { ADMIN_THROTTLE, CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { TenantContext } from '../context/tenant-context';
 import { CurrentTenant } from '../decorators/current-tenant.decorator';
+import { ChangeTenantStatusDto } from '../dto/change-tenant-status.dto';
 import { CreateTenantDto } from '../dto/create-tenant.dto';
 import { FindTenantsQueryDto } from '../dto/find-tenants-query.dto';
 import { UpdateTenantFullDto } from '../dto/update-tenant-full.dto';
+import { UpdateTenantPlanDto } from '../dto/update-tenant-plan.dto';
 import { UpdateTenantStatusDto } from '../dto/update-tenant-status.dto';
 import { UpdateTenantDto } from '../dto/update-tenant.dto';
 import { PaginatedTenantsEntity } from '../entities/paginated-tenants.entity';
+import { PlatformDashboardEntity } from '../entities/platform-dashboard.entity';
 import { TenantEntity } from '../entities/tenant.entity';
+import { TenantUsageEntity } from '../entities/tenant-usage.entity';
 import { TenantsService } from '../services/tenants.service';
 
 @ApiTags('tenants')
@@ -122,6 +128,23 @@ export class TenantsController {
     return this.tenantsService.findAll(query);
   }
 
+  // Fase 47 -- "dashboard" precisa vir ANTES de ":id" pelo mesmo motivo
+  // documentado acima para "me"/"me/status": ":id" e generico e
+  // capturaria "dashboard" como se fosse um uuid.
+  @Get('dashboard')
+  @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      '[Super Admin] Dashboard global da plataforma: total de transportadoras por status, ' +
+      'total de usuarios/veiculos/motoristas, distribuicao por plano e atividade recente (30 dias).',
+  })
+  @ApiOkResponse({ type: PlatformDashboardEntity })
+  getPlatformDashboard(): Promise<PlatformDashboardEntity> {
+    return this.tenantsService.getPlatformDashboard();
+  }
+
   @Get(':id')
   @Roles(UserRole.SUPER_ADMIN)
   @Throttle(ADMIN_THROTTLE)
@@ -131,6 +154,35 @@ export class TenantsController {
   @ApiNotFoundResponse({ description: 'Tenant nao encontrado.' })
   findById(@Param('id', ParseUUIDPipe) id: string): Promise<TenantEntity> {
     return this.tenantsService.findById(id);
+  }
+
+  @Get(':id/usage')
+  @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      '[Super Admin] Utilizacao real da transportadora: usuarios, motoristas, veiculos, viagens, ' +
+      'checklists, abastecimentos, manutencoes e anexos (proxy de armazenamento).',
+  })
+  @ApiOkResponse({ type: TenantUsageEntity })
+  @ApiNotFoundResponse({ description: 'Tenant nao encontrado.' })
+  getUsage(@Param('id', ParseUUIDPipe) id: string): Promise<TenantUsageEntity> {
+    return this.tenantsService.getUsage(id);
+  }
+
+  @Get(':id/history')
+  @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '[Super Admin] Historico de auditoria da transportadora (quem, quando, IP, antes/depois).' })
+  @ApiOkResponse({ type: PaginatedAuditLogEntity })
+  @ApiNotFoundResponse({ description: 'Tenant nao encontrado.' })
+  getHistory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<PaginatedAuditLogEntity> {
+    return this.tenantsService.getHistory(id, query);
   }
 
   @Patch(':id')
@@ -150,6 +202,44 @@ export class TenantsController {
     @Req() request: Request,
   ): Promise<TenantEntity> {
     return this.tenantsService.updateById(id, dto, { userId }, extractRequestMetadata(request));
+  }
+
+  @Patch(':id/status')
+  @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      '[Super Admin] Altera o status de ciclo de vida da transportadora (ACTIVE/TRIAL/SUSPENDED/EXPIRED). ' +
+      'SUSPENDED/EXPIRED bloqueiam o acesso (isActive=false); ACTIVE/TRIAL liberam.',
+  })
+  @ApiOkResponse({ type: TenantEntity })
+  @ApiNotFoundResponse({ description: 'Tenant nao encontrado.' })
+  changeStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeTenantStatusDto,
+    @CurrentUser('sub') userId: string,
+    @Req() request: Request,
+  ): Promise<TenantEntity> {
+    return this.tenantsService.changeStatus(id, dto, { userId }, extractRequestMetadata(request));
+  }
+
+  @Patch(':id/plan')
+  @Roles(UserRole.SUPER_ADMIN)
+  @Throttle(ADMIN_THROTTLE)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '[Super Admin] Atualiza plano/limites/modulos habilitados da transportadora (atualizacao parcial).',
+  })
+  @ApiOkResponse({ type: TenantEntity })
+  @ApiNotFoundResponse({ description: 'Tenant nao encontrado.' })
+  updatePlan(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTenantPlanDto,
+    @CurrentUser('sub') userId: string,
+    @Req() request: Request,
+  ): Promise<TenantEntity> {
+    return this.tenantsService.updatePlan(id, dto, { userId }, extractRequestMetadata(request));
   }
 
   @Delete(':id')

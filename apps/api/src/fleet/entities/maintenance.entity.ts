@@ -1,9 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  MaintenanceComponent,
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
 } from '@prisma/client';
+import { MaintenancePartEntity } from './maintenance-part.entity';
 
 export class MaintenanceEntity {
   @ApiProperty({ format: 'uuid' })
@@ -71,6 +73,24 @@ export class MaintenanceEntity {
 
   @ApiProperty({ nullable: true, description: 'Data prevista da proxima revisao.' })
   nextReviewAt!: Date | null;
+
+  @ApiProperty({ enum: MaintenanceComponent, nullable: true })
+  component!: MaintenanceComponent | null;
+
+  @ApiProperty({ nullable: true, description: 'Quilometragem prevista da proxima manutencao deste componente.' })
+  nextOdometerKm!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'Tempo de veiculo parado (minutos), informado explicitamente.' })
+  downtimeMinutes!: number | null;
+
+  @ApiProperty({ nullable: true })
+  invoiceNumber!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  maintenancePlanId!: string | null;
+
+  @ApiProperty({ type: [MaintenancePartEntity] })
+  parts!: MaintenancePartEntity[];
 
   @ApiProperty()
   createdAt!: Date;

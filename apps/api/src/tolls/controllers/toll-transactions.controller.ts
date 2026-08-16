@@ -21,8 +21,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { TOLL_READ_ROLES, TOLL_WRITE_ROLES } from '../constants/toll-roles.constants';
 import { CreateTollTransactionDto } from '../dto/create-toll-transaction.dto';
 import { FindTollTransactionsQueryDto } from '../dto/find-toll-transactions-query.dto';
@@ -35,6 +37,7 @@ import { TollTransactionsService } from '../services/toll-transactions.service';
 @ApiTags('toll-transactions')
 @ApiBearerAuth()
 @Controller('toll-transactions')
+@RequireModule(TenantModule.TOLLS)
 export class TollTransactionsController {
   constructor(
     private readonly tollTransactionsService: TollTransactionsService,

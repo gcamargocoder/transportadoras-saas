@@ -57,6 +57,28 @@ export class TripStopEntity {
   @ApiProperty({ enum: SyncStatus })
   syncStatus!: SyncStatus;
 
+  @ApiProperty({ description: 'Chave de idempotencia usada na abertura (Fase 43, secao 24 -- detalhe da parada).' })
+  deviceEventId!: string;
+
   @ApiProperty()
   createdAt!: Date;
+
+  @ApiProperty()
+  updatedAt!: Date;
+}
+
+// Fase 43 -- GET /trip-stops (listagem administrativa cross-frota, secao 23
+// do pedido: colunas Veiculo/Placa/Motorista/Viagem). placa/nome/referencia
+// resolvidos em LOTE por TripStopsService.findAllPaginated (3 queries
+// extras no total, nunca 1 por linha -- ver comentario la mesmo). null
+// quando o dado nao existe (motorista/viagem opcionais desde a Fase 43).
+export class TripStopListItemEntity extends TripStopEntity {
+  @ApiProperty()
+  vehiclePlate!: string;
+
+  @ApiProperty({ nullable: true })
+  driverName!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'Origem -> destino da viagem associada, quando houver.' })
+  tripReference!: string | null;
 }

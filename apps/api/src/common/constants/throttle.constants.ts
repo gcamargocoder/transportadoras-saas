@@ -18,3 +18,7 @@ export const ADMIN_THROTTLE = { default: { limit: 30, ttl: 60_000 } };
 // Endpoints criticos: operacoes destrutivas (DELETE) sobre entidades de
 // negocio.
 export const CRITICAL_THROTTLE = { default: { limit: 20, ttl: 60_000 } };
+
+// Fase 46 -- uploads (processamento de arquivo tem custo de IO/CPU real) e
+// operacoes de sincronizacao custosas (chamadas a fontes externas).
+export const UPLOAD_THROTTLE = { default: { limit: 10, ttl: 60_000 } };

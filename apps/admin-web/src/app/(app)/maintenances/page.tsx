@@ -17,9 +17,9 @@ import { CreateMaintenanceModal } from '../../../features/fleet/create-maintenan
 import { MAINTENANCE_STATUS_TONE } from '../../../features/fleet/status';
 import { listMaintenances } from '../../../lib/api/fleet.api';
 import { FLEET_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
-import { MAINTENANCE_STATUS_LABELS, MAINTENANCE_TYPE_LABELS } from '../../../lib/labels';
+import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_STATUS_LABELS, MAINTENANCE_TYPE_LABELS } from '../../../lib/labels';
 import type { MaintenanceEntity } from '../../../types/entities';
-import type { VehicleMaintenanceStatus } from '../../../types/enums';
+import type { MaintenanceComponent, VehicleMaintenanceStatus } from '../../../types/enums';
 import { formatCurrency, formatDate } from '../../../utils/format';
 
 const PAGE_SIZE = 20;
@@ -28,18 +28,20 @@ export default function MaintenancesPage(): JSX.Element {
   const { user } = useAuth();
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<VehicleMaintenanceStatus | ''>('');
+  const [component, setComponent] = useState<MaintenanceComponent | ''>('');
   const [createOpen, setCreateOpen] = useState(false);
 
   const query = useQuery({
-    queryKey: ['maintenances', { page, status }],
+    queryKey: ['maintenances', { page, status, component }],
     queryFn: ({ signal }) =>
-      listMaintenances({ page, pageSize: PAGE_SIZE, status: status || undefined }, signal),
+      listMaintenances({ page, pageSize: PAGE_SIZE, status: status || undefined, component: component || undefined }, signal),
   });
 
   const columns = useMemo<ColumnDef<MaintenanceEntity, unknown>[]>(
     () => [
       { header: 'Tipo', accessorFn: (row) => MAINTENANCE_TYPE_LABELS[row.type] },
       { header: 'Abertura', cell: ({ row }) => formatDate(row.original.openedAt) },
+      { header: 'Componente', accessorFn: (row) => (row.component ? MAINTENANCE_COMPONENT_LABELS[row.component] : '-') },
       { header: 'Oficina', accessorFn: (row) => row.workshop ?? '-' },
       { header: 'Custo total', cell: ({ row }) => formatCurrency(row.original.totalCost) },
       {
@@ -70,9 +72,10 @@ export default function MaintenancesPage(): JSX.Element {
       />
 
       <FilterBar
-        hasActiveFilters={Boolean(status)}
+        hasActiveFilters={Boolean(status || component)}
         onClear={() => {
           setStatus('');
+          setComponent('');
           setPage(1);
         }}
       >
@@ -89,6 +92,23 @@ export default function MaintenancesPage(): JSX.Element {
             {(Object.keys(MAINTENANCE_STATUS_LABELS) as VehicleMaintenanceStatus[]).map((s) => (
               <option key={s} value={s}>
                 {MAINTENANCE_STATUS_LABELS[s]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Componente" htmlFor="maint-component" className="w-full sm:w-48">
+          <Select
+            id="maint-component"
+            value={component}
+            onChange={(e) => {
+              setComponent(e.target.value as MaintenanceComponent | '');
+              setPage(1);
+            }}
+          >
+            <option value="">Todos</option>
+            {(Object.keys(MAINTENANCE_COMPONENT_LABELS) as MaintenanceComponent[]).map((c) => (
+              <option key={c} value={c}>
+                {MAINTENANCE_COMPONENT_LABELS[c]}
               </option>
             ))}
           </Select>

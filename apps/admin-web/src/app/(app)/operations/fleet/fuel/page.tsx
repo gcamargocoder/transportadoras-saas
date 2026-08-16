@@ -3,7 +3,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Droplets, Fuel, Gauge, Info, ShieldAlert, Wallet } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 import { useMemo } from 'react';
 import { Badge } from '../../../../../components/ui/badge';
 import { Card, CardHeader } from '../../../../../components/ui/card';
@@ -14,14 +13,11 @@ import { SkeletonCards } from '../../../../../components/ui/skeleton';
 import { StatCard } from '../../../../../components/ui/stat-card';
 import { MonthlyChartCard } from '../../../../../features/dashboard/monthly-chart-card';
 import { FleetFilters } from '../../../../../features/fleet-operations/fleet-filters';
+import { RankingCard } from '../../../../../features/fleet-operations/ranking-card';
+import { TankGaugeCard } from '../../../../../features/fleet-operations/tank-gauge-card';
 import { useFleetOperationsFilters } from '../../../../../features/fleet-operations/use-fleet-operations-filters';
 import { getFleetOperationsFuel } from '../../../../../lib/api/fleet-operations.api';
-import type {
-  FleetAlertSeverity,
-  FleetFuelFleetBreakdownEntity,
-  FleetFuelVehicleBreakdownEntity,
-  FleetVehicleRankingEntryEntity,
-} from '../../../../../types/entities';
+import type { FleetAlertSeverity, FleetFuelFleetBreakdownEntity, FleetFuelVehicleBreakdownEntity } from '../../../../../types/entities';
 import { formatCurrency, formatNumber } from '../../../../../utils/format';
 
 const ALERT_SEVERITY_TONE: Record<FleetAlertSeverity, 'danger' | 'warning' | 'info'> = {
@@ -120,7 +116,7 @@ export default function FleetFuelPage(): JSX.Element {
       {query.data && (
         <div className="flex flex-col gap-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="Custo total" value={formatCurrency(query.data.summary.totalCost)} icon={Wallet} />
+            <StatCard label="Custo total" value={formatCurrency(query.data.summary.totalCost)} icon={Wallet} variant="gradient" />
             <StatCard label="Litros abastecidos" value={`${formatNumber(query.data.summary.totalLiters, 1)} L`} icon={Droplets} />
             <StatCard label="Abastecimentos" value={formatNumber(query.data.summary.supplyCount)} icon={Fuel} />
             <StatCard label="Preço médio/litro" value={nullableCurrency(query.data.summary.averagePricePerLiter)} />
@@ -147,6 +143,22 @@ export default function FleetFuelPage(): JSX.Element {
               />
             )}
           </div>
+
+          <Card>
+            <CardHeader
+              title="Nível dos tanques"
+              description="Estimativa a partir do último abastecimento e do consumo médio cadastrado por veículo — não é leitura de sensor. Veículos sem capacidade/consumo/abastecimento cadastrado aparecem como indisponíveis, nunca com um número inventado."
+            />
+            {query.data.tankLevels.length === 0 ? (
+              <p className="p-5 text-sm text-ink-muted">Nenhum veículo ativo no período/filtro selecionado.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-3 lg:grid-cols-6">
+                {query.data.tankLevels.map((tank) => (
+                  <TankGaugeCard key={tank.vehicleId} tank={tank} />
+                ))}
+              </div>
+            )}
+          </Card>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <MonthlyChartCard title="Evolução mensal do custo" data={query.data.monthlyTrendCost} color="#4f46e5" />
@@ -241,40 +253,5 @@ export default function FleetFuelPage(): JSX.Element {
         </div>
       )}
     </div>
-  );
-}
-
-function RankingCard({
-  title,
-  icon: Icon,
-  entries,
-  formatValue,
-  emptyMessage = 'Sem dados no período/filtro selecionado.',
-}: {
-  title: string;
-  icon: LucideIcon;
-  entries: FleetVehicleRankingEntryEntity[];
-  formatValue: (value: number) => string;
-  emptyMessage?: string;
-}): JSX.Element {
-  return (
-    <Card>
-      <CardHeader title={title} />
-      {entries.length === 0 ? (
-        <p className="p-5 text-sm text-ink-muted">{emptyMessage}</p>
-      ) : (
-        <ol className="flex flex-col divide-y divide-border">
-          {entries.map((entry, index) => (
-            <li key={entry.vehicleId} className="flex items-center justify-between gap-3 px-5 py-3">
-              <span className="flex items-center gap-2 text-sm text-ink">
-                <Icon size={14} className="text-ink-subtle" />
-                <span className="text-xs text-ink-subtle">{index + 1}.</span> {entry.plate}
-              </span>
-              <span className="text-sm font-medium text-ink">{formatValue(entry.value)}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </Card>
   );
 }

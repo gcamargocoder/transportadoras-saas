@@ -21,9 +21,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import { TenantModule, UserRole } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { TOLL_READ_ROLES } from '../constants/toll-roles.constants';
 import { CreateTollPlazaDto } from '../dto/create-toll-plaza.dto';
 import { FindTollPlazasQueryDto } from '../dto/find-toll-plazas-query.dto';
@@ -38,6 +39,7 @@ import { TollPlazasService } from '../services/toll-plazas.service';
 @ApiTags('toll-plazas')
 @ApiBearerAuth()
 @Controller('toll-plazas')
+@RequireModule(TenantModule.TOLLS)
 export class TollPlazasController {
   constructor(
     private readonly tollPlazasService: TollPlazasService,

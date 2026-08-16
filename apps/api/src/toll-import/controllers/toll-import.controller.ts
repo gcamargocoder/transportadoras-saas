@@ -22,8 +22,12 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { TenantModule } from '@prisma/client';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { UPLOAD_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
+import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import {
   TOLL_IMPORT_READ_ROLES,
   TOLL_IMPORT_WRITE_ROLES,
@@ -40,6 +44,7 @@ import { TollImportService } from '../services/toll-import.service';
 @ApiTags('toll-import')
 @ApiBearerAuth()
 @Controller('toll-import')
+@RequireModule(TenantModule.TOLLS)
 export class TollImportController {
   constructor(
     private readonly tollImportService: TollImportService,
@@ -48,6 +53,7 @@ export class TollImportController {
 
   @Post()
   @Roles(...TOLL_IMPORT_WRITE_ROLES)
+  @Throttle(UPLOAD_THROTTLE)
   @UseInterceptors(FileInterceptor('file'))
   @UseFilters(MulterExceptionFilter)
   @ApiConsumes('multipart/form-data')
