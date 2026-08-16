@@ -541,3 +541,17 @@ export const FiscalDocumentSource = {
   XML_IMPORT: 'XML_IMPORT',
 } as const;
 export type FiscalDocumentSource = (typeof FiscalDocumentSource)[keyof typeof FiscalDocumentSource];
+
+// Fase 54 -- motivos OBJETIVOS de inconsistencia estrutural (nunca fiscal/
+// SEFAZ). "XML invalido" nao aparece aqui: nunca e persistido (rejeitado com
+// 400 na importacao).
+export const FiscalIssueCode = {
+  INVALID_ACCESS_KEY: 'INVALID_ACCESS_KEY',
+  TYPE_MISMATCH: 'TYPE_MISMATCH',
+  ESSENTIAL_FIELDS_MISSING: 'ESSENTIAL_FIELDS_MISSING',
+  INCONSISTENT_DATE: 'INCONSISTENT_DATE',
+  DUPLICATE_CANDIDATE: 'DUPLICATE_CANDIDATE',
+  INCONSISTENT_LINK: 'INCONSISTENT_LINK',
+  NO_TRIP_CONTEXT: 'NO_TRIP_CONTEXT',
+} as const;
+export type FiscalIssueCode = (typeof FiscalIssueCode)[keyof typeof FiscalIssueCode];

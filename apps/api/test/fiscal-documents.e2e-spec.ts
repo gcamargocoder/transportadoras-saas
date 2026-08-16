@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { computeAccessKeyCheckDigit } from '../src/fiscal/utils/access-key.util';
 
 const VALID_PDF = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF');
 const VALID_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
@@ -54,6 +55,26 @@ function buildMdfeXml(accessKey: string, number: string): string {
 
 function randomAccessKey(): string {
   return Array.from({ length: 44 }, () => Math.floor(Math.random() * 10)).join('');
+}
+
+// Fase 54 -- monta uma chave de acesso ESTRUTURALMENTE valida (DV mod-11
+// correto, modelo do documento embutido nas posicoes 21-22) para testar o
+// validador estrutural com um "documento bom" de verdade, nao so aleatorio.
+function buildValidAccessKey(modelCode: '55' | '57' | '58'): string {
+  const cUF = '35';
+  const aamm = '2608';
+  const cnpj = Array.from({ length: 14 }, () => Math.floor(Math.random() * 10)).join('');
+  const serie = '001';
+  const nNF = String(Math.floor(Math.random() * 999999999)).padStart(9, '0');
+  const tpEmis = '1';
+  const cNF = String(Math.floor(Math.random() * 99999999)).padStart(8, '0');
+  const first43 = `${cUF}${aamm}${cnpj}${modelCode}${serie}${nNF}${tpEmis}${cNF}`;
+  return `${first43}${computeAccessKeyCheckDigit(first43)}`;
+}
+
+function withInvalidCheckDigit(accessKey: string): string {
+  const dv = Number(accessKey[43]);
+  return `${accessKey.slice(0, 43)}${(dv + 1) % 10}`;
 }
 
 describe('Fiscal Documents (e2e)', () => {
@@ -379,6 +400,16 @@ describe('Fiscal Documents (e2e)', () => {
         .set('Authorization', adminAuth)
         .attach('file', Buffer.from('<comprovante><foo>bar</foo></comprovante>'), 'desconhecido.xml')
         .expect(400);
+    });
+
+    it('rejeita XML malformado (tags desbalanceadas) com mensagem distinta de "tipo nao reconhecido"', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('ImportMalformed');
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .attach('file', Buffer.from('<infNFe><ide><nNF>1</nNF></ide'), 'quebrado.xml')
+        .expect(400);
+      expect(res.body.message).toMatch(/malformado/i);
     });
   });
 
@@ -775,6 +806,277 @@ describe('Fiscal Documents (e2e)', () => {
       expect(byTrip.body.data.totalDocuments).toBe(1);
       expect(byTrip.body.data.linkedCount).toBe(1);
       expect(byTrip.body.data.unlinkedCount).toBe(0);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 54 -- validacao estrutural e conformidade documental
+  // ==========================================================================
+  describe('Fase 54 -- validacao estrutural e conformidade documental', () => {
+    it('documento consistente (upload com accessKey valida) nao tem validationIssues', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesNone');
+      const accessKey = buildValidAccessKey('55');
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('accessKey', accessKey)
+        .attach('file', VALID_PDF, 'nota.pdf')
+        .expect(201);
+      expect(res.body.data.validationIssues).toEqual([]);
+    });
+
+    it('chave de acesso com digito verificador invalido -- INVALID_ACCESS_KEY (nunca bloqueado na escrita)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesKey');
+      const badKey = withInvalidCheckDigit(buildValidAccessKey('55'));
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('accessKey', badKey)
+        .attach('file', VALID_PDF, 'nota.pdf')
+        .expect(201);
+      expect(uploadRes.body.data.validationIssues).toEqual(['INVALID_ACCESS_KEY']);
+
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(getRes.body.data.validationIssues).toEqual(['INVALID_ACCESS_KEY']);
+    });
+
+    it('tipo incompativel com o modelo embutido na chave de acesso -- TYPE_MISMATCH', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesType');
+      const cteKey = buildValidAccessKey('57'); // modelo 57 = CT-e
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE') // mas informado como NF-e
+        .field('accessKey', cteKey)
+        .attach('file', VALID_PDF, 'nota.pdf')
+        .expect(201);
+      expect(res.body.data.validationIssues).toEqual(['TYPE_MISMATCH']);
+    });
+
+    it('importacao XML com campos essenciais ausentes -- ESSENTIAL_FIELDS_MISSING (so para source XML_IMPORT)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesMissing');
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .attach('file', Buffer.from('<NFe><infNFe><ide><nNF>1</nNF></ide></infNFe></NFe>'), 'incompleto.xml')
+        .expect(201);
+      expect(res.body.data.validationIssues).toEqual(['ESSENTIAL_FIELDS_MISSING']);
+
+      // Upload manual (source=UPLOAD) NUNCA e exigido a ter esses campos --
+      // sem regra de negocio que force isso (evita falso positivo em CIOT/
+      // comprovante manual legitimamente esparso).
+      const manualRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+      expect(manualRes.body.data.validationIssues).toEqual([]);
+    });
+
+    it('data de emissao no futuro -- INCONSISTENT_DATE', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesDate');
+      const futureYear = new Date().getUTCFullYear() + 5;
+      const xml = buildNfeXml(randomAccessKey(), '1').replace('2026-08-01T10:00:00-03:00', `${futureYear}-01-01T10:00:00-03:00`);
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .attach('file', Buffer.from(xml), 'futura.xml')
+        .expect(201);
+      expect(res.body.data.validationIssues).toContain('INCONSISTENT_DATE');
+    });
+
+    it('mesmo tipo+numero+serie em 2 documentos com chaves diferentes -- DUPLICATE_CANDIDATE em ambos', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesDup');
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('documentNumber', 'DUP-1')
+        .field('series', '1')
+        .field('accessKey', buildValidAccessKey('55'))
+        .attach('file', VALID_PDF, 'nota1.pdf')
+        .expect(201);
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('documentNumber', 'DUP-1')
+        .field('series', '1')
+        .field('accessKey', buildValidAccessKey('55'))
+        .attach('file', VALID_PDF, 'nota2.pdf')
+        .expect(201);
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents?documentNumber=DUP-1')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(list.body.data.items).toHaveLength(2);
+      for (const item of list.body.data.items) {
+        expect(item.validationIssues).toContain('DUPLICATE_CANDIDATE');
+      }
+
+      const detail = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${first.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(detail.body.data.validationIssues).toContain('DUPLICATE_CANDIDATE');
+      expect(second.body.data.id).not.toBe(first.body.data.id); // nunca deduplicado -- so sinalizado
+    });
+
+    it('documento vinculado a viagem mas com veiculo diferente do da composicao -- INCONSISTENT_LINK', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesLink');
+      const { tripId } = await setupTripAndVehicle(adminAuth); // veiculo real da viagem = V1
+      const otherVehicleId = await createVehicle(adminAuth); // V2, sem relacao com a viagem
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .field('tripId', tripId)
+        .field('vehicleId', otherVehicleId)
+        .attach('file', VALID_PDF, 'doc.pdf')
+        .expect(201);
+      expect(res.body.data.validationIssues).toContain('INCONSISTENT_LINK');
+    });
+
+    it('documento com vinculo operacional mas sem viagem -- NO_TRIP_CONTEXT; sem NENHUM vinculo nao e sinalizado', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesNoTrip');
+      const vehicleId = await createVehicle(adminAuth);
+
+      const withVehicle = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .field('vehicleId', vehicleId)
+        .attach('file', VALID_PDF, 'doc1.pdf')
+        .expect(201);
+      expect(withVehicle.body.data.validationIssues).toContain('NO_TRIP_CONTEXT');
+
+      const withoutAnyLink = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .attach('file', VALID_PDF, 'doc2.pdf')
+        .expect(201);
+      expect(withoutAnyLink.body.data.validationIssues).not.toContain('NO_TRIP_CONTEXT');
+    });
+
+    it('dashboard: cancelledCount, alerts agregados e problematicDocuments inclui VALID com inconsistencia', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesDashboard');
+      const badKey = withInvalidCheckDigit(buildValidAccessKey('55'));
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('accessKey', badKey)
+        .attach('file', VALID_PDF, 'nota.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'VALID' })
+        .expect(200);
+
+      const cancelledRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .attach('file', VALID_PDF, 'cancel.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${cancelledRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'CANCELLED' })
+        .expect(200);
+
+      const dashboard = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(dashboard.body.data.cancelledCount).toBe(1);
+      expect(dashboard.body.data.alerts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'INVALID_ACCESS_KEY', count: 1 })]),
+      );
+      const flagged = dashboard.body.data.problematicDocuments.find((d: { id: string }) => d.id === uploadRes.body.data.id);
+      expect(flagged).toBeTruthy();
+      expect(flagged.status).toBe('VALID'); // problematico por inconsistencia estrutural, nao so por status
+      expect(flagged.validationIssues).toContain('INVALID_ACCESS_KEY');
+    });
+
+    it('status documental da viagem: structurallyValidCount/problematicCount/completeness sempre indisponivel', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IssuesTripStatus');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const okRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('accessKey', buildValidAccessKey('55'))
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'ok.pdf')
+        .expect(201);
+      // Marca o "bom" como VALID -- so entra em structurallyValidCount quando
+      // status=VALID E sem inconsistencia estrutural (upload sozinho deixa
+      // PENDING, que ja conta como problematico pelo criterio herdado da
+      // Fase 53).
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${okRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'VALID' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'NFE')
+        .field('accessKey', withInvalidCheckDigit(buildValidAccessKey('55')))
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'bad.pdf')
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.problematicCount).toBe(1); // so o PENDING com INVALID_ACCESS_KEY
+      expect(res.body.data.structurallyValidCount).toBe(1); // o VALID sem inconsistencia
+      expect(res.body.data.problematicDocuments).toHaveLength(1);
+      expect(res.body.data.problematicDocuments[0].validationIssues).toContain('INVALID_ACCESS_KEY');
+      expect(res.body.data.completenessPercent).toBeNull();
+      expect(res.body.data.completenessAvailable).toBe(false);
+    });
+
+    it('duplicidade nunca cruza tenants: mesmo tipo+numero+serie em tenants diferentes nao vira DUPLICATE_CANDIDATE', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('IssuesDupIsoA');
+      const tenantB = await createTenantAndLoginAsAdmin('IssuesDupIsoB');
+
+      const resA = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', tenantA.adminAuth)
+        .field('documentType', 'NFE')
+        .field('documentNumber', 'CROSS-1')
+        .field('series', '1')
+        .attach('file', VALID_PDF, 'a.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', tenantB.adminAuth)
+        .field('documentType', 'NFE')
+        .field('documentNumber', 'CROSS-1')
+        .field('series', '1')
+        .attach('file', VALID_PDF, 'b.pdf')
+        .expect(201);
+
+      const getA = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${resA.body.data.id}`)
+        .set('Authorization', tenantA.adminAuth)
+        .expect(200);
+      expect(getA.body.data.validationIssues).not.toContain('DUPLICATE_CANDIDATE');
     });
   });
 

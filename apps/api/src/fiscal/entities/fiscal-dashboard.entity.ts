@@ -1,7 +1,21 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { FiscalDocumentStatus, FiscalDocumentType } from '@prisma/client';
 import { DashboardChartPointEntity } from '../../dashboard/entities/dashboard-charts.entity';
+import { FiscalIssueCode } from '../utils/fiscal-document-validation.util';
 import { FiscalDocumentEntity } from './fiscal-document.entity';
+
+// Fase 54 -- contagem de documentos por motivo objetivo de inconsistencia
+// estrutural (nunca fiscal/SEFAZ). "XML invalido" nao aparece aqui: nunca e
+// persistido (rejeitado com 400 no momento da importacao, ver
+// FiscalDocumentsService.importXml) -- nao ha como contar algo que nunca
+// chega a existir como FiscalDocument.
+export class FiscalIssueCountEntity {
+  @ApiProperty({ enum: FiscalIssueCode })
+  code!: FiscalIssueCode;
+
+  @ApiProperty()
+  count!: number;
+}
 
 export class FiscalDocumentTypeCountEntity {
   @ApiProperty({ enum: FiscalDocumentType })
@@ -49,6 +63,11 @@ export class FiscalDashboardEntity {
   @ApiProperty()
   invalidCount!: number;
 
+  // Fase 54 -- ja existia como status no banco (FiscalDocumentStatus.
+  // CANCELLED) mas nunca tinha um KPI proprio no dashboard.
+  @ApiProperty()
+  cancelledCount!: number;
+
   @ApiProperty({ description: 'Documentos sem NENHUM vinculo operacional (tripId/vehicleId/driverId/customerId todos nulos).' })
   unlinkedCount!: number;
 
@@ -71,6 +90,16 @@ export class FiscalDashboardEntity {
   // "documentos pendentes/problematicos" do dashboard. Reaproveita a mesma
   // FiscalDocumentEntity/include ja usada pela listagem, nunca uma
   // projecao paralela.
-  @ApiProperty({ type: [FiscalDocumentEntity], description: 'Documentos PENDING/INVALID mais recentes (ate 10), no mesmo escopo de filtro do dashboard.' })
+  // Fase 54 -- criterio ampliado (secao 2): agora inclui tambem documentos
+  // VALID/CANCELLED com 1+ inconsistencia estrutural (chave/tipo/campos/
+  // data/duplicidade/vinculo), nao so PENDING/INVALID. Cada item traz
+  // `validationIssues` preenchido com o(s) motivo(s) objetivo(s).
+  @ApiProperty({ type: [FiscalDocumentEntity], description: 'Documentos que exigem atencao (status pendente/invalido OU 1+ inconsistencia estrutural), mais recentes primeiro, ate 10, no mesmo escopo de filtro do dashboard.' })
   problematicDocuments!: FiscalDocumentEntity[];
+
+  // Fase 54, secao 4 -- alertas fiscais: contagem por motivo objetivo,
+  // calculada em memoria sobre o mesmo lote ja carregado para os demais
+  // indicadores (nunca uma query por documento, nunca persistido).
+  @ApiProperty({ type: [FiscalIssueCountEntity] })
+  alerts!: FiscalIssueCountEntity[];
 }

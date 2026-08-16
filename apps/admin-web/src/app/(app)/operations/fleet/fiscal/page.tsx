@@ -33,6 +33,7 @@ import {
   FISCAL_DOCUMENT_STATUS_LABELS,
   FISCAL_DOCUMENT_STATUS_TONE,
   FISCAL_DOCUMENT_TYPE_LABELS,
+  FISCAL_ISSUE_CODE_LABELS,
   labelOrValue,
 } from '../../../../../lib/labels';
 import type { FiscalDocumentEntity } from '../../../../../types/entities';
@@ -121,6 +122,15 @@ export default function FiscalDocumentsPage(): JSX.Element {
       },
       { header: 'Data', cell: ({ row }) => (row.original.issueDate ? formatDate(row.original.issueDate) : '—') },
       { header: 'Origem', accessorFn: (row) => (row.source === 'XML_IMPORT' ? 'XML' : 'Upload') },
+      {
+        header: 'Situação estrutural',
+        cell: ({ row }) =>
+          row.original.validationIssues.length === 0 ? (
+            <Badge tone="success">OK</Badge>
+          ) : (
+            <Badge tone="danger">{row.original.validationIssues.length} inconsistência(s)</Badge>
+          ),
+      },
     ],
     [],
   );
@@ -165,6 +175,7 @@ export default function FiscalDocumentsPage(): JSX.Element {
               icon={AlertTriangle}
               tone={dashboardQuery.data.invalidCount > 0 ? 'danger' : 'success'}
             />
+            <StatCard label="Cancelados" value={String(dashboardQuery.data.cancelledCount)} />
             <StatCard label="Vinculados" value={String(dashboardQuery.data.linkedCount)} icon={Link2} tone="success" />
             <StatCard
               label="Sem vínculo"
@@ -188,13 +199,19 @@ export default function FiscalDocumentsPage(): JSX.Element {
               color="#16a34a"
               emptyMessage="Nenhum documento registrado."
             />
+            <BarRankingChart
+              title="Alertas fiscais (inconsistência estrutural)"
+              data={dashboardQuery.data.alerts.map((a) => ({ label: FISCAL_ISSUE_CODE_LABELS[a.code], value: a.count }))}
+              color="#dc2626"
+              emptyMessage="Nenhuma inconsistência estrutural identificada."
+            />
           </div>
 
           {dashboardQuery.data.problematicDocuments.length > 0 && (
             <Card>
               <CardHeader
                 title="Documentos pendentes/problemáticos"
-                description="PENDING/INVALID mais recentes, no mesmo escopo de filtro acima. Clique para abrir o detalhe."
+                description="Status pendente/inválido OU com 1+ inconsistência estrutural, mais recentes primeiro, no mesmo escopo de filtro acima. Validação apenas estrutural, nunca autorização SEFAZ. Clique para abrir o detalhe."
               />
               <ul className="flex flex-col divide-y divide-border">
                 {dashboardQuery.data.problematicDocuments.map((d) => (
@@ -209,6 +226,15 @@ export default function FiscalDocumentsPage(): JSX.Element {
                           {FISCAL_DOCUMENT_TYPE_LABELS[d.documentType]} · {d.documentNumber ?? d.fileName ?? d.id.slice(0, 8)}
                         </span>
                         <span className="block truncate text-xs text-ink-subtle">{d.tripLabel ?? 'Sem viagem vinculada'}</span>
+                        {d.validationIssues.length > 0 && (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {d.validationIssues.map((issue) => (
+                              <Badge key={issue} tone="danger">
+                                {FISCAL_ISSUE_CODE_LABELS[issue]}
+                              </Badge>
+                            ))}
+                          </span>
+                        )}
                       </span>
                       <Badge tone={FISCAL_DOCUMENT_STATUS_TONE[d.status]}>{FISCAL_DOCUMENT_STATUS_LABELS[d.status]}</Badge>
                     </button>

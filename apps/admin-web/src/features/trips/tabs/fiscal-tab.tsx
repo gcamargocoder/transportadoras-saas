@@ -17,7 +17,12 @@ import { UploadFiscalDocumentModal } from '../../fiscal/upload-fiscal-document-m
 import { useAuth } from '../../../hooks/use-auth';
 import { getTripDocumentStatus, listFiscalDocuments } from '../../../lib/api/fiscal.api';
 import { hasRole, FISCAL_DOCUMENT_WRITE_ROLES } from '../../../lib/auth/roles';
-import { FISCAL_DOCUMENT_STATUS_LABELS, FISCAL_DOCUMENT_STATUS_TONE, FISCAL_DOCUMENT_TYPE_LABELS } from '../../../lib/labels';
+import {
+  FISCAL_DOCUMENT_STATUS_LABELS,
+  FISCAL_DOCUMENT_STATUS_TONE,
+  FISCAL_DOCUMENT_TYPE_LABELS,
+  FISCAL_ISSUE_CODE_LABELS,
+} from '../../../lib/labels';
 import type { FiscalDocumentEntity } from '../../../types/entities';
 import { formatCurrency, formatDate } from '../../../utils/format';
 
@@ -74,6 +79,21 @@ export function FiscalTab({ tripId }: { tripId: string }): JSX.Element {
         ),
       },
       { header: 'Data', cell: ({ row }) => (row.original.issueDate ? formatDate(row.original.issueDate) : '—') },
+      {
+        header: 'Situação estrutural',
+        cell: ({ row }) =>
+          row.original.validationIssues.length === 0 ? (
+            <Badge tone="success">Sem inconsistências</Badge>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {row.original.validationIssues.map((issue) => (
+                <Badge key={issue} tone="danger">
+                  {FISCAL_ISSUE_CODE_LABELS[issue]}
+                </Badge>
+              ))}
+            </div>
+          ),
+      },
     ],
     [],
   );
@@ -96,6 +116,12 @@ export function FiscalTab({ tripId }: { tripId: string }): JSX.Element {
           <StatCard label="Pendentes" value={String(statusQuery.data.pendingCount)} tone={statusQuery.data.pendingCount > 0 ? 'warning' : 'success'} />
           <StatCard label="Inválidos" value={String(statusQuery.data.invalidCount)} tone={statusQuery.data.invalidCount > 0 ? 'danger' : 'success'} />
           <StatCard label="Cancelados" value={String(statusQuery.data.cancelledCount)} />
+          <StatCard label="Estruturalmente válidos" value={String(statusQuery.data.structurallyValidCount)} tone="success" />
+          <StatCard
+            label="Com pendência/problema"
+            value={String(statusQuery.data.problematicCount)}
+            tone={statusQuery.data.problematicCount > 0 ? 'warning' : 'success'}
+          />
         </div>
       )}
       {statusQuery.data && statusQuery.data.totalDocuments > 0 && (
@@ -108,6 +134,14 @@ export function FiscalTab({ tripId }: { tripId: string }): JSX.Element {
             </Badge>
           ))}
         </div>
+      )}
+      {statusQuery.data && (
+        <p className="px-3 pb-2 text-xs text-ink-subtle">
+          {statusQuery.data.completenessAvailable
+            ? `Completude documental: ${statusQuery.data.completenessPercent}%`
+            : 'Completude documental indisponível — não há regra de negócio definindo quais documentos esta viagem deveria ter.'}{' '}
+          Validação apenas estrutural (formato/chave/vínculo), nunca autorização perante a SEFAZ.
+        </p>
       )}
 
       {canWrite && (

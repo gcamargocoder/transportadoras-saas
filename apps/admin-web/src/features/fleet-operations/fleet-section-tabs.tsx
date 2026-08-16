@@ -23,7 +23,10 @@ export function FleetSectionTabs(): JSX.Element {
   const pathname = usePathname();
 
   return (
-    <nav className="scrollbar-thin mb-6 flex gap-1 overflow-x-auto border-b border-border" aria-label="Dashboards da frota">
+    <nav
+      className="scrollbar-thin sticky top-0 z-20 mb-6 flex gap-1 overflow-x-auto border-b border-border bg-surface-subtle"
+      aria-label="Dashboards da frota"
+    >
       {FLEET_SECTION_TABS.map((tab) => {
         const active = tab.href === '/operations/fleet' ? pathname === tab.href : pathname?.startsWith(tab.href);
         return (

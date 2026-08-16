@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType } from '@prisma/client';
+import { FiscalIssueCode } from '../utils/fiscal-document-validation.util';
 
 // status=VALID significa apenas "estrutura/conteudo basico reconhecido pelo
 // sistema" (parser XML ou revisao manual) -- NUNCA validacao fiscal oficial
@@ -105,4 +106,10 @@ export class FiscalDocumentEntity {
 
   @ApiProperty()
   updatedAt!: Date;
+
+  // Fase 54 -- motivos OBJETIVOS de inconsistencia estrutural (nunca fiscal/
+  // SEFAZ), calculados sob demanda pelo service (classifyFiscalDocumentIssues)
+  // -- nunca persistido. Lista vazia = nenhum problema estrutural identificado.
+  @ApiProperty({ enum: FiscalIssueCode, isArray: true })
+  validationIssues!: FiscalIssueCode[];
 }

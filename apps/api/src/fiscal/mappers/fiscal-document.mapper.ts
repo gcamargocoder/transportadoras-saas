@@ -2,7 +2,11 @@ import { Customer, Driver, FiscalDocument, Location, Trip, UserAccount, Vehicle 
 import { FiscalDocumentEntity } from '../entities/fiscal-document.entity';
 
 export type FiscalDocumentWithRelations = FiscalDocument & {
-  trip: (Trip & { origin: Location; destination: Location }) | null;
+  // Fase 54 -- composition.vehicleId adicionado para permitir conferir
+  // consistencia de vinculo (INCONSISTENT_LINK), ver fiscal-document-
+  // validation.util.ts. Nunca usado pelo mapper em si, so repassado ao
+  // classificador no service.
+  trip: (Trip & { origin: Location; destination: Location; composition: { vehicleId: string } | null }) | null;
   vehicle: Vehicle | null;
   driver: Driver | null;
   customer: Customer | null;
@@ -44,5 +48,10 @@ export function toFiscalDocumentEntity(document: FiscalDocumentWithRelations): F
   entity.updaterName = document.updater?.name ?? null;
   entity.createdAt = document.createdAt;
   entity.updatedAt = document.updatedAt;
+  // Fase 54 -- default seguro (nunca undefined); quem precisa da
+  // classificacao real chama classifyFiscalDocumentIssues() no service e
+  // sobrescreve este campo (a duplicidade exige contexto em lote que o
+  // mapper, deliberadamente burro/sem acesso a outras linhas, nao tem).
+  entity.validationIssues = [];
   return entity;
 }

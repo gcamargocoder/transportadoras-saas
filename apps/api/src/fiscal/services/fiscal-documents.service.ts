@@ -21,19 +21,20 @@ import { FindFiscalDocumentsQueryDto } from '../dto/find-fiscal-documents-query.
 import { ImportFiscalXmlDto } from '../dto/import-fiscal-xml.dto';
 import { UpdateFiscalDocumentDto } from '../dto/update-fiscal-document.dto';
 import { UploadFiscalDocumentDto } from '../dto/upload-fiscal-document.dto';
-import { FiscalDashboardEntity, FiscalDocumentStatusCountEntity, FiscalDocumentTypeCountEntity } from '../entities/fiscal-dashboard.entity';
+import { FiscalDashboardEntity, FiscalDocumentStatusCountEntity, FiscalDocumentTypeCountEntity, FiscalIssueCountEntity } from '../entities/fiscal-dashboard.entity';
 import { FiscalDocumentEntity } from '../entities/fiscal-document.entity';
 import { PaginatedFiscalDocumentsEntity } from '../entities/paginated-fiscal-documents.entity';
 import { TripDocumentStatusEntity } from '../entities/trip-document-status.entity';
 import { toFiscalDocumentEntity, FiscalDocumentWithRelations } from '../mappers/fiscal-document.mapper';
 import { normalizeAccessKey } from '../utils/access-key.util';
+import { classifyFiscalDocumentIssues, FiscalDocumentIssueInput, FiscalIssueCode, isWellFormedXml } from '../utils/fiscal-document-validation.util';
 import { parseFiscalXml } from '../utils/fiscal-xml.parser';
 import { aggregateMonthlySeries } from '../../common/utils/monthly-series.util';
 
 const PROBLEMATIC_DOCUMENTS_LIMIT = 10;
 
 const FISCAL_DOCUMENT_INCLUDE = {
-  trip: { include: { origin: true, destination: true } },
+  trip: { include: { origin: true, destination: true, composition: { select: { vehicleId: true } } } },
   vehicle: true,
   driver: true,
   customer: true,
@@ -58,7 +59,10 @@ export class FiscalDocumentsService {
   async findAll(tenantId: string, query: FindFiscalDocumentsQueryDto): Promise<PaginatedFiscalDocumentsEntity> {
     const where = this.buildWhere(tenantId, query);
 
-    const [items, total] = await Promise.all([
+    // Fase 54 -- getDuplicateGroupKeys roda em paralelo com a propria
+    // listagem: 1 unica query agregada (groupBy) por chamada, nunca 1 por
+    // linha da pagina (evita N+1 mesmo com paginas maiores).
+    const [items, total, duplicateKeys] = await Promise.all([
       this.prisma.fiscalDocument.findMany({
         where,
         include: FISCAL_DOCUMENT_INCLUDE,
@@ -67,16 +71,17 @@ export class FiscalDocumentsService {
         take: query.pageSize,
       }),
       this.prisma.fiscalDocument.count({ where }),
+      this.getDuplicateGroupKeys(tenantId),
     ]);
 
     const result = new PaginatedFiscalDocumentsEntity();
-    result.items = items.map(toFiscalDocumentEntity);
+    result.items = items.map((document) => this.attachValidationIssues(toFiscalDocumentEntity(document), document, duplicateKeys));
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
 
   async findOne(tenantId: string, id: string): Promise<FiscalDocumentEntity> {
-    return toFiscalDocumentEntity(await this.findOwnedOrThrow(tenantId, id));
+    return this.buildEntityWithIssues(tenantId, await this.findOwnedOrThrow(tenantId, id));
   }
 
   // POST /fiscal/documents/upload -- upload direto (PDF/XML/JPG/JPEG/PNG),
@@ -172,7 +177,7 @@ export class FiscalDocumentsService {
         userAgent: metadata.userAgent,
       });
 
-      return toFiscalDocumentEntity(document);
+      return this.buildEntityWithIssues(tenantId, document);
     } catch (error) {
       await fs.unlink(file.path).catch(() => undefined);
       throw error;
@@ -201,6 +206,13 @@ export class FiscalDocumentsService {
       await this.assertLinkedEntitiesExist(tenantId, dto);
 
       const xmlContent = await fs.readFile(file.path, 'utf8');
+      // Fase 54 -- mensagem distinta para XML malformado (tags desbalanceadas
+      // etc.) vs. XML bem-formado mas de tipo nao reconhecido -- ajuda o
+      // usuario a diferenciar "arquivo corrompido" de "nao e NF-e/CT-e/MDF-e".
+      // Nenhum dos dois casos e persistido (ver FiscalIssueCountEntity).
+      if (!isWellFormedXml(xmlContent)) {
+        throw new BadRequestException('Arquivo XML malformado (tags desbalanceadas). Nenhuma validacao SEFAZ e feita -- so a estrutura basica do XML.');
+      }
       const parsed = parseFiscalXml(xmlContent);
       if (!parsed) {
         throw new BadRequestException(
@@ -219,7 +231,7 @@ export class FiscalDocumentsService {
       if (duplicate) {
         // Idempotente: nao cria um segundo registro nem duplica o arquivo em
         // disco -- o arquivo recem-salvo pelo multer e descartado no finally.
-        return toFiscalDocumentEntity(duplicate);
+        return this.buildEntityWithIssues(tenantId, duplicate);
       }
 
       const id = randomUUID();
@@ -284,7 +296,7 @@ export class FiscalDocumentsService {
         userAgent: metadata.userAgent,
       });
 
-      return toFiscalDocumentEntity(document);
+      return this.buildEntityWithIssues(tenantId, document);
     } finally {
       await fs.unlink(file.path).catch(() => undefined);
     }
@@ -341,7 +353,7 @@ export class FiscalDocumentsService {
       userAgent: metadata.userAgent,
     });
 
-    return toFiscalDocumentEntity(document);
+    return this.buildEntityWithIssues(tenantId, document);
   }
 
   async remove(tenantId: string, id: string, actor: AuditActor, metadata: RequestMetadata): Promise<void> {
@@ -380,23 +392,99 @@ export class FiscalDocumentsService {
     const unlinkedWhere: Prisma.FiscalDocumentWhereInput = {
       AND: [where, { tripId: null, vehicleId: null, driverId: null, customerId: null }],
     };
-    const problematicWhere: Prisma.FiscalDocumentWhereInput = {
-      AND: [where, { status: { in: [FiscalDocumentStatus.PENDING, FiscalDocumentStatus.INVALID] } }],
-    };
 
-    const [total, byTypeRaw, byStatusRaw, unlinkedCount, dateRows, problematicRows] = await Promise.all([
+    // Fase 54 -- classificationRows substitui o antigo dateRows (so
+    // issueDate/createdAt): agora traz todos os campos que
+    // classifyFiscalDocumentIssues precisa, calculado em memoria sobre o
+    // MESMO lote ja carregado para monthlyEvolution -- zero query extra por
+    // documento. duplicateKeys roda em paralelo (1 unica query agregada,
+    // escopo tenant inteiro -- duplicidade e uma questao de integridade de
+    // dados, independente do filtro de visualizacao do dashboard).
+    const [total, byTypeRaw, byStatusRaw, unlinkedCount, classificationRows, duplicateKeys] = await Promise.all([
       this.prisma.fiscalDocument.count({ where }),
       this.prisma.fiscalDocument.groupBy({ by: ['documentType'], where, _count: { _all: true } }),
       this.prisma.fiscalDocument.groupBy({ by: ['status'], where, _count: { _all: true } }),
       this.prisma.fiscalDocument.count({ where: unlinkedWhere }),
-      this.prisma.fiscalDocument.findMany({ where, select: { issueDate: true, createdAt: true } }),
       this.prisma.fiscalDocument.findMany({
-        where: problematicWhere,
-        include: FISCAL_DOCUMENT_INCLUDE,
-        orderBy: { createdAt: 'desc' },
-        take: PROBLEMATIC_DOCUMENTS_LIMIT,
+        where,
+        select: {
+          id: true,
+          issueDate: true,
+          createdAt: true,
+          status: true,
+          documentType: true,
+          source: true,
+          accessKey: true,
+          documentNumber: true,
+          series: true,
+          senderName: true,
+          senderDocument: true,
+          recipientName: true,
+          recipientDocument: true,
+          tripId: true,
+          vehicleId: true,
+          driverId: true,
+          customerId: true,
+          trip: { select: { driverId: true, composition: { select: { vehicleId: true } } } },
+        },
       }),
+      this.getDuplicateGroupKeys(tenantId),
     ]);
+
+    const issuesById = new Map<string, FiscalIssueCode[]>();
+    for (const row of classificationRows) {
+      const key = this.buildDuplicateKey(row.documentType, row.documentNumber, row.series);
+      const issues = classifyFiscalDocumentIssues({
+        documentType: row.documentType,
+        source: row.source,
+        accessKey: row.accessKey,
+        documentNumber: row.documentNumber,
+        series: row.series,
+        issueDate: row.issueDate,
+        senderName: row.senderName,
+        senderDocument: row.senderDocument,
+        recipientName: row.recipientName,
+        recipientDocument: row.recipientDocument,
+        tripId: row.tripId,
+        vehicleId: row.vehicleId,
+        driverId: row.driverId,
+        customerId: row.customerId,
+        hasDuplicateCandidate: key !== null && duplicateKeys.has(key),
+        tripVehicleId: row.trip?.composition?.vehicleId ?? null,
+        tripDriverId: row.trip?.driverId ?? null,
+      });
+      issuesById.set(row.id, issues);
+    }
+
+    const alertCounts = new Map<FiscalIssueCode, number>();
+    for (const issues of issuesById.values()) {
+      for (const code of issues) {
+        alertCounts.set(code, (alertCounts.get(code) ?? 0) + 1);
+      }
+    }
+    const alerts: FiscalIssueCountEntity[] = Array.from(alertCounts.entries()).map(([code, count]) => {
+      const entry = new FiscalIssueCountEntity();
+      entry.code = code;
+      entry.count = count;
+      return entry;
+    });
+
+    // Criterio ampliado (secao 2 do pedido): PENDING/INVALID (como na Fase
+    // 53) OU 1+ inconsistencia estrutural, mesmo que VALID/CANCELLED.
+    const problematicIds = classificationRows
+      .filter((row) => row.status === FiscalDocumentStatus.PENDING || row.status === FiscalDocumentStatus.INVALID || (issuesById.get(row.id)?.length ?? 0) > 0)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, PROBLEMATIC_DOCUMENTS_LIMIT)
+      .map((row) => row.id);
+
+    const problematicRows =
+      problematicIds.length > 0
+        ? await this.prisma.fiscalDocument.findMany({
+            where: { id: { in: problematicIds } },
+            include: FISCAL_DOCUMENT_INCLUDE,
+          })
+        : [];
+    const problematicById = new Map(problematicRows.map((row) => [row.id, row]));
 
     const byType: FiscalDocumentTypeCountEntity[] = byTypeRaw
       .map((row) => {
@@ -425,13 +513,22 @@ export class FiscalDocumentsService {
     entity.pendingCount = countByStatus('PENDING');
     entity.validCount = countByStatus('VALID');
     entity.invalidCount = countByStatus('INVALID');
+    entity.cancelledCount = countByStatus('CANCELLED');
     entity.unlinkedCount = unlinkedCount;
     entity.linkedCount = total - unlinkedCount;
     entity.byType = byType;
     entity.byStatus = byStatus;
-    entity.problematicDocuments = problematicRows.map(toFiscalDocumentEntity);
+    entity.problematicDocuments = problematicIds
+      .map((id) => problematicById.get(id))
+      .filter((row): row is NonNullable<typeof row> => row !== undefined)
+      .map((row) => {
+        const docEntity = toFiscalDocumentEntity(row);
+        docEntity.validationIssues = issuesById.get(row.id) ?? [];
+        return docEntity;
+      });
+    entity.alerts = alerts;
     entity.monthlyEvolution = aggregateMonthlySeries(
-      dateRows.map((row) => ({ date: row.issueDate ?? row.createdAt, value: 1 })),
+      classificationRows.map((row) => ({ date: row.issueDate ?? row.createdAt, value: 1 })),
       12,
     );
     return entity;
@@ -444,26 +541,41 @@ export class FiscalDocumentsService {
   async getTripDocumentStatus(tenantId: string, tripId: string): Promise<TripDocumentStatusEntity> {
     await this.assertLinkedEntitiesExist(tenantId, { tripId });
 
-    const [total, byStatusRaw, byTypeRaw] = await Promise.all([
-      this.prisma.fiscalDocument.count({ where: { tenantId, tripId } }),
-      this.prisma.fiscalDocument.groupBy({ by: ['status'], where: { tenantId, tripId }, _count: { _all: true } }),
-      this.prisma.fiscalDocument.groupBy({ by: ['documentType'], where: { tenantId, tripId }, _count: { _all: true } }),
+    // Fase 54 -- documentos de 1 viagem sao um conjunto naturalmente
+    // pequeno: 1 findMany completo + 1 groupBy de duplicidade (tenant
+    // inteiro, mas 1 unica query agregada) bastam para tudo -- substitui os
+    // 3 groupBy separados da Fase 53 (agora calculados em memoria a partir
+    // do mesmo lote, sem aumentar o numero de queries por documento).
+    const [documents, duplicateKeys] = await Promise.all([
+      this.prisma.fiscalDocument.findMany({ where: { tenantId, tripId }, include: FISCAL_DOCUMENT_INCLUDE }),
+      this.getDuplicateGroupKeys(tenantId),
     ]);
 
-    const countByStatus = (status: FiscalDocumentStatus): number =>
-      byStatusRaw.find((b) => b.status === status)?._count._all ?? 0;
-    const presentTypes = byTypeRaw.map((b) => b.documentType);
+    const items = documents.map((document) => this.attachValidationIssues(toFiscalDocumentEntity(document), document, duplicateKeys));
+
+    const countByStatus = (status: FiscalDocumentStatus): number => documents.filter((d) => d.status === status).length;
+    const presentTypes = Array.from(new Set(documents.map((d) => d.documentType)));
     const allTypes = Object.values(FiscalDocumentType);
+
+    const problematic = items
+      .filter((item) => item.status === FiscalDocumentStatus.PENDING || item.status === FiscalDocumentStatus.INVALID || item.validationIssues.length > 0)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     const entity = new TripDocumentStatusEntity();
     entity.tripId = tripId;
-    entity.totalDocuments = total;
+    entity.totalDocuments = documents.length;
     entity.pendingCount = countByStatus(FiscalDocumentStatus.PENDING);
     entity.validCount = countByStatus(FiscalDocumentStatus.VALID);
     entity.invalidCount = countByStatus(FiscalDocumentStatus.INVALID);
     entity.cancelledCount = countByStatus(FiscalDocumentStatus.CANCELLED);
     entity.presentTypes = presentTypes;
     entity.absentTypes = allTypes.filter((t) => !presentTypes.includes(t));
+    entity.structurallyValidCount = items.filter((item) => item.status === FiscalDocumentStatus.VALID && item.validationIssues.length === 0).length;
+    entity.problematicCount = problematic.length;
+    entity.problematicDocuments = problematic;
+    // Nunca inventa percentual -- ver comentario em TripDocumentStatusEntity.
+    entity.completenessPercent = null;
+    entity.completenessAvailable = false;
     return entity;
   }
 
@@ -592,5 +704,89 @@ export class FiscalDocumentsService {
       throw new NotFoundException('Documento fiscal nao encontrado nesta empresa.');
     }
     return document;
+  }
+
+  // Fase 54 -- monta o input puro para classifyFiscalDocumentIssues a partir
+  // de um documento ja carregado (com FISCAL_DOCUMENT_INCLUDE), repassando o
+  // vinculo REAL da viagem (composition.vehicleId / driverId) para permitir
+  // a checagem de INCONSISTENT_LINK sem nenhuma query adicional.
+  private toIssueInput(document: FiscalDocumentWithRelations, hasDuplicateCandidate: boolean): FiscalDocumentIssueInput {
+    return {
+      documentType: document.documentType,
+      source: document.source,
+      accessKey: document.accessKey,
+      documentNumber: document.documentNumber,
+      series: document.series,
+      issueDate: document.issueDate,
+      senderName: document.senderName,
+      senderDocument: document.senderDocument,
+      recipientName: document.recipientName,
+      recipientDocument: document.recipientDocument,
+      tripId: document.tripId,
+      vehicleId: document.vehicleId,
+      driverId: document.driverId,
+      customerId: document.customerId,
+      hasDuplicateCandidate,
+      tripVehicleId: document.trip?.composition?.vehicleId ?? null,
+      tripDriverId: document.trip?.driverId ?? null,
+    };
+  }
+
+  private attachValidationIssues(
+    entity: FiscalDocumentEntity,
+    document: FiscalDocumentWithRelations,
+    duplicateKeys: Set<string>,
+  ): FiscalDocumentEntity {
+    const key = this.buildDuplicateKey(document.documentType, document.documentNumber, document.series);
+    entity.validationIssues = classifyFiscalDocumentIssues(this.toIssueInput(document, key !== null && duplicateKeys.has(key)));
+    return entity;
+  }
+
+  private buildDuplicateKey(documentType: string, documentNumber: string | null, series: string | null): string | null {
+    if (!documentNumber) return null;
+    return `${documentType}|${documentNumber}|${series ?? ''}`;
+  }
+
+  // Fase 54 -- usado pelas rotas de escrita (upload/import/update) e por
+  // findOne: monta a entity ja com validationIssues calculado para ESTE 1
+  // documento (1 count() enxuto de duplicidade, nunca a groupBy do tenant
+  // inteiro so para 1 registro -- ver getDuplicateGroupKeys, reservado para
+  // contextos em lote).
+  private async buildEntityWithIssues(tenantId: string, document: FiscalDocumentWithRelations): Promise<FiscalDocumentEntity> {
+    const key = this.buildDuplicateKey(document.documentType, document.documentNumber, document.series);
+    const hasDuplicateCandidate = key
+      ? (await this.prisma.fiscalDocument.count({
+          where: {
+            tenantId,
+            documentType: document.documentType,
+            documentNumber: document.documentNumber,
+            series: document.series,
+            id: { not: document.id },
+          },
+        })) > 0
+      : false;
+    const entity = toFiscalDocumentEntity(document);
+    entity.validationIssues = classifyFiscalDocumentIssues(this.toIssueInput(document, hasDuplicateCandidate));
+    return entity;
+  }
+
+  // Fase 54 -- 1 unica query agregada (groupBy) para descobrir quais
+  // combinacoes (tipo, numero, serie) tem 2+ documentos no tenant. Escopo
+  // SEMPRE tenant inteiro (duplicidade e integridade de dados, nao depende
+  // do filtro de tela) -- reaproveitada por findAll/findOne/dashboard/
+  // trip-status, nunca 1 query por documento.
+  private async getDuplicateGroupKeys(tenantId: string): Promise<Set<string>> {
+    const groups = await this.prisma.fiscalDocument.groupBy({
+      by: ['documentType', 'documentNumber', 'series'],
+      where: { tenantId, documentNumber: { not: null } },
+      _count: { _all: true },
+    });
+    const keys = new Set<string>();
+    for (const group of groups) {
+      if (group._count._all > 1 && group.documentNumber) {
+        keys.add(`${group.documentType}|${group.documentNumber}|${group.series ?? ''}`);
+      }
+    }
+    return keys;
   }
 }

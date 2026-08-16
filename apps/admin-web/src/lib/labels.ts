@@ -13,6 +13,7 @@ import {
   FiscalDocumentSource,
   FiscalDocumentStatus,
   FiscalDocumentType,
+  FiscalIssueCode,
   FleetType,
   FuelType,
   ImportJobStatus,
@@ -479,6 +480,18 @@ export const FISCAL_DOCUMENT_STATUS_TONE: Record<FiscalDocumentStatus, 'success'
 export const FISCAL_DOCUMENT_SOURCE_LABELS: Record<FiscalDocumentSource, string> = {
   UPLOAD: 'Upload manual',
   XML_IMPORT: 'Importação XML',
+};
+
+// Fase 54 -- motivos objetivos de inconsistência estrutural (nunca fiscal/
+// SEFAZ).
+export const FISCAL_ISSUE_CODE_LABELS: Record<FiscalIssueCode, string> = {
+  INVALID_ACCESS_KEY: 'Chave de acesso inválida',
+  TYPE_MISMATCH: 'Tipo incompatível com a chave de acesso',
+  ESSENTIAL_FIELDS_MISSING: 'Campos essenciais ausentes',
+  INCONSISTENT_DATE: 'Data de emissão inconsistente',
+  DUPLICATE_CANDIDATE: 'Possível documento duplicado',
+  INCONSISTENT_LINK: 'Vínculo inconsistente com a viagem',
+  NO_TRIP_CONTEXT: 'Sem viagem vinculada',
 };
 
 export const SUBSCRIPTION_PAYMENT_STATUS_TONE: Record<SubscriptionPaymentStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {

@@ -17,6 +17,7 @@ import type {
   FiscalDocumentSource,
   FiscalDocumentStatus,
   FiscalDocumentType,
+  FiscalIssueCode,
   FleetType,
   FuelType,
   ImportFileType,
@@ -2029,6 +2030,10 @@ export interface FiscalDocumentEntity {
   updaterName: string | null;
   createdAt: string;
   updatedAt: string;
+  // Fase 54 -- motivos OBJETIVOS de inconsistencia estrutural (chave/tipo/
+  // campos/data/duplicidade/vinculo). Lista vazia = nenhum problema
+  // estrutural identificado. NUNCA validacao fiscal/SEFAZ.
+  validationIssues: FiscalIssueCode[];
 }
 
 export interface FiscalDocumentTypeCountEntity {
@@ -2041,6 +2046,12 @@ export interface FiscalDocumentStatusCountEntity {
   count: number;
 }
 
+// Fase 54 -- contagem de documentos por motivo objetivo de inconsistencia.
+export interface FiscalIssueCountEntity {
+  code: FiscalIssueCode;
+  count: number;
+}
+
 export interface FiscalDashboardEntity {
   totalDocuments: number;
   cteCount: number;
@@ -2050,15 +2061,19 @@ export interface FiscalDashboardEntity {
   pendingCount: number;
   validCount: number;
   invalidCount: number;
+  cancelledCount: number;
   unlinkedCount: number;
   linkedCount: number;
   monthlyEvolution: DashboardChartPointEntity[];
   byType: FiscalDocumentTypeCountEntity[];
   byStatus: FiscalDocumentStatusCountEntity[];
   problematicDocuments: FiscalDocumentEntity[];
+  alerts: FiscalIssueCountEntity[];
 }
 
 // Fase 53 -- situacao documental consolidada de UMA viagem.
+// Fase 54 -- structurallyValidCount/problematicCount/problematicDocuments/
+// completenessPercent(sempre null)/completenessAvailable(sempre false).
 export interface TripDocumentStatusEntity {
   tripId: string;
   totalDocuments: number;
@@ -2068,4 +2083,9 @@ export interface TripDocumentStatusEntity {
   cancelledCount: number;
   presentTypes: FiscalDocumentType[];
   absentTypes: FiscalDocumentType[];
+  structurallyValidCount: number;
+  problematicCount: number;
+  problematicDocuments: FiscalDocumentEntity[];
+  completenessPercent: number | null;
+  completenessAvailable: boolean;
 }

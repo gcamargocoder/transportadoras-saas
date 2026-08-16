@@ -16,7 +16,13 @@ import { listDrivers } from '../../lib/api/drivers.api';
 import { deleteFiscalDocument, getFiscalDocumentHistory, updateFiscalDocument } from '../../lib/api/fiscal.api';
 import { listVehicles } from '../../lib/api/fleet.api';
 import { listCustomers } from '../../lib/api/trips.api';
-import { FISCAL_DOCUMENT_SOURCE_LABELS, FISCAL_DOCUMENT_STATUS_LABELS, FISCAL_DOCUMENT_STATUS_TONE, FISCAL_DOCUMENT_TYPE_LABELS } from '../../lib/labels';
+import {
+  FISCAL_DOCUMENT_SOURCE_LABELS,
+  FISCAL_DOCUMENT_STATUS_LABELS,
+  FISCAL_DOCUMENT_STATUS_TONE,
+  FISCAL_DOCUMENT_TYPE_LABELS,
+  FISCAL_ISSUE_CODE_LABELS,
+} from '../../lib/labels';
 import type { FiscalDocumentEntity } from '../../types/entities';
 import type { FiscalDocumentStatus } from '../../types/enums';
 import { formatDate, formatDateTime } from '../../utils/format';
@@ -105,6 +111,24 @@ export function FiscalDocumentDetailDrawer({
               <Badge tone={FISCAL_DOCUMENT_STATUS_TONE[document.status]}>{FISCAL_DOCUMENT_STATUS_LABELS[document.status]}</Badge>
             </div>
             <p className="mt-0.5 text-xs text-ink-subtle">{FISCAL_DOCUMENT_SOURCE_LABELS[document.source]}</p>
+          </div>
+
+          <div className="rounded-md bg-surface-muted p-2.5">
+            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-subtle">Situação estrutural</p>
+            {document.validationIssues.length === 0 ? (
+              <Badge tone="success">Nenhuma inconsistência estrutural identificada</Badge>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {document.validationIssues.map((issue) => (
+                  <Badge key={issue} tone="danger">
+                    {FISCAL_ISSUE_CODE_LABELS[issue]}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 text-[11px] text-ink-subtle">
+              Validação apenas estrutural (formato, chave, campos e vínculo) — nunca autorização/autenticidade perante a SEFAZ.
+            </p>
           </div>
 
           <dl className="flex flex-col gap-2 text-sm">
