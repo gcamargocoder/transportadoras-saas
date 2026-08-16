@@ -10,6 +10,9 @@ import {
   ExpenseCategory,
   ExpensePaymentMethod,
   ExpenseStatus,
+  FiscalDocumentSource,
+  FiscalDocumentStatus,
+  FiscalDocumentType,
   FleetType,
   FuelType,
   ImportJobStatus,
@@ -444,6 +447,38 @@ export const SUBSCRIPTION_PAYMENT_STATUS_LABELS: Record<SubscriptionPaymentStatu
   PAID: 'Pago',
   OVERDUE: 'Atrasado',
   CANCELLED: 'Cancelado',
+};
+
+export const FISCAL_DOCUMENT_TYPE_LABELS: Record<FiscalDocumentType, string> = {
+  CTE: 'CT-e',
+  MDFE: 'MDF-e',
+  NFE: 'NF-e',
+  CIOT: 'CIOT',
+  DACTE: 'DACTE',
+  DAMDFE: 'DAMDFE',
+  DELIVERY_PROOF: 'Comprovante de entrega',
+  OTHER: 'Outro',
+};
+
+// VALID significa apenas "estrutura/conteudo basico reconhecido pelo
+// sistema" -- NUNCA validacao fiscal oficial perante a SEFAZ.
+export const FISCAL_DOCUMENT_STATUS_LABELS: Record<FiscalDocumentStatus, string> = {
+  PENDING: 'Pendente',
+  VALID: 'Reconhecido',
+  INVALID: 'Inválido',
+  CANCELLED: 'Cancelado',
+};
+
+export const FISCAL_DOCUMENT_STATUS_TONE: Record<FiscalDocumentStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  PENDING: 'info',
+  VALID: 'success',
+  INVALID: 'danger',
+  CANCELLED: 'neutral',
+};
+
+export const FISCAL_DOCUMENT_SOURCE_LABELS: Record<FiscalDocumentSource, string> = {
+  UPLOAD: 'Upload manual',
+  XML_IMPORT: 'Importação XML',
 };
 
 export const SUBSCRIPTION_PAYMENT_STATUS_TONE: Record<SubscriptionPaymentStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {

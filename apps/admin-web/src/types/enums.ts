@@ -512,3 +512,32 @@ export const SubscriptionPaymentStatus = {
   CANCELLED: 'CANCELLED',
 } as const;
 export type SubscriptionPaymentStatus = (typeof SubscriptionPaymentStatus)[keyof typeof SubscriptionPaymentStatus];
+
+// Fase 52 -- Fiscal/Documental.
+export const FiscalDocumentType = {
+  CTE: 'CTE',
+  MDFE: 'MDFE',
+  NFE: 'NFE',
+  CIOT: 'CIOT',
+  DACTE: 'DACTE',
+  DAMDFE: 'DAMDFE',
+  DELIVERY_PROOF: 'DELIVERY_PROOF',
+  OTHER: 'OTHER',
+} as const;
+export type FiscalDocumentType = (typeof FiscalDocumentType)[keyof typeof FiscalDocumentType];
+
+// status=VALID significa apenas "estrutura/conteudo basico reconhecido pelo
+// sistema" -- NUNCA validacao fiscal oficial perante a SEFAZ.
+export const FiscalDocumentStatus = {
+  PENDING: 'PENDING',
+  VALID: 'VALID',
+  INVALID: 'INVALID',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type FiscalDocumentStatus = (typeof FiscalDocumentStatus)[keyof typeof FiscalDocumentStatus];
+
+export const FiscalDocumentSource = {
+  UPLOAD: 'UPLOAD',
+  XML_IMPORT: 'XML_IMPORT',
+} as const;
+export type FiscalDocumentSource = (typeof FiscalDocumentSource)[keyof typeof FiscalDocumentSource];

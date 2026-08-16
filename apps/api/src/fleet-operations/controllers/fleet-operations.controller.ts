@@ -14,6 +14,7 @@ import { FleetOperationsDashboardEntity } from '../entities/fleet-operations-das
 import { FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
 import { FleetDowntimeCostEntity } from '../entities/fleet-downtime-cost.entity';
 import { FleetCompositionsOverviewEntity } from '../entities/fleet-compositions-overview.entity';
+import { FleetFinancialDashboardEntity } from '../entities/fleet-financial-dashboard.entity';
 import { FleetTiresOverviewEntity } from '../entities/fleet-tires-overview.entity';
 import { FleetVehiclesOverviewEntity } from '../entities/fleet-vehicles-overview.entity';
 import { FleetOperationsMetricsService } from '../services/fleet-operations-metrics.service';
@@ -138,6 +139,19 @@ export class FleetOperationsController {
   @ApiOkResponse({ type: FleetDowntimeCostEntity })
   getDowntimeCost(@Query() query: FleetOperationsQueryDto): Promise<FleetDowntimeCostEntity> {
     return this.metricsService.getDowntimeCost(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('financial')
+  @Roles(...FLEET_OPERATIONS_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 51 -- gestao financeira operacional: receita/despesa/custo total/adiantamentos/resultado/margem, ' +
+      'evolucao mensal, rankings (veiculo/categoria/viagem) e detalhamento por frota/cliente/motorista. ' +
+      'Mesmo escopo de filtro (periodo/veiculo/frota/motorista/cliente/categoria/status) em todos os indicadores.',
+  })
+  @ApiOkResponse({ type: FleetFinancialDashboardEntity })
+  getFinancialDashboard(@Query() query: FleetOperationsQueryDto): Promise<FleetFinancialDashboardEntity> {
+    return this.metricsService.getFinancialDashboard(this.tenantContext.requireTenantId(), query);
   }
 
   @Get('compositions')

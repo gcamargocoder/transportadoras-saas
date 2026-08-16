@@ -46,4 +46,31 @@ export class TripFinancialDashboardEntity {
 
   @ApiProperty()
   largestRevenue!: number;
+
+  // Fase 51 -- visao de custo OPERACIONAL completo (distinta de profit/
+  // netResult acima, que servem o fechamento financeiro do motorista e
+  // NUNCA foram alterados). fuelCost/tollCost usam o vinculo real e
+  // confiavel com a viagem (FuelSupply.tripId, TollTransaction.tripId).
+  @ApiProperty({ description: 'Soma de FuelSupply.totalAmount com tripId = esta viagem.' })
+  fuelCost!: number;
+
+  @ApiProperty({ description: 'Soma de TollTransaction.chargedAmount desta viagem (tripId sempre presente no schema).' })
+  tollCost!: number;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Sempre null -- VehicleMaintenance nao tem vinculo com viagem (sem campo tripId no schema). ' +
+      'Nunca estimado; indisponibilidade real e explicita.',
+  })
+  maintenanceCost!: number | null;
+
+  @ApiProperty({ description: 'totalExpenses + fuelCost + tollCost (maintenanceCost excluido -- indisponivel).' })
+  totalCost!: number;
+
+  @ApiProperty({ description: 'totalRevenue - totalCost.' })
+  grossResult!: number;
+
+  @ApiProperty({ description: 'grossResult - totalAdvances.' })
+  finalResult!: number;
 }

@@ -146,6 +146,43 @@ describe('Trip Finance II -- Revenues, Advances, Settlement (e2e)', () => {
     return res.body.data.id as string;
   }
 
+  async function createFuelStation(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/fuel-stations')
+      .set('Authorization', auth)
+      .send({ name: `Posto ${randomUUID()}` })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
+  async function createTollPlaza(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/toll-plazas')
+      .set('Authorization', auth)
+      .send({ name: `Praca ${randomUUID()}`, operator: 'CCR ViaOeste', highway: 'SP-280', pricePerAxle: 10 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
+  // TollTransactionsService exige tag ativa e valida no veiculo antes de
+  // aceitar qualquer transacao (mesmo fluxo de fleet-operations.e2e-spec.ts).
+  async function createVehicleTag(auth: string, vehicleId: string) {
+    const providersRes = await request(app.getHttpServer())
+      .get('/api/v1/tag-providers')
+      .set('Authorization', auth)
+      .expect(200);
+    const tagProviderId = providersRes.body.data.find((p: { name: string }) => p.name === 'Sem Parar').id as string;
+    await request(app.getHttpServer())
+      .post(`/api/v1/vehicles/${vehicleId}/tags`)
+      .set('Authorization', auth)
+      .send({
+        tagProviderId,
+        tagNumber: String(Math.floor(1_000_000_000 + Math.random() * 8_999_999_999)),
+        activatedAt: '2026-01-01',
+      })
+      .expect(201);
+  }
+
   async function setupTrip(auth: string) {
     const vehicleId = await createVehicle(auth);
     const driverId = await createDriver(auth);
@@ -595,6 +632,82 @@ describe('Trip Finance II -- Revenues, Advances, Settlement (e2e)', () => {
       expect(dashboard.entryCount).toBe(4);
       expect(dashboard.largestRevenue).toBe(3000);
       expect(dashboard.largestExpense).toBe(800);
+    });
+
+    it('Fase 51 -- inclui custo de combustivel/pedagio vinculados a viagem (tripId real); manutencao sempre null (sem vinculo no schema)', async () => {
+      const { tenantId } = await createTenantAndLoginAsAdmin('Dashboard51');
+      // POST /toll-plazas exige SUPER_ADMIN (mesmo padrao de fleet-operations.e2e-spec.ts)
+      // -- promove e reloga para obter um token com o role atualizado.
+      const admin = await prisma.userAccount.findFirstOrThrow({ where: { tenantId, role: 'ADMIN' } });
+      await prisma.userAccount.update({ where: { id: admin.id }, data: { role: 'SUPER_ADMIN' } });
+      const reloginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: admin.email, password: 'SenhaForte123!' })
+        .expect(200);
+      const auth = `Bearer ${reloginRes.body.data.accessToken as string}`;
+      const { tripId, vehicleId } = await setupTrip(auth);
+
+      await createRevenue(auth, tripId, { amount: 5000 }).expect(201);
+      await createApprovedExpense(auth, tripId, 300);
+      await createAdvance(auth, tripId, { amount: 200 }).expect(201);
+
+      // Combustivel vinculado via tripId (vehicleId/driverId sempre derivados da viagem).
+      const fuelStationId = await createFuelStation(auth);
+      await request(app.getHttpServer())
+        .post('/api/v1/fuel-supplies')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          fuelStationId,
+          fuelType: 'DIESEL_S10',
+          liters: 100,
+          pricePerLiter: 5,
+          odometerKm: 10000,
+          supplyDate: '2026-09-02T10:00:00.000Z',
+        })
+        .expect(201);
+
+      // Pedagio -- TollTransaction.tripId e obrigatorio no schema, sempre confiavel.
+      await createVehicleTag(auth, vehicleId);
+      const tollPlazaId = await createTollPlaza(auth);
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({ tripId, tollPlazaId, axleCount: 6, chargedAmount: 60, chargedAt: '2026-09-01T10:30:00.000Z' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-dashboard`)
+        .set('Authorization', auth)
+        .expect(200);
+      const dashboard = res.body.data;
+
+      expect(dashboard.fuelCost).toBe(500); // 100L * 5,00
+      expect(dashboard.tollCost).toBe(60);
+      expect(dashboard.maintenanceCost).toBeNull();
+      expect(dashboard.totalCost).toBeCloseTo(300 + 500 + 60, 5); // totalExpenses + fuelCost + tollCost
+      expect(dashboard.grossResult).toBeCloseTo(5000 - (300 + 500 + 60), 5);
+      expect(dashboard.finalResult).toBeCloseTo(dashboard.grossResult - 200, 5);
+    });
+
+    it('Fase 51 -- fuelCost/tollCost ficam em zero quando nao ha vinculo confiavel (nunca inventa valor)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('Dashboard51Empty');
+      const auth = `Bearer ${adminAccessToken}`;
+      const { tripId } = await setupTrip(auth);
+      await createRevenue(auth, tripId, { amount: 1000 }).expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-dashboard`)
+        .set('Authorization', auth)
+        .expect(200);
+      const dashboard = res.body.data;
+
+      expect(dashboard.fuelCost).toBe(0);
+      expect(dashboard.tollCost).toBe(0);
+      expect(dashboard.maintenanceCost).toBeNull();
+      expect(dashboard.totalCost).toBe(0);
+      expect(dashboard.grossResult).toBe(1000);
+      expect(dashboard.finalResult).toBe(1000);
     });
   });
 

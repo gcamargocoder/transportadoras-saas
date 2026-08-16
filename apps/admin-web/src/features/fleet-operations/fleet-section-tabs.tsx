@@ -15,6 +15,8 @@ const FLEET_SECTION_TABS = [
   { href: '/operations/fleet/compositions', label: 'Composição' },
   { href: '/operations/fleet/tires', label: 'Pneus' },
   { href: '/operations/fleet/tolls', label: 'Pedágios' },
+  { href: '/operations/fleet/financial', label: 'Financeiro' },
+  { href: '/operations/fleet/fiscal', label: 'Fiscal' },
 ] as const;
 
 export function FleetSectionTabs(): JSX.Element {

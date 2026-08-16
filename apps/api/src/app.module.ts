@@ -16,6 +16,7 @@ import { DriverTripsModule } from './driver-trips/driver-trips.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
 import { FleetOperationsModule } from './fleet-operations/fleet-operations.module';
+import { FiscalModule } from './fiscal/fiscal.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
@@ -82,6 +83,7 @@ import { UsersModule } from './users/users.module';
     MaintenanceModule,
     FleetOperationsModule,
     BillingModule,
+    FiscalModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

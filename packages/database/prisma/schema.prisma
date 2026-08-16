@@ -681,6 +681,7 @@ model Tenant {
   checklistTemplates      ChecklistTemplate[]
   checklistExecutions     ChecklistExecution[]
   checklistEvidence       ChecklistEvidence[]
+  fiscalDocuments         FiscalDocument[]
 
   @@map("tenants")
 }
@@ -892,6 +893,8 @@ model UserAccount {
   tireDisposalsCreated           TireDisposal[]       @relation("TireDisposalCreator")
   tollRatesCreated               TollRate[]           @relation("TollRateCreator")
   subscriptionPaymentsCreated    SubscriptionPayment[]
+  fiscalDocumentsCreated         FiscalDocument[]     @relation("FiscalDocumentCreator")
+  fiscalDocumentsUpdated         FiscalDocument[]     @relation("FiscalDocumentUpdater")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1026,6 +1029,7 @@ model Vehicle {
   tireMovementsAsPrevious TireMovement[]       @relation("TireMovementPreviousVehicle")
   tireMovementsAsNew      TireMovement[]       @relation("TireMovementNewVehicle")
   checklistExecutions     ChecklistExecution[]
+  fiscalDocuments         FiscalDocument[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -1523,6 +1527,7 @@ model Driver {
   tripStops           TripStop[]
   axleEvents          AxleEvent[]
   checklistExecutions ChecklistExecution[]
+  fiscalDocuments     FiscalDocument[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
@@ -1580,9 +1585,10 @@ model Customer {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trips    Trip[]
-  revenues TripRevenue[]
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trips           Trip[]
+  revenues        TripRevenue[]
+  fiscalDocuments FiscalDocument[]
 
   @@index([tenantId])
   @@map("customers")
@@ -1760,6 +1766,7 @@ model Trip {
   tripStops           TripStop[]
   axleEvents          AxleEvent[]
   checklistExecutions ChecklistExecution[]
+  fiscalDocuments     FiscalDocument[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -2831,6 +2838,9 @@ model Attachment {
   /// mecanismo de storage existente em vez de criar um novo (ver
   /// ChecklistEvidence.attachmentId).
   checklistEvidence ChecklistEvidence[]
+  /// Fase 52 -- arquivo do documento fiscal/documental (PDF/XML/JPG/PNG),
+  /// mesmo mecanismo generico de storage, nunca um storage novo.
+  fiscalDocuments   FiscalDocument[]
 
   @@index([tenantId, entityName, entityId])
   @@map("attachments")
@@ -3112,6 +3122,114 @@ model ChecklistEvidence {
   @@index([executionId])
   @@index([itemId])
   @@map("checklist_evidence")
+}
+
+// ============================================================================
+// FISCAL/DOCUMENTAL (Fase 52) — documentos fiscais/operacionais vinculados a
+// viagem/veiculo/motorista/cliente (CT-e, MDF-e, NF-e, CIOT, DACTE, DAMDFE,
+// comprovante de entrega). SEM emissao fiscal, SEM integracao SEFAZ/gateway
+// nesta fase -- so armazenamento, identificacao basica de estrutura (parser
+// tolerante) e vinculacao operacional. status=VALID significa apenas
+// "estrutura/conteudo basico reconhecido pelo sistema", NUNCA validacao
+// fiscal oficial perante a SEFAZ (ver docs/fiscal-documents.md).
+// ============================================================================
+
+enum FiscalDocumentType {
+  CTE
+  MDFE
+  NFE
+  CIOT
+  DACTE
+  DAMDFE
+  DELIVERY_PROOF
+  OTHER
+
+  @@map("fiscal_document_type")
+}
+
+/// VALID/INVALID referem-se apenas ao reconhecimento de estrutura/conteudo
+/// basico pelo sistema (parser XML ou revisao manual) -- nunca uma validacao
+/// fiscal oficial perante a SEFAZ (essa integracao nao existe nesta fase).
+enum FiscalDocumentStatus {
+  PENDING
+  VALID
+  INVALID
+  CANCELLED
+
+  @@map("fiscal_document_status")
+}
+
+/// Como o documento entrou no sistema -- UPLOAD (arquivo enviado
+/// manualmente, sem parser) ou XML_IMPORT (arquivo XML processado pelo
+/// parser tolerante, secao 4 do pedido).
+enum FiscalDocumentSource {
+  UPLOAD
+  XML_IMPORT
+
+  @@map("fiscal_document_source")
+}
+
+/// Documento fiscal/documental vinculado a operacao. Vinculo com
+/// Trip/Vehicle/Driver/Customer e sempre opcional e independente (nunca
+/// derivado automaticamente uns dos outros, distinto do padrao de
+/// TripExpense) -- um documento pode ser importado antes de qualquer
+/// vinculacao e vinculado depois via PATCH.
+model FiscalDocument {
+  id                String               @id @default(uuid()) @db.Uuid
+  tenantId          String               @map("tenant_id") @db.Uuid
+  documentType      FiscalDocumentType   @map("document_type")
+  documentNumber    String?              @map("document_number")
+  /// Chave de acesso (44 digitos, NF-e/CT-e/MDF-e) -- unica por tenant
+  /// quando presente (Postgres permite multiplos NULL sob unique, entao
+  /// documentos sem chave nunca colidem entre si por este campo).
+  accessKey         String?              @map("access_key")
+  series            String?
+  issueDate         DateTime?            @map("issue_date")
+  senderName        String?              @map("sender_name")
+  senderDocument     String?             @map("sender_document")
+  recipientName     String?              @map("recipient_name")
+  recipientDocument String?              @map("recipient_document")
+  status            FiscalDocumentStatus @default(PENDING)
+  source            FiscalDocumentSource
+  attachmentId      String?              @map("attachment_id") @db.Uuid
+  /// Nome original do arquivo enviado pelo cliente -- so metadado de
+  /// exibicao, NUNCA usado como caminho de storage (ver
+  /// fiscal-document-storage.config.ts, mesmo padrao de toll-import/
+  /// checklist-evidence: nome em disco e sempre um UUID novo).
+  fileName          String?              @map("file_name")
+  mimeType          String?              @map("mime_type")
+  sizeBytes         Int?                 @map("size_bytes")
+  /// Campos adicionais reconhecidos pelo parser XML sem coluna propria (ex:
+  /// "amount" -- valor total do documento, presente no XML mas fora da
+  /// lista minima de colunas pedida na Fase 52) -- preserva o dado bruto,
+  /// nunca descartado nem inventado quando ausente.
+  metadata          Json?                @default("{}")
+  tripId            String?              @map("trip_id") @db.Uuid
+  vehicleId         String?              @map("vehicle_id") @db.Uuid
+  driverId          String?              @map("driver_id") @db.Uuid
+  customerId        String?              @map("customer_id") @db.Uuid
+  createdBy         String               @map("created_by") @db.Uuid
+  updatedBy         String?              @map("updated_by") @db.Uuid
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  attachment Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  trip       Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  vehicle    Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver     Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  customer   Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  creator    UserAccount  @relation("FiscalDocumentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    UserAccount? @relation("FiscalDocumentUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, accessKey])
+  @@index([tenantId, documentType])
+  @@index([tenantId, status])
+  @@index([tenantId, tripId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, driverId])
+  @@index([tenantId, issueDate])
+  @@map("fiscal_documents")
 }
 
 // ============================================================================

@@ -31,6 +31,13 @@ export interface AppConfig {
     storageDir: string;
     maxFileSizeMb: number;
   };
+  // Fase 52 -- documentos fiscais/documentais (upload direto + importacao de
+  // XML). Mesmo padrao de tollImport/checklistEvidence (disco privado,
+  // storage separado por dominio).
+  fiscalDocuments: {
+    storageDir: string;
+    maxFileSizeMb: number;
+  };
   routing: {
     // Nunca logar/expor esta chave (nem para o frontend, nem em erro) -- ver
     // GoogleRoutingProvider. Ausente = feature desabilitada (ver
@@ -82,6 +89,10 @@ export default (): AppConfig => ({
   checklistEvidence: {
     storageDir: process.env.CHECKLIST_EVIDENCE_STORAGE_DIR ?? './storage/checklist-evidence',
     maxFileSizeMb: parseInt(process.env.CHECKLIST_EVIDENCE_MAX_FILE_SIZE_MB ?? '8', 10),
+  },
+  fiscalDocuments: {
+    storageDir: process.env.FISCAL_DOCUMENTS_STORAGE_DIR ?? './storage/fiscal-documents',
+    maxFileSizeMb: parseInt(process.env.FISCAL_DOCUMENTS_MAX_FILE_SIZE_MB ?? '15', 10),
   },
   routing: {
     googleRoutesApiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,

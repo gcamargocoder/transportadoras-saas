@@ -61,6 +61,10 @@ export const TIRE_WRITE_ROLES = MANAGEMENT_ROLES;
 // restrito do dashboard executivo).
 export const FLEET_OPERATIONS_READ_ROLES = OPERATIONAL_READ_ROLES;
 
+// Fase 52 -- mesmo grupo operacional (DRIVER nunca acessa).
+export const FISCAL_DOCUMENT_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const FISCAL_DOCUMENT_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
 export const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.ADMIN];
 export const SUPER_ADMIN_ONLY: UserRole[] = [UserRole.SUPER_ADMIN];
 

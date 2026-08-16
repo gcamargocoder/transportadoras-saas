@@ -55,6 +55,7 @@ partir de agora**, ignora `startDate`/`endDate` do filtro (mas respeita
 | `GET /fleet-operations/tires` | `FLEET_OPERATIONS_READ_ROLES` | Pneus: composição por status/frota, custo investido/recapagem (com período), evolução mensal, gauge de desgaste por pneu (leitura direta de inspeção), ranking de veículos por custo de pneu, alertas de proximidade de troca |
 | `GET /fleet-operations/downtime-cost` | `FLEET_OPERATIONS_READ_ROLES` | Tempo parado por veículo (manutenção/quebra/abastecimento/outras, via `TripStop`) e receita perdida ESTIMADA (taxa de receita/hora do próprio veículo × horas paradas) |
 | `GET /fleet-operations/compositions` | `FLEET_OPERATIONS_READ_ROLES` | Uso de veículo+carreta por viagem: composição atual da frota de carretas (tipo/disponibilidade, ignora `startDate`/`endDate`), configuração de eixos das composições no período, ranking de carretas (nº de viagens/tempo em uso) e tempo parado vs. em uso por carreta |
+| `GET /fleet-operations/financial` | `FLEET_OPERATIONS_READ_ROLES` | **[Fase 51]** Gestão financeira: receita/despesa/custo total (reaproveita `costs`)/adiantamentos/resultado/margem, evolução mensal, rankings (veículo/categoria/viagem) e detalhamento por frota/cliente/motorista — ver `fleet-operations-financial.md` |
 
 `FLEET_OPERATIONS_READ_ROLES = [SUPER_ADMIN, ADMIN, MANAGER, OPERATOR, DISPATCHER, AUDITOR]`
 — mesmo grupo amplo já usado por `GET /tires/dashboard` e
@@ -380,6 +381,7 @@ de negócio persistida, nunca número mágico espalhado pelo código.
 /operations/fleet/stops       -- paradas (tipo, evolução mensal, ranking)
 /operations/fleet/tolls       -- pedágios (conformidade da cobrança, rankings, evolução mensal, conciliação de rotas)
 /operations/fleet/compositions -- composição (uso de veículo+carreta, configuração de eixos, ranking de carretas, tempo parado vs. em uso)
+/operations/fleet/financial   -- [Fase 51] financeiro (receita/despesa/custo/adiantamentos/resultado, rankings, detalhamento)
 ```
 
 `/operations` (monitoramento ao vivo, Fase 29) permanece intocado. `/fuel-supplies`

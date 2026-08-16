@@ -5,6 +5,7 @@ import {
   ExpenseStatus,
   MaintenanceComponent,
   Prisma,
+  RevenueCategory,
   TireStatus,
   TrailerType,
   TripStatus,
@@ -58,6 +59,13 @@ import {
   FleetTrailerTypeBreakdownEntity,
 } from '../entities/fleet-compositions-overview.entity';
 import { FleetCostCategoryEntity, FleetCostFleetEntity, FleetCostsEntity, FleetCostsPreviousPeriodEntity } from '../entities/fleet-costs.entity';
+import {
+  FleetFinancialCustomerEntity,
+  FleetFinancialDashboardEntity,
+  FleetFinancialDriverEntity,
+  FleetFinancialSummaryEntity,
+  FleetFinancialTripRankingEntryEntity,
+} from '../entities/fleet-financial-dashboard.entity';
 import {
   DOWNTIME_CATEGORIES,
   DowntimeCategory,
@@ -150,6 +158,7 @@ const EXPENSE_CATEGORIES_WITH_PRIMARY_SOURCE: ExpenseCategory[] = [
 
 const TOP_VEHICLES_LIMIT = 5;
 const TOP_FLEETS_LIMIT = 5;
+const TOP_TRIPS_LIMIT = 5;
 const MONTHLY_TREND_MONTHS = 12;
 const ALERTS_LIMIT_PER_TYPE = 10;
 
@@ -172,6 +181,11 @@ interface FleetOperationsFilters {
   vehicleStatus?: VehicleStatus;
   tireStatus?: TireStatus;
   trailerType?: TrailerType;
+  // Fase 51 -- so consumidos por computeFinancialDashboard.
+  customerId?: string;
+  revenueCategory?: RevenueCategory;
+  expenseCategory?: ExpenseCategory;
+  expenseStatus?: ExpenseStatus;
 }
 
 interface CostsResult {
@@ -383,6 +397,279 @@ export class FleetOperationsMetricsService {
     entity.monthlyTrend = monthlyTrend;
     entity.previousPeriod = previousPeriod;
     return { entity, vehicleMap: merged };
+  }
+
+  // ==========================================================================
+  // FINANCEIRO -- Fase 51. Consolida receitas (TripRevenue) + despesas
+  // (TripExpense) + custo REALIZADO completo (reaproveita computeCosts,
+  // ja existente, nunca recalculado em paralelo) + adiantamentos
+  // (TripAdvance), tudo no MESMO escopo de filtro. "Custo por viagem" nos
+  // rankings usa TripExpense aprovado (nao inclui combustivel/pedagio
+  // agregados por viagem aqui -- ver GET /trips/:id/financial-dashboard,
+  // Fase 51, para o custo completo de 1 viagem especifica).
+  // ==========================================================================
+  async getFinancialDashboard(tenantId: string, query: FleetOperationsQueryDto): Promise<FleetFinancialDashboardEntity> {
+    return this.computeFinancialDashboard(tenantId, this.parseFilters(query));
+  }
+
+  private async computeFinancialDashboard(
+    tenantId: string,
+    filters: FleetOperationsFilters,
+  ): Promise<FleetFinancialDashboardEntity> {
+    const dateRange = this.dateRangeFilter(filters);
+    const expenseStatus = filters.expenseStatus ?? ExpenseStatus.APPROVED;
+
+    const revenueWhere = this.buildRevenueWhere(tenantId, filters, dateRange);
+    const expenseWhere = this.buildFinancialExpenseWhere(tenantId, filters, dateRange, expenseStatus);
+    const pendingExpenseWhere = this.buildFinancialExpenseWhere(tenantId, filters, dateRange, ExpenseStatus.PENDING);
+    const advanceWhere = this.buildAdvanceWhere(tenantId, filters, dateRange);
+
+    const [costsResult, revenueRows, expenseRows, pendingAgg, advanceRows] = await Promise.all([
+      this.computeCosts(tenantId, filters),
+      this.prisma.tripRevenue.findMany({
+        where: revenueWhere,
+        select: {
+          amount: true,
+          receivedAt: true,
+          tripId: true,
+          customerId: true,
+          trip: { select: { composition: { select: { vehicleId: true } } } },
+        },
+      }),
+      this.prisma.tripExpense.findMany({
+        where: expenseWhere,
+        select: { amount: true, expenseDate: true, tripId: true, vehicleId: true, driverId: true },
+      }),
+      this.prisma.tripExpense.aggregate({ where: pendingExpenseWhere, _sum: { amount: true } }),
+      this.prisma.tripAdvance.findMany({
+        where: advanceWhere,
+        select: { amount: true, paidAt: true, tripId: true, driverId: true },
+      }),
+    ]);
+
+    const totalRevenue = revenueRows.reduce((sum, r) => sum + Number(r.amount), 0);
+    const totalExpenses = expenseRows.reduce((sum, r) => sum + Number(r.amount), 0);
+    const totalAdvances = advanceRows.reduce((sum, r) => sum + Number(r.amount), 0);
+    const pendingExpenses = Number(pendingAgg._sum.amount ?? 0);
+    const totalCost = costsResult.entity.totalCost;
+    const result = totalRevenue - totalCost;
+
+    const summary = new FleetFinancialSummaryEntity();
+    summary.totalRevenue = totalRevenue;
+    summary.totalExpenses = totalExpenses;
+    summary.totalCost = totalCost;
+    summary.totalAdvances = totalAdvances;
+    summary.pendingExpenses = pendingExpenses;
+    summary.result = result;
+    summary.marginPercent = totalRevenue > 0 ? (result / totalRevenue) * 100 : null;
+
+    const monthlyRevenue = aggregateMonthlySeries(
+      revenueRows.map((r) => ({ date: r.receivedAt, value: Number(r.amount) })),
+      MONTHLY_TREND_MONTHS,
+    );
+    const monthlyExpenses = aggregateMonthlySeries(
+      expenseRows.map((r) => ({ date: r.expenseDate, value: Number(r.amount) })),
+      MONTHLY_TREND_MONTHS,
+    );
+    const monthlyResult = monthlyRevenue.map((point, i) => ({
+      month: point.month,
+      value: Math.round((point.value - (monthlyExpenses[i]?.value ?? 0)) * 100) / 100,
+    }));
+
+    const revenueByVehicle = new Map<string, VehicleRankingAccumulator>();
+    for (const row of revenueRows) {
+      const vehicleId = row.trip?.composition?.vehicleId;
+      if (!vehicleId) continue;
+      const current = revenueByVehicle.get(vehicleId) ?? { value: 0, count: 0 };
+      current.value += Number(row.amount);
+      current.count += 1;
+      revenueByVehicle.set(vehicleId, current);
+    }
+
+    const [topVehiclesByRevenue, revenueByFleet, topVehiclesByExpense] = await Promise.all([
+      this.attachPlates(rankTopVehicles(revenueByVehicle, TOP_VEHICLES_LIMIT)),
+      this.buildFleetRanking(revenueByVehicle),
+      this.attachPlates(rankTopVehicles(costsResult.vehicleMap, TOP_VEHICLES_LIMIT)),
+    ]);
+
+    // Ranking por viagem (revenue - expense por tripId). label resolvido em
+    // 1 unica query em lote (nunca 1 por viagem).
+    const revenueByTrip = new Map<string, number>();
+    for (const row of revenueRows) {
+      revenueByTrip.set(row.tripId, (revenueByTrip.get(row.tripId) ?? 0) + Number(row.amount));
+    }
+    const expenseByTrip = new Map<string, number>();
+    for (const row of expenseRows) {
+      expenseByTrip.set(row.tripId, (expenseByTrip.get(row.tripId) ?? 0) + Number(row.amount));
+    }
+    const tripIds = new Set([...revenueByTrip.keys(), ...expenseByTrip.keys()]);
+    const tripTotals = [...tripIds].map((tripId) => ({
+      tripId,
+      cost: expenseByTrip.get(tripId) ?? 0,
+      result: (revenueByTrip.get(tripId) ?? 0) - (expenseByTrip.get(tripId) ?? 0),
+    }));
+    const topTripsByCostRaw = [...tripTotals].sort((a, b) => b.cost - a.cost).slice(0, TOP_TRIPS_LIMIT);
+    const bestTripsRaw = [...tripTotals].sort((a, b) => b.result - a.result).slice(0, TOP_TRIPS_LIMIT);
+    const worstTripsRaw = [...tripTotals].sort((a, b) => a.result - b.result).slice(0, TOP_TRIPS_LIMIT);
+    const rankedTripIds = [...new Set([...topTripsByCostRaw, ...bestTripsRaw, ...worstTripsRaw].map((t) => t.tripId))];
+    const tripLabels = await this.resolveTripLabels(rankedTripIds);
+
+    const toTripRankingEntity = (tripId: string, value: number): FleetFinancialTripRankingEntryEntity => {
+      const entity = new FleetFinancialTripRankingEntryEntity();
+      entity.tripId = tripId;
+      entity.label = tripLabels.get(tripId) ?? tripId;
+      entity.value = Math.round(value * 100) / 100;
+      return entity;
+    };
+
+    const topTripsByCost = topTripsByCostRaw.map((t) => toTripRankingEntity(t.tripId, t.cost));
+    const bestTripsByResult = bestTripsRaw.map((t) => toTripRankingEntity(t.tripId, t.result));
+    const worstTripsByResult = worstTripsRaw.map((t) => toTripRankingEntity(t.tripId, t.result));
+
+    // Detalhamento por cliente (TripRevenue.customerId -- campo direto).
+    const revenueByCustomerMap = new Map<string | null, number>();
+    for (const row of revenueRows) {
+      const key = row.customerId ?? null;
+      revenueByCustomerMap.set(key, (revenueByCustomerMap.get(key) ?? 0) + Number(row.amount));
+    }
+    const customerIds = [...revenueByCustomerMap.keys()].filter((id): id is string => id !== null);
+    const customers =
+      customerIds.length > 0
+        ? await this.prisma.customer.findMany({ where: { id: { in: customerIds } }, select: { id: true, name: true } })
+        : [];
+    const customerNameById = new Map(customers.map((c) => [c.id, c.name]));
+    const revenueByCustomer = [...revenueByCustomerMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, TOP_VEHICLES_LIMIT)
+      .map(([customerId, amount]) => {
+        const entity = new FleetFinancialCustomerEntity();
+        entity.customerId = customerId;
+        entity.customerName = customerId ? (customerNameById.get(customerId) ?? '—') : 'Sem cliente';
+        entity.amount = amount;
+        return entity;
+      });
+
+    // Detalhamento por motorista (despesas com driverId direto + adiantamentos).
+    const driverExpenseMap = new Map<string, number>();
+    for (const row of expenseRows) {
+      if (!row.driverId) continue;
+      driverExpenseMap.set(row.driverId, (driverExpenseMap.get(row.driverId) ?? 0) + Number(row.amount));
+    }
+    const driverAdvanceMap = new Map<string, number>();
+    for (const row of advanceRows) {
+      driverAdvanceMap.set(row.driverId, (driverAdvanceMap.get(row.driverId) ?? 0) + Number(row.amount));
+    }
+    const driverIds = new Set([...driverExpenseMap.keys(), ...driverAdvanceMap.keys()]);
+    const drivers =
+      driverIds.size > 0
+        ? await this.prisma.driver.findMany({ where: { id: { in: [...driverIds] } }, select: { id: true, name: true } })
+        : [];
+    const driverNameById = new Map(drivers.map((d) => [d.id, d.name]));
+    const byDriver = [...driverIds]
+      .map((driverId) => {
+        const entity = new FleetFinancialDriverEntity();
+        entity.driverId = driverId;
+        entity.driverName = driverNameById.get(driverId) ?? '—';
+        entity.expenses = driverExpenseMap.get(driverId) ?? 0;
+        entity.advances = driverAdvanceMap.get(driverId) ?? 0;
+        return entity;
+      })
+      .sort((a, b) => b.expenses + b.advances - (a.expenses + a.advances))
+      .slice(0, TOP_VEHICLES_LIMIT);
+
+    const entity = new FleetFinancialDashboardEntity();
+    entity.summary = summary;
+    entity.monthlyRevenue = monthlyRevenue;
+    entity.monthlyExpenses = monthlyExpenses;
+    entity.monthlyResult = monthlyResult;
+    entity.topVehiclesByRevenue = topVehiclesByRevenue;
+    entity.topVehiclesByExpense = topVehiclesByExpense;
+    entity.topExpenseCategories = costsResult.entity.costByCategory;
+    entity.topTripsByCost = topTripsByCost;
+    entity.bestTripsByResult = bestTripsByResult;
+    entity.worstTripsByResult = worstTripsByResult;
+    entity.revenueByFleet = revenueByFleet;
+    entity.costByFleet = costsResult.entity.costByFleet;
+    entity.revenueByCustomer = revenueByCustomer;
+    entity.byDriver = byDriver;
+    return entity;
+  }
+
+  // Filtro de vehicleId/fleetId para TripRevenue/TripAdvance (nenhum dos 2
+  // tem vehicleId direto) -- via Trip->TripComposition->Vehicle, mesmo join
+  // ja usado por buildTripWhere. driverId so entra aqui quando o model
+  // tambem nao tem driverId direto (TripRevenue); TripAdvance ja tem
+  // driverId proprio, aplicado fora deste helper.
+  private buildVehicleFleetTripJoin(
+    filters: FleetOperationsFilters,
+    includeDriver: boolean,
+  ): Prisma.TripWhereInput | undefined {
+    const compositionFilter = compact({
+      vehicleId: filters.vehicleId,
+      vehicle: filters.fleetId ? { fleetId: filters.fleetId } : undefined,
+    });
+    const tripFilter = compact({
+      driverId: includeDriver ? filters.driverId : undefined,
+      composition: Object.keys(compositionFilter).length > 0 ? compositionFilter : undefined,
+    });
+    return Object.keys(tripFilter).length > 0 ? tripFilter : undefined;
+  }
+
+  private buildRevenueWhere(
+    tenantId: string,
+    filters: FleetOperationsFilters,
+    dateRange: Prisma.DateTimeFilter | undefined,
+  ): Prisma.TripRevenueWhereInput {
+    return {
+      tenantId,
+      ...compact({
+        customerId: filters.customerId,
+        category: filters.revenueCategory,
+        receivedAt: dateRange,
+        trip: this.buildVehicleFleetTripJoin(filters, true),
+      }),
+    };
+  }
+
+  private buildFinancialExpenseWhere(
+    tenantId: string,
+    filters: FleetOperationsFilters,
+    dateRange: Prisma.DateTimeFilter | undefined,
+    status: ExpenseStatus,
+  ): Prisma.TripExpenseWhereInput {
+    return {
+      tenantId,
+      status,
+      ...compact({ vehicleId: filters.vehicleId, category: filters.expenseCategory, expenseDate: dateRange }),
+      ...this.vehicleFleetFilter(filters),
+      ...(filters.driverId ? { driverId: filters.driverId } : {}),
+    };
+  }
+
+  private buildAdvanceWhere(
+    tenantId: string,
+    filters: FleetOperationsFilters,
+    dateRange: Prisma.DateTimeFilter | undefined,
+  ): Prisma.TripAdvanceWhereInput {
+    return {
+      tenantId,
+      ...compact({
+        driverId: filters.driverId,
+        paidAt: dateRange,
+        trip: this.buildVehicleFleetTripJoin(filters, false),
+      }),
+    };
+  }
+
+  // 1 query em lote para os rotulos ("origem -> destino") das viagens
+  // ranqueadas -- nunca 1 query por viagem.
+  private async resolveTripLabels(tripIds: string[]): Promise<Map<string, string>> {
+    if (tripIds.length === 0) return new Map();
+    const trips = await this.prisma.trip.findMany({
+      where: { id: { in: tripIds } },
+      select: { id: true, origin: { select: { name: true } }, destination: { select: { name: true } } },
+    });
+    return new Map(trips.map((t) => [t.id, `${t.origin.name} → ${t.destination.name}`]));
   }
 
   // Ultimos 12 meses SEMPRE (ignora startDate/endDate do filtro, respeita
@@ -1904,6 +2191,10 @@ export class FleetOperationsMetricsService {
       vehicleStatus: query.vehicleStatus,
       tireStatus: query.tireStatus,
       trailerType: query.trailerType,
+      customerId: query.customerId,
+      revenueCategory: query.revenueCategory,
+      expenseCategory: query.expenseCategory,
+      expenseStatus: query.expenseStatus,
     });
   }
 

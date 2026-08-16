@@ -14,6 +14,9 @@ import type {
   ExpenseCategory,
   ExpensePaymentMethod,
   ExpenseStatus,
+  FiscalDocumentSource,
+  FiscalDocumentStatus,
+  FiscalDocumentType,
   FleetType,
   FuelType,
   ImportFileType,
@@ -912,6 +915,14 @@ export interface TripFinancialDashboardEntity {
   advanceCount: number;
   largestExpense: number;
   largestRevenue: number;
+  // Fase 51 -- visao de custo operacional completo (distinta de profit/
+  // netResult acima, que servem o fechamento financeiro do motorista).
+  fuelCost: number;
+  tollCost: number;
+  maintenanceCost: number | null;
+  totalCost: number;
+  grossResult: number;
+  finalResult: number;
 }
 
 export interface FuelStationEntity {
@@ -1216,6 +1227,53 @@ export interface FleetCostsEntity {
   costByFleet: FleetCostFleetEntity[];
   monthlyTrend: DashboardChartPointEntity[];
   previousPeriod: FleetCostsPreviousPeriodEntity | null;
+}
+
+// Fase 51 -- Gestao Financeira Operacional.
+export interface FleetFinancialSummaryEntity {
+  totalRevenue: number;
+  totalExpenses: number;
+  totalCost: number;
+  totalAdvances: number;
+  pendingExpenses: number;
+  result: number;
+  marginPercent: number | null;
+}
+
+export interface FleetFinancialTripRankingEntryEntity {
+  tripId: string;
+  label: string;
+  value: number;
+}
+
+export interface FleetFinancialCustomerEntity {
+  customerId: string | null;
+  customerName: string;
+  amount: number;
+}
+
+export interface FleetFinancialDriverEntity {
+  driverId: string | null;
+  driverName: string;
+  expenses: number;
+  advances: number;
+}
+
+export interface FleetFinancialDashboardEntity {
+  summary: FleetFinancialSummaryEntity;
+  monthlyRevenue: DashboardChartPointEntity[];
+  monthlyExpenses: DashboardChartPointEntity[];
+  monthlyResult: DashboardChartPointEntity[];
+  topVehiclesByRevenue: FleetVehicleRankingEntryEntity[];
+  topVehiclesByExpense: FleetVehicleRankingEntryEntity[];
+  topExpenseCategories: FleetCostCategoryEntity[];
+  topTripsByCost: FleetFinancialTripRankingEntryEntity[];
+  bestTripsByResult: FleetFinancialTripRankingEntryEntity[];
+  worstTripsByResult: FleetFinancialTripRankingEntryEntity[];
+  revenueByFleet: FleetCostFleetEntity[];
+  costByFleet: FleetCostFleetEntity[];
+  revenueByCustomer: FleetFinancialCustomerEntity[];
+  byDriver: FleetFinancialDriverEntity[];
 }
 
 export interface FleetMaintenanceTypeBreakdownEntity {
@@ -1933,4 +1991,81 @@ export interface ChecklistExecutionEntity {
   evidence: ChecklistEvidenceEntity[];
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 52 -- Fiscal/Documental. status=VALID significa apenas "estrutura/
+// conteudo basico reconhecido pelo sistema" -- NUNCA validacao fiscal
+// oficial perante a SEFAZ.
+export interface FiscalDocumentEntity {
+  id: string;
+  tenantId: string;
+  documentType: FiscalDocumentType;
+  documentNumber: string | null;
+  accessKey: string | null;
+  series: string | null;
+  issueDate: string | null;
+  senderName: string | null;
+  senderDocument: string | null;
+  recipientName: string | null;
+  recipientDocument: string | null;
+  status: FiscalDocumentStatus;
+  source: FiscalDocumentSource;
+  attachmentId: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  metadata: Record<string, unknown> | null;
+  tripId: string | null;
+  tripLabel: string | null;
+  vehicleId: string | null;
+  vehiclePlate: string | null;
+  driverId: string | null;
+  driverName: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FiscalDocumentTypeCountEntity {
+  type: FiscalDocumentType;
+  count: number;
+}
+
+export interface FiscalDocumentStatusCountEntity {
+  status: FiscalDocumentStatus;
+  count: number;
+}
+
+export interface FiscalDashboardEntity {
+  totalDocuments: number;
+  cteCount: number;
+  mdfeCount: number;
+  nfeCount: number;
+  ciotCount: number;
+  pendingCount: number;
+  validCount: number;
+  invalidCount: number;
+  unlinkedCount: number;
+  linkedCount: number;
+  monthlyEvolution: DashboardChartPointEntity[];
+  byType: FiscalDocumentTypeCountEntity[];
+  byStatus: FiscalDocumentStatusCountEntity[];
+  problematicDocuments: FiscalDocumentEntity[];
+}
+
+// Fase 53 -- situacao documental consolidada de UMA viagem.
+export interface TripDocumentStatusEntity {
+  tripId: string;
+  totalDocuments: number;
+  pendingCount: number;
+  validCount: number;
+  invalidCount: number;
+  cancelledCount: number;
+  presentTypes: FiscalDocumentType[];
+  absentTypes: FiscalDocumentType[];
 }

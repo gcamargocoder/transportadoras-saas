@@ -153,16 +153,18 @@ export class TripSettlementsService {
     });
   }
 
-  // GET /trips/:id/financial-dashboard -- 3 agregacoes em paralelo (sem
+  // GET /trips/:id/financial-dashboard -- agregacoes em paralelo (sem
   // N+1); despesas consideram apenas status APPROVED (mesma regra do
-  // fechamento).
+  // fechamento). Fase 51 -- fuelCost/tollCost somados via vinculo real
+  // (tripId) com a viagem; maintenanceCost sempre null (sem vinculo
+  // confiavel disponivel no schema).
   async getFinancialDashboard(
     tenantId: string,
     tripId: string,
   ): Promise<TripFinancialDashboardEntity> {
     await this.findTripOrThrow(tenantId, tripId);
 
-    const [revenueAgg, expenseAgg, advanceAgg] = await Promise.all([
+    const [revenueAgg, expenseAgg, advanceAgg, fuelAgg, tollAgg] = await Promise.all([
       this.prisma.tripRevenue.aggregate({
         where: { tenantId, tripId },
         _sum: { amount: true },
@@ -180,6 +182,8 @@ export class TripSettlementsService {
         _sum: { amount: true },
         _count: { _all: true },
       }),
+      this.prisma.fuelSupply.aggregate({ where: { tenantId, tripId }, _sum: { totalAmount: true } }),
+      this.prisma.tollTransaction.aggregate({ where: { tenantId, tripId }, _sum: { chargedAmount: true } }),
     ]);
 
     const totalRevenue = Number(revenueAgg._sum.amount ?? 0);
@@ -187,6 +191,11 @@ export class TripSettlementsService {
     const totalAdvances = Number(advanceAgg._sum.amount ?? 0);
     const profit = totalRevenue - totalExpenses;
     const netResult = profit - totalAdvances;
+    const fuelCost = Number(fuelAgg._sum.totalAmount ?? 0);
+    const tollCost = Number(tollAgg._sum.chargedAmount ?? 0);
+    const totalCost = totalExpenses + fuelCost + tollCost;
+    const grossResult = totalRevenue - totalCost;
+    const finalResult = grossResult - totalAdvances;
 
     const entity = new TripFinancialDashboardEntity();
     entity.tripId = tripId;
@@ -202,6 +211,12 @@ export class TripSettlementsService {
     entity.entryCount = entity.revenueCount + entity.expenseCount + entity.advanceCount;
     entity.largestExpense = Number(expenseAgg._max.amount ?? 0);
     entity.largestRevenue = Number(revenueAgg._max.amount ?? 0);
+    entity.fuelCost = fuelCost;
+    entity.tollCost = tollCost;
+    entity.maintenanceCost = null;
+    entity.totalCost = totalCost;
+    entity.grossResult = grossResult;
+    entity.finalResult = finalResult;
     return entity;
   }
 

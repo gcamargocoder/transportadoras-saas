@@ -2,6 +2,7 @@ import type { QueryableParams } from '../../types/api';
 import type {
   FleetCostsEntity,
   FleetCompositionsOverviewEntity,
+  FleetFinancialDashboardEntity,
   FleetFuelAnalyticsEntity,
   FleetMaintenanceDashboardEntity,
   FleetOperationalIndicatorsEntity,
@@ -11,7 +12,17 @@ import type {
   FleetTiresOverviewEntity,
   FleetVehiclesOverviewEntity,
 } from '../../types/entities';
-import type { TireStatus, TrailerType, TripStopStatus, TripStopType, VehicleStatus, VehicleType } from '../../types/enums';
+import type {
+  ExpenseCategory,
+  ExpenseStatus,
+  RevenueCategory,
+  TireStatus,
+  TrailerType,
+  TripStopStatus,
+  TripStopType,
+  VehicleStatus,
+  VehicleType,
+} from '../../types/enums';
 import { api } from './http';
 
 // Fase 40 -- gestao operacional da frota. Filtros espelham
@@ -37,6 +48,11 @@ export interface FleetOperationsQuery extends QueryableParams {
   tireStatus?: TireStatus | undefined;
   // Aplicado apenas por getFleetOperationsCompositions.
   trailerType?: TrailerType | undefined;
+  // Fase 51 -- aplicados apenas por getFleetOperationsFinancial.
+  customerId?: string | undefined;
+  revenueCategory?: RevenueCategory | undefined;
+  expenseCategory?: ExpenseCategory | undefined;
+  expenseStatus?: ExpenseStatus | undefined;
 }
 
 export function getFleetOperationsDashboard(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
@@ -89,4 +105,12 @@ export function getFleetOperationsDowntimeCost(query: FleetOperationsQuery = {},
 // em uso respeitam o periodo (via viagens no escopo do filtro).
 export function getFleetOperationsCompositions(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
   return api.get<FleetCompositionsOverviewEntity>('/fleet-operations/compositions', query, signal);
+}
+
+// Fase 51 -- gestao financeira operacional: receita/despesa/custo total/
+// adiantamentos/resultado/margem, evolucao mensal, rankings e detalhamento,
+// tudo no mesmo escopo de filtro (periodo/veiculo/frota/motorista/cliente/
+// categoria/status).
+export function getFleetOperationsFinancial(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetFinancialDashboardEntity>('/fleet-operations/financial', query, signal);
 }

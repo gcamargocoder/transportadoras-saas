@@ -1,5 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { TireStatus, TrailerType, TripStopType, VehicleStatus, VehicleType } from '@prisma/client';
+import {
+  ExpenseCategory,
+  ExpenseStatus,
+  RevenueCategory,
+  TireStatus,
+  TrailerType,
+  TripStopType,
+  VehicleStatus,
+  VehicleType,
+} from '@prisma/client';
 import { IsDateString, IsEnum, IsIn, IsOptional, IsUUID } from 'class-validator';
 import { TRIP_STOP_STATUSES, TripStopStatus } from '../../trip-operations/entities/trip-stop.entity';
 
@@ -69,4 +78,27 @@ export class FleetOperationsQueryDto {
   @IsOptional()
   @IsEnum(TrailerType, { message: 'trailerType invalido.' })
   trailerType?: TrailerType;
+
+  // Fase 51 -- aplicados apenas por GET /fleet-operations/financial (mesmo
+  // principio ja documentado acima para os demais filtros exclusivos de 1
+  // endpoint).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Aplicado apenas por GET /fleet-operations/financial.' })
+  @IsOptional()
+  @IsUUID('4')
+  customerId?: string;
+
+  @ApiPropertyOptional({ enum: RevenueCategory, description: 'Aplicado apenas por GET /fleet-operations/financial.' })
+  @IsOptional()
+  @IsEnum(RevenueCategory, { message: 'revenueCategory invalida.' })
+  revenueCategory?: RevenueCategory;
+
+  @ApiPropertyOptional({ enum: ExpenseCategory, description: 'Aplicado apenas por GET /fleet-operations/financial.' })
+  @IsOptional()
+  @IsEnum(ExpenseCategory, { message: 'expenseCategory invalida.' })
+  expenseCategory?: ExpenseCategory;
+
+  @ApiPropertyOptional({ enum: ExpenseStatus, description: 'Aplicado apenas por GET /fleet-operations/financial.' })
+  @IsOptional()
+  @IsEnum(ExpenseStatus, { message: 'expenseStatus invalido.' })
+  expenseStatus?: ExpenseStatus;
 }
