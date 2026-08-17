@@ -10,6 +10,8 @@ import type {
   ChecklistItemType,
   ChecklistTemplateStatus,
   ChecklistType,
+  ContractStatus,
+  DeliveryProofStatus,
   DocumentType,
   ExpenseCategory,
   ExpensePaymentMethod,
@@ -19,6 +21,8 @@ import type {
   FiscalDocumentType,
   FiscalIssueCode,
   FleetType,
+  FreightRuleStatus,
+  FreightTableStatus,
   FuelType,
   ImportFileType,
   ImportJobStatus,
@@ -44,6 +48,8 @@ import type {
   TollTransactionSource,
   TollTransactionStatus,
   TrailerType,
+  TripBillingStatus,
+  TripDocumentComplianceStatus,
   TripLoadStatus,
   TripPriority,
   TripStatus,
@@ -2034,6 +2040,28 @@ export interface FiscalDocumentEntity {
   // campos/data/duplicidade/vinculo). Lista vazia = nenhum problema
   // estrutural identificado. NUNCA validacao fiscal/SEFAZ.
   validationIssues: FiscalIssueCode[];
+  // Fase 55 -- so calculado em GET /fiscal/documents/:id (detalhe).
+  // relatedDocumentsAvailable=false quando o tipo nao participa de
+  // manifesto ou faltam dados (chave/manifesto/viagem) para derivar.
+  relatedDocuments: RelatedFiscalDocumentEntity[];
+  relatedDocumentsAvailable: boolean;
+  // Fase 56 -- DRIVER (Driver App) ou ADMIN (fluxo administrativo), derivado
+  // do role de quem criou o documento -- nunca uma coluna nova.
+  origin: FiscalDocumentOrigin;
+}
+
+export type FiscalDocumentOrigin = 'DRIVER' | 'ADMIN';
+
+// Fase 55 -- projecao leve de um documento relacionado (nunca a entity
+// completa/recursiva).
+export interface RelatedFiscalDocumentEntity {
+  id: string;
+  documentType: FiscalDocumentType;
+  documentNumber: string | null;
+  accessKey: string | null;
+  status: FiscalDocumentStatus;
+  fileName: string | null;
+  tripId: string | null;
 }
 
 export interface FiscalDocumentTypeCountEntity {
@@ -2069,6 +2097,33 @@ export interface FiscalDashboardEntity {
   byStatus: FiscalDocumentStatusCountEntity[];
   problematicDocuments: FiscalDocumentEntity[];
   alerts: FiscalIssueCountEntity[];
+  // Fase 55 -- contagem de VIAGENS (nao documentos) por situacao documental;
+  // so conta viagens com pelo menos 1 documento no escopo do filtro.
+  tripsWithDocumentsOk: number;
+  tripsWithDocumentsAttention: number;
+  tripsWithDocumentsProblematic: number;
+  operationalDivergenceCount: number;
+  problemsMonthlyEvolution: DashboardChartPointEntity[];
+  // Fase 56 -- comprovante de entrega (DELIVERY_PROOF). Mesmo universo de
+  // viagens de tripsWithDocuments* -- nunca todas as viagens do tenant.
+  tripsWithDeliveryProof: number;
+  tripsWithoutDeliveryProof: number;
+  deliveryProofCoveragePercent: number | null;
+  deliveryProofCoverageAvailable: boolean;
+  deliveryProofPendingCount: number;
+  deliveryProofProblematicCount: number;
+  deliveryProofMonthlyEvolution: DashboardChartPointEntity[];
+  // Fase 57 -- CIOT (contagem total ja existia em ciotCount/byType).
+  ciotLinkedCount: number;
+  ciotUnlinkedCount: number;
+  ciotPendingCount: number;
+  ciotInvalidCount: number;
+  ciotProblematicCount: number;
+  ciotOperationalDivergenceCount: number;
+  ciotMonthlyEvolution: DashboardChartPointEntity[];
+  // Fase 58 -- MDF-e <-> CT-e/NF-e, derivado exclusivamente de chNFe/chCTe
+  // ja declarados no XML.
+  relatedDocumentsCount: number;
 }
 
 // Fase 53 -- situacao documental consolidada de UMA viagem.
@@ -2088,4 +2143,311 @@ export interface TripDocumentStatusEntity {
   problematicDocuments: FiscalDocumentEntity[];
   completenessPercent: number | null;
   completenessAvailable: boolean;
+  // Fase 55 -- situacao documental (OK/ATTENTION/PROBLEMATIC/UNAVAILABLE).
+  // NUNCA "conformidade SEFAZ" -- classificacao interna sobre coerencia dos
+  // dados existentes.
+  complianceStatus: TripDocumentComplianceStatus;
+  matrix: TripDocumentMatrixRowEntity[];
+  // Documentos SEM vinculo a nenhuma viagem, mas com evidencia objetiva
+  // (veiculo/motorista/cliente identico ao desta viagem) -- nunca matching
+  // agressivo.
+  unlinkedCandidates: FiscalDocumentEntity[];
+  // Fase 56 -- status do comprovante de entrega, sempre derivado da linha
+  // DELIVERY_PROOF de `matrix` (nunca uma maquina de estados nova).
+  deliveryProofStatus: DeliveryProofStatus;
+}
+
+// Fase 55 -- 1 linha por tipo do catalogo FiscalDocumentType (mesmo com
+// totalCount=0 -- "ausente" nunca vira erro).
+export interface TripDocumentMatrixRowEntity {
+  documentType: FiscalDocumentType;
+  totalCount: number;
+  present: boolean;
+  structurallyValidCount: number;
+  pendingCount: number;
+  invalidCount: number;
+  cancelledCount: number;
+  problematicCount: number;
+  duplicateCandidateCount: number;
+  withIssuesCount: number;
+  unlinkedRelatedCount: number;
+  // Fase 58 -- MDF-e <-> CT-e/NF-e, derivado exclusivamente de chNFe/chCTe
+  // ja declarados no XML.
+  relatedCount: number;
+}
+
+// ============================================================================
+// Fase 59 -- Gestao de Fretes, Contratos e Tabelas de Frete.
+// ============================================================================
+
+export interface ContractEntity {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  customerName: string | null;
+  code: string;
+  description: string | null;
+  status: ContractStatus;
+  startDate: string;
+  endDate: string | null;
+  isExpired: boolean;
+  notes: string | null;
+  commercialTerms: string | null;
+  freightTablesCount: number;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FreightTableEntity {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  customerName: string | null;
+  contractId: string | null;
+  contractCode: string | null;
+  name: string;
+  code: string;
+  status: FreightTableStatus;
+  effectiveFrom: string;
+  effectiveUntil: string | null;
+  notes: string | null;
+  rulesCount: number;
+  activeRulesCount: number;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FreightRuleFeeEntity {
+  label: string;
+  amount: number;
+}
+
+export interface FreightRuleEntity {
+  id: string;
+  tenantId: string;
+  freightTableId: string;
+  version: number;
+  status: FreightRuleStatus;
+  previousVersionId: string | null;
+  nextVersionId: string | null;
+  effectiveFrom: string;
+  effectiveUntil: string | null;
+  originLocationId: string | null;
+  destinationLocationId: string | null;
+  originRegion: string | null;
+  destinationRegion: string | null;
+  cargoType: string | null;
+  vehicleType: VehicleType | null;
+  minWeightKg: number | null;
+  maxWeightKg: number | null;
+  minCubageM3: number | null;
+  maxCubageM3: number | null;
+  priority: number;
+  baseAmount: number | null;
+  perKmAmount: number | null;
+  perTonAmount: number | null;
+  minimumAmount: number | null;
+  tollAmount: number | null;
+  riskAdditionalAmount: number | null;
+  nightAdditionalAmount: number | null;
+  dailyRateAmount: number | null;
+  demurrageAmount: number | null;
+  otherFees: FreightRuleFeeEntity[] | null;
+  notes: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Resultado da simulacao (nunca persistido). available=false = nao existe
+// tabela/regra aplicavel -- nunca um preco zero mascarando a ausencia.
+export interface FreightQuoteEntity {
+  available: boolean;
+  reason: string | null;
+  freightTableId: string | null;
+  freightTableName: string | null;
+  ruleId: string | null;
+  ruleVersion: number | null;
+  baseAmount: number | null;
+  additionsAmount: number | null;
+  tollAmount: number | null;
+  feesAmount: number | null;
+  totalAmount: number | null;
+}
+
+export interface TripFreightEntity {
+  id: string;
+  tenantId: string;
+  tripId: string;
+  contractId: string | null;
+  contractCode: string | null;
+  freightTableId: string | null;
+  freightTableName: string | null;
+  freightRuleId: string | null;
+  freightRuleVersion: number | null;
+  calculationInput: Record<string, unknown>;
+  baseAmount: number | null;
+  additionsAmount: number | null;
+  tollAmount: number | null;
+  feesAmount: number | null;
+  estimatedAmount: number | null;
+  contractedAmount: number | null;
+  finalAmount: number | null;
+  revenueId: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Reaproveita o financeiro da viagem (Fase 51) -- nenhum custo recalculado
+// aqui. "Custo previsto" nao existe como conceito no projeto: a margem
+// prevista compara o valor CONTRATADO contra o custo JA REALIZADO.
+export interface TripProfitabilityEntity {
+  tripId: string;
+  contractedAmount: number | null;
+  contractedAmountAvailable: boolean;
+  realizedRevenue: number;
+  realizedCost: number;
+  projectedMargin: number | null;
+  projectedResult: number | null;
+  realResult: number;
+  resultDifference: number | null;
+}
+
+export interface FreightTopCustomerEntity {
+  customerId: string;
+  customerName: string;
+  totalAmount: number;
+  freightsCount: number;
+}
+
+export interface FreightTopRouteEntity {
+  originName: string | null;
+  destinationName: string | null;
+  totalAmount: number;
+  freightsCount: number;
+}
+
+export interface FreightTopTableEntity {
+  freightTableId: string;
+  freightTableName: string;
+  totalAmount: number;
+  freightsCount: number;
+}
+
+export interface ExpiringContractEntity {
+  id: string;
+  code: string;
+  customerName: string;
+  endDate: string;
+}
+
+export interface FreightDashboardEntity {
+  contractedAmountTotal: number;
+  freightsCount: number;
+  averageTicket: number | null;
+  realizedRevenueTotal: number;
+  realizedCostTotal: number;
+  projectedMarginTotal: number;
+  realResultTotal: number;
+  resultDifferenceTotal: number;
+  topCustomers: FreightTopCustomerEntity[];
+  topRoutes: FreightTopRouteEntity[];
+  topFreightTables: FreightTopTableEntity[];
+  contractsExpiringSoon: ExpiringContractEntity[];
+  tripsWithoutApplicableRuleCount: number;
+}
+
+// ============================================================================
+// Fase 60 -- Faturamento Operacional e Conciliacao Comercial.
+// ============================================================================
+
+export interface TripBillingEntryEntity {
+  id: string;
+  amount: number;
+  revenueId: string;
+  notes: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+}
+
+// persisted=false = preview ao vivo (nenhum faturamento iniciado ainda) --
+// nunca um 404, mesmo espirito de TripSettlementEntity (Fase 51).
+export interface TripBillingEntity {
+  id: string | null;
+  tenantId: string;
+  tripId: string;
+  tripLabel: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  persisted: boolean;
+  status: TripBillingStatus;
+  contractedAmount: number | null;
+  calculatedAmount: number | null;
+  billableAmount: number | null;
+  invoicedAmount: number;
+  receivedAmount: number;
+  balance: number | null;
+  notes: string | null;
+  entries: TripBillingEntryEntity[];
+  cancelledAt: string | null;
+  cancelledBy: string | null;
+  cancellerName: string | null;
+  createdBy: string | null;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface BillingTopCustomerEntity {
+  customerId: string;
+  customerName: string;
+  totalInvoiced: number;
+  billingsCount: number;
+}
+
+export interface BillingTopFleetEntity {
+  fleetId: string | null;
+  fleetName: string;
+  totalInvoiced: number;
+  billingsCount: number;
+}
+
+export interface BillingTopVehicleEntity {
+  vehicleId: string;
+  plate: string;
+  totalInvoiced: number;
+  billingsCount: number;
+}
+
+export interface OperationalBillingDashboardEntity {
+  totalBillable: number;
+  totalInvoiced: number;
+  totalReceived: number;
+  balanceToInvoice: number;
+  readyForInvoicingCount: number;
+  partiallyInvoicedCount: number;
+  pendingCount: number;
+  monthlyEvolution: DashboardChartPointEntity[];
+  topCustomers: BillingTopCustomerEntity[];
+  topFleets: BillingTopFleetEntity[];
+  topVehicles: BillingTopVehicleEntity[];
+  commercialMargin: number;
 }

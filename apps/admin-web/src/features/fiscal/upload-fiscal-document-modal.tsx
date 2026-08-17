@@ -40,16 +40,19 @@ export function UploadFiscalDocumentModal({
   open,
   onClose,
   tripId: fixedTripId,
+  defaultDocumentType,
 }: {
   open: boolean;
   onClose: () => void;
   /** Quando informado (ex: aberto a partir do detalhe da viagem), o documento e sempre vinculado a esta viagem. */
   tripId?: string;
+  /** Fase 57 -- pre-seleciona o tipo (ex: CIOT, aberto a partir da secao dedicada da aba fiscal). O usuario ainda pode trocar. */
+  defaultDocumentType?: FiscalDocumentType;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(() => (defaultDocumentType ? { ...EMPTY_FORM, documentType: defaultDocumentType } : EMPTY_FORM));
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -80,7 +83,7 @@ export function UploadFiscalDocumentModal({
 
   function handleClose() {
     setFile(null);
-    setForm(EMPTY_FORM);
+    setForm(defaultDocumentType ? { ...EMPTY_FORM, documentType: defaultDocumentType } : EMPTY_FORM);
     onClose();
   }
 

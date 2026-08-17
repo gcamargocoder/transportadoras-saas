@@ -44,6 +44,8 @@ export interface FiscalDocumentIssueInput {
   tripVehicleId?: string | null;
   /** driverId real da viagem vinculada (Trip.driverId), quando tripId setado. */
   tripDriverId?: string | null;
+  /** customerId real da viagem vinculada (Trip.customerId), quando tripId setado -- Fase 55. */
+  tripCustomerId?: string | null;
 }
 
 /// Checagem TOLERANTE (mesmo espirito do parser de XML): so aponta um
@@ -60,11 +62,17 @@ export function isWellFormedXml(xml: string): boolean {
 export function classifyFiscalDocumentIssues(doc: FiscalDocumentIssueInput): FiscalIssueCode[] {
   const issues: FiscalIssueCode[] = [];
 
-  if (doc.accessKey) {
+  // Fase 57 -- a chave de acesso (44 digitos, DV mod-11) so existe como
+  // conceito para NF-e/CT-e/MDF-e (RECOGNIZED_XML_TYPES). CIOT/DACTE/DAMDFE/
+  // DELIVERY_PROOF/OTHER nao tem esse formato -- avaliar um valor digitado
+  // ali com o algoritmo de NF-e geraria falso positivo (INVALID_ACCESS_KEY
+  // sobre um dado que nunca foi uma chave de acesso). Nunca aplicado fora
+  // dos 3 tipos reconhecidos.
+  if (doc.accessKey && RECOGNIZED_XML_TYPES.has(doc.documentType)) {
     const validKey = isAccessKeyCheckDigitValid(doc.accessKey);
     if (!validKey) {
       issues.push(FiscalIssueCode.INVALID_ACCESS_KEY);
-    } else if (RECOGNIZED_XML_TYPES.has(doc.documentType)) {
+    } else {
       const modelCode = getAccessKeyModelCode(doc.accessKey);
       const expected = getExpectedAccessKeyModelCode(doc.documentType as 'NFE' | 'CTE' | 'MDFE');
       if (modelCode !== expected) issues.push(FiscalIssueCode.TYPE_MISMATCH);
@@ -96,7 +104,12 @@ export function classifyFiscalDocumentIssues(doc: FiscalDocumentIssueInput): Fis
   if (doc.tripId) {
     const vehicleMismatch = doc.vehicleId && doc.tripVehicleId !== undefined && doc.tripVehicleId !== null && doc.tripVehicleId !== doc.vehicleId;
     const driverMismatch = doc.driverId && doc.tripDriverId !== undefined && doc.tripDriverId !== null && doc.tripDriverId !== doc.driverId;
-    if (vehicleMismatch || driverMismatch) {
+    // Fase 55 -- mesmo principio do veiculo/motorista: so compara quando o
+    // documento tem customerId E sabemos o customerId real da viagem
+    // (tripCustomerId !== undefined) -- nunca acusa divergencia por falta de
+    // dado (viagem sem cliente informado nunca vira "inconsistente").
+    const customerMismatch = doc.customerId && doc.tripCustomerId !== undefined && doc.tripCustomerId !== null && doc.tripCustomerId !== doc.customerId;
+    if (vehicleMismatch || driverMismatch || customerMismatch) {
       issues.push(FiscalIssueCode.INCONSISTENT_LINK);
     }
   } else if (doc.vehicleId || doc.driverId || doc.customerId) {

@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
+import { BillingOperationalModule } from './billing-operational/billing-operational.module';
 import { ChecklistsModule } from './checklists/checklists.module';
 import { CommonModule } from './common/common.module';
 import { buildThrottlerOptions } from './common/config/throttler.config';
@@ -17,6 +18,7 @@ import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
 import { FleetOperationsModule } from './fleet-operations/fleet-operations.module';
 import { FiscalModule } from './fiscal/fiscal.module';
+import { FreightModule } from './freight/freight.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
@@ -84,6 +86,8 @@ import { UsersModule } from './users/users.module';
     FleetOperationsModule,
     BillingModule,
     FiscalModule,
+    FreightModule,
+    BillingOperationalModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

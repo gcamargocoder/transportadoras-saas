@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthContext';
 import { TripProvider } from '../trip/TripContext';
 import { ChecklistExecutionScreen } from '../screens/ChecklistExecutionScreen';
 import { ChecklistScreen } from '../screens/ChecklistScreen';
+import { DeliveryProofScreen } from '../screens/DeliveryProofScreen';
 import { FinishTripScreen } from '../screens/FinishTripScreen';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
@@ -73,6 +74,11 @@ export function RootNavigator(): React.JSX.Element {
               name="Stops"
               component={StopsScreen}
               options={{ headerShown: true, title: 'Paradas' }}
+            />
+            <Stack.Screen
+              name="DeliveryProof"
+              component={DeliveryProofScreen}
+              options={{ headerShown: true, title: 'Comprovante de entrega' }}
             />
             <Stack.Screen
               name="Checklist"

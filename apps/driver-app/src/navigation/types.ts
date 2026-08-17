@@ -8,6 +8,8 @@ export type RootStackParamList = {
   Fuel: { tripId: string };
   Toll: { tripId: string };
   Stops: { tripId: string };
+  // Fase 56 -- comprovante de entrega.
+  DeliveryProof: { tripId: string };
   // Fase 39 -- tela de selecao/criacao (lista templates PUBLISHED do tipo
   // pedido, cria ou retoma a execucao).
   Checklist: { tripId: string; type: ChecklistType };

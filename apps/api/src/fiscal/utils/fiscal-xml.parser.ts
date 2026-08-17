@@ -18,6 +18,13 @@ export interface ParsedFiscalDocument {
   /// Valor total do documento, quando extraivel -- vai para
   /// FiscalDocument.metadata (nao e coluna propria, ver schema).
   amount: number | null;
+  /// Fase 55, secao 3 -- chaves de acesso (NF-e/CT-e) que este MDF-e
+  /// manifesta, quando o XML contem <chNFe>/<chCTe> (elementos padrao do
+  /// bloco <infDoc> do MDF-e real). SEMPRE null para NF-e/CT-e (nao fazem
+  /// manifesto de outros documentos) e para MDF-e sem nenhuma chave
+  /// encontrada -- nunca um relacionamento inventado, so o que o proprio
+  /// XML ja declara.
+  manifestedAccessKeys: string[] | null;
 }
 
 function extractTag(block: string, tag: string): string | null {
@@ -51,6 +58,16 @@ function parseAmount(raw: string | null): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+// Fase 55 -- <chNFe>/<chCTe> sao os elementos padrao do bloco <infDoc> de um
+// MDF-e real, listando as chaves de acesso das NF-e/CT-e que ele manifesta.
+// So reconhece o que o XML ja declara explicitamente -- nunca infere uma
+// relacao a partir de outros campos (emitente, data, etc.).
+function extractManifestedAccessKeys(xml: string): string[] | null {
+  const matches = xml.matchAll(/<ch(?:NFe|CTe)>(\d{44})<\/ch(?:NFe|CTe)>/g);
+  const keys = Array.from(new Set(Array.from(matches, (match) => match[1]!)));
+  return keys.length > 0 ? keys : null;
+}
+
 // Subconjunto de FiscalDocumentType que este parser reconhece (secao 4 do
 // pedido: "suportar inicialmente identificacao de NF-e/CT-e/MDF-e") -- os
 // demais tipos do enum (CIOT/DACTE/DAMDFE/DELIVERY_PROOF/OTHER) so entram
@@ -61,9 +78,14 @@ export type RecognizedFiscalDocumentType = typeof FiscalDocumentType.NFE | typeo
 // tanto no XML "solto" (ex: <NFe><infNFe>...) quanto no XML "processado"
 // (ex: <nfeProc><NFe><infNFe>...), sem depender do elemento raiz.
 export function identifyFiscalDocumentType(xml: string): RecognizedFiscalDocumentType | null {
+  // MDF-e checado PRIMEIRO: um MDF-e real (com manifesto, Fase 55) tem seu
+  // proprio <infMDFe> no nivel raiz, mas o bloco <infDoc> aninhado contem
+  // <infNFe>/<infCTe> por documento manifestado -- checar infMDFe antes
+  // evita identificar um MDF-e completo como NF-e/CT-e por causa dos
+  // elementos filhos do manifesto.
+  if (/<infMDFe[\s>]/.test(xml)) return FiscalDocumentType.MDFE;
   if (/<infNFe[\s>]/.test(xml)) return FiscalDocumentType.NFE;
   if (/<infCte[\s>]/.test(xml)) return FiscalDocumentType.CTE;
-  if (/<infMDFe[\s>]/.test(xml)) return FiscalDocumentType.MDFE;
   return null;
 }
 
@@ -117,6 +139,8 @@ export function parseFiscalXml(xml: string): ParsedFiscalDocument | null {
   }
   // MDF-e nao tem um "valor do documento" (idem destinatario) -- fica null.
 
+  const manifestedAccessKeys = documentType === FiscalDocumentType.MDFE ? extractManifestedAccessKeys(xml) : null;
+
   return {
     documentType,
     accessKey,
@@ -128,5 +152,6 @@ export function parseFiscalXml(xml: string): ParsedFiscalDocument | null {
     recipientName,
     recipientDocument,
     amount,
+    manifestedAccessKeys,
   };
 }

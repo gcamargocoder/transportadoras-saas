@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { AlertTriangle, FileUp, Files, Link2, Link2Off, Plus } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileUp, Files, GitBranch, Link2, Link2Off, Network, Plus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../../../components/ui/badge';
 import { Button } from '../../../../../components/ui/button';
@@ -183,10 +183,105 @@ export default function FiscalDocumentsPage(): JSX.Element {
               icon={Link2Off}
               tone={dashboardQuery.data.unlinkedCount > 0 ? 'warning' : 'success'}
             />
+            <StatCard
+              label="Documentos relacionados"
+              value={String(dashboardQuery.data.relatedDocumentsCount)}
+              icon={Network}
+              tone="info"
+            />
+          </div>
+          <p className="-mt-2 text-xs text-ink-subtle">
+            &quot;Relacionados&quot; = MDF-e e o CT-e/NF-e que ele manifesta (chNFe/chCTe do próprio XML) — nunca por aproximação de número, data ou valor.
+          </p>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+              Situação documental das viagens — classificação interna, nunca conformidade/autorização SEFAZ
+            </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard label="Viagens com documentação OK" value={String(dashboardQuery.data.tripsWithDocumentsOk)} icon={CheckCircle2} tone="success" />
+              <StatCard label="Viagens em atenção" value={String(dashboardQuery.data.tripsWithDocumentsAttention)} tone="info" />
+              <StatCard
+                label="Viagens problemáticas"
+                value={String(dashboardQuery.data.tripsWithDocumentsProblematic)}
+                icon={AlertTriangle}
+                tone={dashboardQuery.data.tripsWithDocumentsProblematic > 0 ? 'danger' : 'success'}
+              />
+              <StatCard
+                label="Divergência operacional"
+                value={String(dashboardQuery.data.operationalDivergenceCount)}
+                icon={GitBranch}
+                tone={dashboardQuery.data.operationalDivergenceCount > 0 ? 'warning' : 'success'}
+              />
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+              Comprovante de entrega — evidência documental operacional, nunca validação fiscal SEFAZ
+            </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard label="Viagens com comprovante" value={String(dashboardQuery.data.tripsWithDeliveryProof)} icon={CheckCircle2} tone="success" />
+              <StatCard
+                label="Viagens sem comprovante"
+                value={String(dashboardQuery.data.tripsWithoutDeliveryProof)}
+                icon={Link2Off}
+                tone={dashboardQuery.data.tripsWithoutDeliveryProof > 0 ? 'warning' : 'success'}
+              />
+              <StatCard label="Comprovantes pendentes" value={String(dashboardQuery.data.deliveryProofPendingCount)} tone="info" />
+              <StatCard
+                label="Comprovantes com problema"
+                value={String(dashboardQuery.data.deliveryProofProblematicCount)}
+                icon={AlertTriangle}
+                tone={dashboardQuery.data.deliveryProofProblematicCount > 0 ? 'danger' : 'success'}
+              />
+            </div>
+            <p className="mt-2 text-xs text-ink-subtle">
+              {dashboardQuery.data.deliveryProofCoverageAvailable
+                ? `Cobertura: ${dashboardQuery.data.deliveryProofCoveragePercent}% das viagens com documento fiscal no filtro atual têm comprovante de entrega.`
+                : 'Cobertura indisponível — nenhuma viagem com documento fiscal no filtro atual.'}
+            </p>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+              CIOT — armazenado e validado estruturalmente pelo sistema, nunca emissão/autorização oficial perante a ANTT
+            </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard label="Total de CIOT" value={String(dashboardQuery.data.ciotCount)} />
+              <StatCard label="Vinculados" value={String(dashboardQuery.data.ciotLinkedCount)} icon={Link2} tone="success" />
+              <StatCard
+                label="Sem vínculo"
+                value={String(dashboardQuery.data.ciotUnlinkedCount)}
+                icon={Link2Off}
+                tone={dashboardQuery.data.ciotUnlinkedCount > 0 ? 'warning' : 'success'}
+              />
+              <StatCard label="Pendentes" value={String(dashboardQuery.data.ciotPendingCount)} tone="info" />
+              <StatCard
+                label="Inválidos"
+                value={String(dashboardQuery.data.ciotInvalidCount)}
+                tone={dashboardQuery.data.ciotInvalidCount > 0 ? 'danger' : 'success'}
+              />
+              <StatCard
+                label="Problemáticos"
+                value={String(dashboardQuery.data.ciotProblematicCount)}
+                icon={AlertTriangle}
+                tone={dashboardQuery.data.ciotProblematicCount > 0 ? 'danger' : 'success'}
+              />
+              <StatCard
+                label="Divergência operacional"
+                value={String(dashboardQuery.data.ciotOperationalDivergenceCount)}
+                icon={GitBranch}
+                tone={dashboardQuery.data.ciotOperationalDivergenceCount > 0 ? 'warning' : 'success'}
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <MonthlyChartCard title="Evolução mensal" data={dashboardQuery.data.monthlyEvolution} color="#4f46e5" />
+            <MonthlyChartCard title="Evolução mensal de problemas" data={dashboardQuery.data.problemsMonthlyEvolution} color="#dc2626" />
+            <MonthlyChartCard title="Evolução mensal de comprovantes" data={dashboardQuery.data.deliveryProofMonthlyEvolution} color="#16a34a" />
+            <MonthlyChartCard title="Evolução mensal de CIOT" data={dashboardQuery.data.ciotMonthlyEvolution} color="#4f46e5" />
             <BarRankingChart
               title="Distribuição por tipo"
               data={dashboardQuery.data.byType.filter((t) => t.count > 0).map((t) => ({ label: FISCAL_DOCUMENT_TYPE_LABELS[t.type], value: t.count }))}

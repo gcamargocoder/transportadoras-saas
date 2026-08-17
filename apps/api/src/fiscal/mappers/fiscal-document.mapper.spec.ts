@@ -92,4 +92,12 @@ describe('toFiscalDocumentEntity', () => {
     expect(entity.customerName).toBe('Cliente Teste');
     expect(entity.updaterName).toBe('Beltrano');
   });
+
+  it('Fase 56 -- origin deriva do role do criador (DRIVER = Driver App, qualquer outro = ADMIN)', () => {
+    const byDriver = toFiscalDocumentEntity(buildDocument({ creator: { id: 'user-1', name: 'Motorista', role: 'DRIVER' } as never }));
+    expect(byDriver.origin).toBe('DRIVER');
+
+    const byAdmin = toFiscalDocumentEntity(buildDocument({ creator: { id: 'user-1', name: 'Fulano', role: 'ADMIN' } as never }));
+    expect(byAdmin.origin).toBe('ADMIN');
+  });
 });

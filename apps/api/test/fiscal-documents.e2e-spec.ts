@@ -201,7 +201,7 @@ describe('Fiscal Documents (e2e)', () => {
     return res.body.data.id as string;
   }
 
-  async function createTrip(auth: string, driverId: string, compositionId: string) {
+  async function createTrip(auth: string, driverId: string, compositionId: string, customerId?: string) {
     const originId = await createLocation(auth, `Origem ${randomUUID()}`);
     const destinationId = await createLocation(auth, `Destino ${randomUUID()}`);
     const res = await request(app.getHttpServer())
@@ -210,6 +210,7 @@ describe('Fiscal Documents (e2e)', () => {
       .send({
         driverId,
         compositionId,
+        ...(customerId ? { customerId } : {}),
         originLocationId: originId,
         destinationLocationId: destinationId,
         plannedDeparture: '2026-01-01T08:00:00.000Z',
@@ -219,11 +220,11 @@ describe('Fiscal Documents (e2e)', () => {
     return res.body.data.id as string;
   }
 
-  async function setupTripAndVehicle(auth: string) {
+  async function setupTripAndVehicle(auth: string, customerId?: string) {
     const vehicleId = await createVehicle(auth);
     const driverId = await createDriver(auth);
     const compositionId = await createComposition(auth, vehicleId);
-    const tripId = await createTrip(auth, driverId, compositionId);
+    const tripId = await createTrip(auth, driverId, compositionId, customerId);
     return { vehicleId, driverId, tripId };
   }
 
@@ -1077,6 +1078,726 @@ describe('Fiscal Documents (e2e)', () => {
         .set('Authorization', tenantA.adminAuth)
         .expect(200);
       expect(getA.body.data.validationIssues).not.toContain('DUPLICATE_CANDIDATE');
+    });
+  });
+
+  // ==========================================================================
+  // Fase 55 -- integracao fiscal <-> viagem
+  // ==========================================================================
+  describe('Fase 55 -- integracao fiscal <-> viagem', () => {
+    function buildMdfeXmlWithManifest(accessKey: string, number: string, manifestedKeys: string[]): string {
+      const infDoc = manifestedKeys.map((key) => `<infNFe><chNFe>${key}</chNFe></infNFe>`).join('');
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<mdfeProc versao="3.00">
+  <MDFe>
+    <infMDFe Id="MDFe${accessKey}" versao="3.00">
+      <ide><serie>1</serie><nMDF>${number}</nMDF><dhEmi>2026-08-03T07:00:00-03:00</dhEmi></ide>
+      <emit><CNPJ>11222333000144</CNPJ><xNome>Transportadora Teste LTDA</xNome></emit>
+      <infDoc>${infDoc}</infDoc>
+    </infMDFe>
+  </MDFe>
+</mdfeProc>`;
+    }
+
+    it('viagem sem documentos: complianceStatus UNAVAILABLE, matriz toda zerada (nunca inventa problema)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompUnavailable');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.complianceStatus).toBe('UNAVAILABLE');
+      expect(res.body.data.matrix).toHaveLength(8);
+      expect(res.body.data.matrix.every((row: { totalCount: number; present: boolean }) => row.totalCount === 0 && row.present === false)).toBe(true);
+    });
+
+    it('viagem com documento estruturalmente valido (VALID, sem issues): complianceStatus OK', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompOk');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        // buildValidAccessKey (nao randomAccessKey) -- precisa de um DV
+        // mod-11 valido, senao o proprio documento vira INVALID_ACCESS_KEY
+        // e nunca fica "estruturalmente valido" (ver Fase 54).
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildNfeXml(buildValidAccessKey('55'), '1')), 'nota.xml')
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.complianceStatus).toBe('OK');
+      const nfeRow = res.body.data.matrix.find((row: { documentType: string }) => row.documentType === 'NFE');
+      expect(nfeRow.present).toBe(true);
+      expect(nfeRow.totalCount).toBe(1);
+      expect(nfeRow.structurallyValidCount).toBe(1);
+    });
+
+    it('viagem com documento PENDING (upload manual): complianceStatus ATTENTION', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompAttention');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.complianceStatus).toBe('ATTENTION');
+    });
+
+    it('viagem com documento INVALID: complianceStatus PROBLEMATIC', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompProblematicInvalid');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'doc.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'INVALID' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.complianceStatus).toBe('PROBLEMATIC');
+    });
+
+    it('viagem com documento CANCELLED: complianceStatus PROBLEMATIC (documento cancelado com contexto operacional)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompProblematicCancelled');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'doc.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'CANCELLED' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.complianceStatus).toBe('PROBLEMATIC');
+    });
+
+    it('divergencia de cliente entre documento e viagem gera INCONSISTENT_LINK e complianceStatus PROBLEMATIC', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompCustomerDivergence');
+      const tripCustomerId = await createCustomer(adminAuth);
+      const otherCustomerId = await createCustomer(adminAuth);
+      const { tripId } = await setupTripAndVehicle(adminAuth, tripCustomerId);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .field('tripId', tripId)
+        .field('customerId', otherCustomerId)
+        .attach('file', VALID_PDF, 'doc.pdf')
+        .expect(201);
+      expect(res.body.data.validationIssues).toContain('INCONSISTENT_LINK');
+
+      const status = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(status.body.data.complianceStatus).toBe('PROBLEMATIC');
+    });
+
+    it('candidatos nao vinculados: documento com o MESMO veiculo da viagem aparece em unlinkedCandidates; veiculo diferente nunca aparece', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompCandidates');
+      const { tripId, vehicleId } = await setupTripAndVehicle(adminAuth);
+      const otherVehicleId = await createVehicle(adminAuth);
+
+      const matchingRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('vehicleId', vehicleId)
+        .attach('file', VALID_PDF, 'match.pdf')
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('vehicleId', otherVehicleId)
+        .attach('file', VALID_PDF, 'nomatch.pdf')
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const candidateIds = res.body.data.unlinkedCandidates.map((d: { id: string }) => d.id);
+      expect(candidateIds).toContain(matchingRes.body.data.id);
+      expect(candidateIds).toHaveLength(1);
+
+      const ciotRow = res.body.data.matrix.find((row: { documentType: string }) => row.documentType === 'CIOT');
+      expect(ciotRow.unlinkedRelatedCount).toBe(1);
+    });
+
+    it('candidatos nunca aparecem sem evidencia objetiva (viagem sem veiculo/motorista/cliente comparavel)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompNoCandidates');
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      const compositionId = await createComposition(adminAuth, vehicleId);
+      const tripId = await createTrip(adminAuth, driverId, compositionId);
+
+      // Documento totalmente solto -- nenhum vinculo em comum com a viagem.
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .attach('file', VALID_PDF, 'solto.pdf')
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.unlinkedCandidates).toEqual([]);
+    });
+
+    it('relacionamento MDF-e -> CT-e via chaves manifestadas (chNFe/chCTe), nos dois sentidos', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompManifest');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const cteKey = randomAccessKey();
+      const cteRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildCteXml(cteKey, '1')), 'cte.xml')
+        .expect(201);
+
+      const mdfeKey = randomAccessKey();
+      const mdfeRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildMdfeXmlWithManifest(mdfeKey, '1', [cteKey])), 'mdfe.xml')
+        .expect(201);
+
+      const mdfeDetail = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${mdfeRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(mdfeDetail.body.data.relatedDocumentsAvailable).toBe(true);
+      expect(mdfeDetail.body.data.relatedDocuments.map((d: { id: string }) => d.id)).toContain(cteRes.body.data.id);
+
+      const cteDetail = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${cteRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(cteDetail.body.data.relatedDocumentsAvailable).toBe(true);
+      expect(cteDetail.body.data.relatedDocuments.map((d: { id: string }) => d.id)).toContain(mdfeRes.body.data.id);
+    });
+
+    it('relacionamento indisponivel quando faltam dados (MDF-e sem manifesto; NF-e/CT-e sem viagem)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompManifestUnavailable');
+
+      const mdfeRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .attach('file', Buffer.from(buildMdfeXml(randomAccessKey(), '1')), 'mdfe-sem-manifesto.xml')
+        .expect(201);
+      const mdfeDetail = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${mdfeRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(mdfeDetail.body.data.relatedDocumentsAvailable).toBe(false);
+      expect(mdfeDetail.body.data.relatedDocuments).toEqual([]);
+
+      const cteRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .attach('file', Buffer.from(buildCteXml(randomAccessKey(), '1')), 'cte-sem-viagem.xml')
+        .expect(201);
+      const cteDetail = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${cteRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(cteDetail.body.data.relatedDocumentsAvailable).toBe(false);
+    });
+
+    it('dashboard: tripsWithDocumentsOk/Problematic e operationalDivergenceCount refletem as viagens do escopo', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CompDashboard');
+
+      const { tripId: okTripId } = await setupTripAndVehicle(adminAuth);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', okTripId)
+        .attach('file', Buffer.from(buildNfeXml(randomAccessKey(), '1')), 'ok.xml')
+        .expect(201);
+
+      const { tripId: problemTripId, vehicleId } = await setupTripAndVehicle(adminAuth);
+      const otherVehicleId = await createVehicle(adminAuth);
+      const divergentRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .field('tripId', problemTripId)
+        .field('vehicleId', otherVehicleId)
+        .attach('file', VALID_PDF, 'divergente.pdf')
+        .expect(201);
+      expect(divergentRes.body.data.validationIssues).toContain('INCONSISTENT_LINK');
+      void vehicleId;
+
+      const dashboard = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(dashboard.body.data.tripsWithDocumentsOk).toBeGreaterThanOrEqual(1);
+      expect(dashboard.body.data.tripsWithDocumentsProblematic).toBeGreaterThanOrEqual(1);
+      expect(dashboard.body.data.operationalDivergenceCount).toBeGreaterThanOrEqual(1);
+      expect(dashboard.body.data.problemsMonthlyEvolution).toBeInstanceOf(Array);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 56 -- comprovante de entrega (integracao com matriz/dashboard/origin)
+  // ==========================================================================
+  describe('Fase 56 -- comprovante de entrega', () => {
+    it('upload manual (admin) de DELIVERY_PROOF tem origin=ADMIN; matriz e deliveryProofStatus refletem o documento', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DeliveryProofAdmin');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const before = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(before.body.data.deliveryProofStatus).toBe('MISSING');
+      const emptyRow = before.body.data.matrix.find((row: { documentType: string }) => row.documentType === 'DELIVERY_PROOF');
+      expect(emptyRow.totalCount).toBe(0);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+      expect(uploadRes.body.data.origin).toBe('ADMIN');
+
+      const afterUpload = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(afterUpload.body.data.deliveryProofStatus).toBe('PENDING'); // upload manual comeca PENDING
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'VALID' })
+        .expect(200);
+
+      const afterValid = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(afterValid.body.data.deliveryProofStatus).toBe('AVAILABLE');
+      const filledRow = afterValid.body.data.matrix.find((row: { documentType: string }) => row.documentType === 'DELIVERY_PROOF');
+      expect(filledRow.totalCount).toBe(1);
+      expect(filledRow.structurallyValidCount).toBe(1);
+    });
+
+    it('dashboard: tripsWithDeliveryProof/tripsWithoutDeliveryProof e cobertura refletem o escopo do filtro', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DeliveryProofDashboard');
+
+      const { tripId: tripWithProof } = await setupTripAndVehicle(adminAuth);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripWithProof)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+
+      const { tripId: tripWithoutProof } = await setupTripAndVehicle(adminAuth);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('tripId', tripWithoutProof)
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      const dashboard = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(dashboard.body.data.tripsWithDeliveryProof).toBeGreaterThanOrEqual(1);
+      expect(dashboard.body.data.tripsWithoutDeliveryProof).toBeGreaterThanOrEqual(1);
+      expect(dashboard.body.data.deliveryProofCoverageAvailable).toBe(true);
+      expect(dashboard.body.data.deliveryProofCoveragePercent).not.toBeNull();
+      expect(dashboard.body.data.deliveryProofMonthlyEvolution).toBeInstanceOf(Array);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 57 -- CIOT (reaproveita FiscalDocument, sem tabela/service novo)
+  // ==========================================================================
+  describe('Fase 57 -- CIOT', () => {
+    it('cadastro manual (numero, sem chave de acesso) ja vinculado a viagem/veiculo/motorista/cliente', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ciot1');
+      const { tripId, vehicleId, driverId } = await setupTripAndVehicle(adminAuth);
+      const customerId = await createCustomer(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-000123')
+        .field('tripId', tripId)
+        .field('vehicleId', vehicleId)
+        .field('driverId', driverId)
+        .field('customerId', customerId)
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      expect(res.body.data.documentType).toBe('CIOT');
+      expect(res.body.data.documentNumber).toBe('CIOT-000123');
+      expect(res.body.data.accessKey).toBeNull(); // nunca inventado -- CIOT nao tem chave de acesso SEFAZ
+      expect(res.body.data.tripId).toBe(tripId);
+      expect(res.body.data.vehicleId).toBe(vehicleId);
+      expect(res.body.data.driverId).toBe(driverId);
+      expect(res.body.data.customerId).toBe(customerId);
+      expect(res.body.data.status).toBe('PENDING');
+      expect(res.body.data.validationIssues).toEqual([]);
+    });
+
+    it('valor digitado no campo chave de acesso nunca gera INVALID_ACCESS_KEY (CIOT nao tem esse formato)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ciot2');
+      const garbageKey = `${'0'.repeat(43)}9`; // DV real seria 0, nunca 9 -- invalido se avaliado como NF-e/CT-e/MDF-e
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('accessKey', garbageKey)
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      expect(res.body.data.validationIssues).not.toContain('INVALID_ACCESS_KEY');
+    });
+
+    it('vincula um CIOT ja existente (sem vinculo) a uma viagem via PATCH (mesmo endpoint generico)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ciot3');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-999')
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+      expect(uploadRes.body.data.tripId).toBeNull();
+
+      const patchRes = await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ tripId })
+        .expect(200);
+      expect(patchRes.body.data.tripId).toBe(tripId);
+
+      const byType = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents?documentType=CIOT&tripId=${tripId}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byType.body.data.items).toHaveLength(1);
+    });
+
+    it('duplicidade de CIOT (mesmo tipo+numero+serie+data, sem chave) reaproveita o mecanismo generico -- 409', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Ciot4');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-DUP')
+        .field('series', '1')
+        .field('issueDate', '2026-08-01')
+        .attach('file', VALID_PDF, 'ciot1.pdf')
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-DUP')
+        .field('series', '1')
+        .field('issueDate', '2026-08-01')
+        .attach('file', VALID_PDF, 'ciot2.pdf')
+        .expect(409);
+
+      expect(await prisma.fiscalDocument.count({ where: { tenantId, documentType: 'CIOT' } })).toBe(1);
+    });
+
+    it('isolamento tenant: CIOT de um tenant nunca aparece/e acessivel para outro', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('Ciot5A');
+      const tenantB = await createTenantAndLoginAsAdmin('Ciot5B');
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', tenantA.adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-ISO')
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', tenantB.adminAuth)
+        .expect(404);
+
+      const listB = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents?documentType=CIOT')
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(listB.body.data.items).toEqual([]);
+    });
+
+    it('historico de auditoria reflete upload e vinculo do CIOT', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ciot6');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-HIST')
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ tripId })
+        .expect(200);
+
+      const historyRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${uploadRes.body.data.id}/history`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(historyRes.body.data.items.map((i: { action: string }) => i.action)).toEqual(
+        expect.arrayContaining(['fiscal.document_uploaded', 'fiscal.document_linked']),
+      );
+    });
+
+    it('matriz documental e complianceStatus da viagem refletem o CIOT vinculado', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ciot7');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-MATRIX')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'VALID' })
+        .expect(200);
+
+      const statusRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const ciotRow = statusRes.body.data.matrix.find((row: { documentType: string }) => row.documentType === 'CIOT');
+      expect(ciotRow.totalCount).toBe(1);
+      expect(ciotRow.structurallyValidCount).toBe(1);
+      expect(statusRes.body.data.complianceStatus).toBe('OK'); // ausencia de CIOT nunca e erro; com 1 CIOT valido, viagem OK
+    });
+
+    it('dashboard: indicadores CIOT (vinculados/sem vinculo/pendentes/invalidos/problematicos/divergencia) refletem o escopo do filtro', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ciot8');
+      const { tripId, vehicleId } = await setupTripAndVehicle(adminAuth);
+      const otherVehicleId = await createVehicle(adminAuth);
+
+      // 1 vinculado, PENDING.
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-A')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'a.pdf')
+        .expect(201);
+
+      // 1 sem vinculo nenhum.
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-B')
+        .attach('file', VALID_PDF, 'b.pdf')
+        .expect(201);
+
+      // 1 INVALID com divergencia operacional (veiculo diferente do real da viagem).
+      const divergentRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-C')
+        .field('tripId', tripId)
+        .field('vehicleId', otherVehicleId)
+        .attach('file', VALID_PDF, 'c.pdf')
+        .expect(201);
+      expect(divergentRes.body.data.validationIssues).toContain('INCONSISTENT_LINK');
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${divergentRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'INVALID' })
+        .expect(200);
+      void vehicleId;
+
+      const dashboard = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(dashboard.body.data.ciotCount).toBe(3);
+      expect(dashboard.body.data.ciotLinkedCount).toBe(2); // A e C linkados a trip; B sem vinculo
+      expect(dashboard.body.data.ciotUnlinkedCount).toBe(1); // B
+      expect(dashboard.body.data.ciotPendingCount).toBe(2); // A e B continuam PENDING (upload nunca muda status sozinho)
+      expect(dashboard.body.data.ciotInvalidCount).toBe(1); // C
+      expect(dashboard.body.data.ciotProblematicCount).toBe(3); // A+B (PENDING) + C (INVALID/divergente)
+      expect(dashboard.body.data.ciotOperationalDivergenceCount).toBe(1);
+      expect(dashboard.body.data.ciotMonthlyEvolution).toBeInstanceOf(Array);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 58 -- relatedCount (matriz) e relatedDocumentsCount (dashboard),
+  // reaproveitando o mesmo mecanismo de relacionamento da Fase 55
+  // (metadata.manifestedAccessKeys) -- agora tambem agregado em lote.
+  // ==========================================================================
+  describe('Fase 58 -- MDF-e + CT-e + NF-e: relacionamento agregado', () => {
+    function buildMdfeXmlWithManifest(accessKey: string, number: string, manifestedKeys: string[]): string {
+      const infDoc = manifestedKeys.map((key) => `<infNFe><chNFe>${key}</chNFe></infNFe>`).join('');
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<mdfeProc versao="3.00">
+  <MDFe>
+    <infMDFe Id="MDFe${accessKey}" versao="3.00">
+      <ide><serie>1</serie><nMDF>${number}</nMDF><dhEmi>2026-08-03T07:00:00-03:00</dhEmi></ide>
+      <emit><CNPJ>11222333000144</CNPJ><xNome>Transportadora Teste LTDA</xNome></emit>
+      <infDoc>${infDoc}</infDoc>
+    </infMDFe>
+  </MDFe>
+</mdfeProc>`;
+    }
+
+    it('matriz da viagem: relatedCount conta MDF-e e o CT-e/NF-e que ele manifesta; tipos sem relacao ficam 0', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Related1');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const cteKey = randomAccessKey();
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildCteXml(cteKey, '1')), 'cte.xml')
+        .expect(201);
+
+      // NF-e SOLTA, sem nenhuma chave manifestada por ninguem -- nunca
+      // relacionada por aproximacao.
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildNfeXml(randomAccessKey(), '1')), 'nfe-solta.xml')
+        .expect(201);
+
+      const mdfeKey = randomAccessKey();
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildMdfeXmlWithManifest(mdfeKey, '1', [cteKey])), 'mdfe.xml')
+        .expect(201);
+
+      const statusRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/trip/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const rowFor = (type: string) => statusRes.body.data.matrix.find((row: { documentType: string }) => row.documentType === type);
+      expect(rowFor('MDFE').relatedCount).toBe(1);
+      expect(rowFor('CTE').relatedCount).toBe(1);
+      expect(rowFor('NFE').relatedCount).toBe(0); // NF-e solta -- nunca relacionada por aproximacao
+      expect(rowFor('CIOT').relatedCount).toBe(0);
+    });
+
+    it('dashboard: relatedDocumentsCount conta as duas pontas quando ambas estao no escopo do filtro', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Related2');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      const cteKey = randomAccessKey();
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildCteXml(cteKey, '1')), 'cte.xml')
+        .expect(201);
+
+      const mdfeKey = randomAccessKey();
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/import')
+        .set('Authorization', adminAuth)
+        .field('tripId', tripId)
+        .attach('file', Buffer.from(buildMdfeXmlWithManifest(mdfeKey, '1', [cteKey])), 'mdfe.xml')
+        .expect(201);
+
+      // Documento solto, sem relacao com nada -- nunca conta.
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .field('documentNumber', 'CIOT-SOLTO')
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+
+      const dashboard = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(dashboard.body.data.relatedDocumentsCount).toBe(2); // MDF-e + CT-e manifestado
+
+      // Filtrado so por MDF-e: o CT-e manifestado sai do escopo, entao o
+      // relacionamento (que exige as DUAS pontas no escopo) deixa de ser
+      // contado -- nunca inventa relacao com algo fora do filtro atual.
+      const filtered = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents/dashboard?documentType=MDFE')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(filtered.body.data.relatedDocumentsCount).toBe(0);
     });
   });
 

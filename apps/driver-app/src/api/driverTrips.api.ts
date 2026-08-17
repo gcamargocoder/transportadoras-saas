@@ -1,7 +1,8 @@
-import { apiRequest } from './http';
+import { apiRequest, apiUpload, UploadFilePart } from './http';
 import {
   AxleEvent,
   AxleEventSource,
+  DeliveryProof,
   DriverActiveTrip,
   DriverConfig,
   DriverRoute,
@@ -9,6 +10,7 @@ import {
   FuelSupply,
   NearbyTollPlaza,
   RouteComparison,
+  SubmitDeliveryProofInput,
   TrackingPointInput,
   TrackingPointsSyncResult,
   TripLoadStatus,
@@ -175,6 +177,22 @@ export function closeAxleEvent(
     method: 'PATCH',
     body: { endedAt },
   });
+}
+
+// Fase 56 -- comprovante de entrega. `file` e o path local persistido
+// (ver storage/deliveryProofFiles.ts) -- nunca a URI efemera da camera
+// direto (mesmo motivo/padrao de uploadChecklistEvidence).
+export function submitDeliveryProof(
+  tripId: string,
+  input: SubmitDeliveryProofInput,
+  file: UploadFilePart,
+): Promise<DeliveryProof> {
+  const fields: Record<string, string | undefined> = {
+    deviceEventId: input.deviceEventId,
+    observation: input.observation,
+    capturedAt: input.capturedAt,
+  };
+  return apiUpload<DeliveryProof>(`/driver/trips/${tripId}/delivery-proof`, fields, file);
 }
 
 // Fase 26 -- roteirizacao geografica.

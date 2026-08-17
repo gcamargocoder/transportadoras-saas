@@ -555,3 +555,65 @@ export const FiscalIssueCode = {
   NO_TRIP_CONTEXT: 'NO_TRIP_CONTEXT',
 } as const;
 export type FiscalIssueCode = (typeof FiscalIssueCode)[keyof typeof FiscalIssueCode];
+
+// Fase 55 -- situacao documental da viagem. NUNCA "conformidade SEFAZ":
+// classificacao interna sobre a coerencia/estrutura dos dados existentes.
+export const TripDocumentComplianceStatus = {
+  OK: 'OK',
+  ATTENTION: 'ATTENTION',
+  PROBLEMATIC: 'PROBLEMATIC',
+  UNAVAILABLE: 'UNAVAILABLE',
+} as const;
+export type TripDocumentComplianceStatus = (typeof TripDocumentComplianceStatus)[keyof typeof TripDocumentComplianceStatus];
+
+// Fase 56 -- status do comprovante de entrega, derivado (nunca uma maquina
+// de estados nova). "Arquivo existente" nunca e tratado como AVAILABLE por
+// si so -- so quando estruturalmente valido.
+export const DeliveryProofStatus = {
+  MISSING: 'MISSING',
+  PENDING: 'PENDING',
+  AVAILABLE: 'AVAILABLE',
+  PROBLEMATIC: 'PROBLEMATIC',
+} as const;
+export type DeliveryProofStatus = (typeof DeliveryProofStatus)[keyof typeof DeliveryProofStatus];
+
+// Fase 59 -- Gestao de Fretes, Contratos e Tabelas de Frete.
+export const ContractStatus = {
+  DRAFT: 'DRAFT',
+  ACTIVE: 'ACTIVE',
+  SUSPENDED: 'SUSPENDED',
+  EXPIRED: 'EXPIRED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type ContractStatus = (typeof ContractStatus)[keyof typeof ContractStatus];
+
+export const FreightTableStatus = {
+  DRAFT: 'DRAFT',
+  ACTIVE: 'ACTIVE',
+  SUSPENDED: 'SUSPENDED',
+  EXPIRED: 'EXPIRED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type FreightTableStatus = (typeof FreightTableStatus)[keyof typeof FreightTableStatus];
+
+// ACTIVE = pode ser selecionada pelo motor de calculo; ARCHIVED = fechada
+// por uma nova versao, preservada so para historico.
+export const FreightRuleStatus = {
+  ACTIVE: 'ACTIVE',
+  ARCHIVED: 'ARCHIVED',
+} as const;
+export type FreightRuleStatus = (typeof FreightRuleStatus)[keyof typeof FreightRuleStatus];
+
+// Fase 60 -- Faturamento Operacional e Conciliacao Comercial. PAID/
+// CANCELLED sao sempre transicoes manuais explicitas -- as demais sao
+// derivadas de billableAmount/invoicedAmount (ver billing-status.util.ts
+// no backend).
+export const TripBillingStatus = {
+  DRAFT: 'DRAFT',
+  READY: 'READY',
+  PARTIALLY_INVOICED: 'PARTIALLY_INVOICED',
+  INVOICED: 'INVOICED',
+  PAID: 'PAID',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type TripBillingStatus = (typeof TripBillingStatus)[keyof typeof TripBillingStatus];

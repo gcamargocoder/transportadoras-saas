@@ -6,6 +6,8 @@ import {
   AlertType,
   AxleEventSource,
   BillingPeriodicity,
+  ContractStatus,
+  DeliveryProofStatus,
   DocumentType,
   ExpenseCategory,
   ExpensePaymentMethod,
@@ -14,7 +16,11 @@ import {
   FiscalDocumentStatus,
   FiscalDocumentType,
   FiscalIssueCode,
+  TripBillingStatus,
+  TripDocumentComplianceStatus,
   FleetType,
+  FreightRuleStatus,
+  FreightTableStatus,
   FuelType,
   ImportJobStatus,
   LocationType,
@@ -49,7 +55,7 @@ import {
   VehicleStatus,
   VehicleType,
 } from '../types/enums';
-import type { DowntimeCategory } from '../types/entities';
+import type { DowntimeCategory, FiscalDocumentOrigin } from '../types/entities';
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   SUPER_ADMIN: 'Super admin',
@@ -494,9 +500,107 @@ export const FISCAL_ISSUE_CODE_LABELS: Record<FiscalIssueCode, string> = {
   NO_TRIP_CONTEXT: 'Sem viagem vinculada',
 };
 
+// Fase 55 -- situação documental da viagem. NUNCA "conformidade SEFAZ".
+export const TRIP_DOCUMENT_COMPLIANCE_STATUS_LABELS: Record<TripDocumentComplianceStatus, string> = {
+  OK: 'Documentação OK',
+  ATTENTION: 'Atenção',
+  PROBLEMATIC: 'Problemático',
+  UNAVAILABLE: 'Indisponível',
+};
+
+export const TRIP_DOCUMENT_COMPLIANCE_STATUS_TONE: Record<TripDocumentComplianceStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  OK: 'success',
+  ATTENTION: 'warning',
+  PROBLEMATIC: 'danger',
+  UNAVAILABLE: 'neutral',
+};
+
+// Fase 56 -- comprovante de entrega. Evidencia documental operacional,
+// NUNCA validacao fiscal SEFAZ.
+export const DELIVERY_PROOF_STATUS_LABELS: Record<DeliveryProofStatus, string> = {
+  MISSING: 'Sem comprovante',
+  PENDING: 'Comprovante pendente',
+  AVAILABLE: 'Comprovante disponível',
+  PROBLEMATIC: 'Comprovante com problema',
+};
+
+export const DELIVERY_PROOF_STATUS_TONE: Record<DeliveryProofStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  MISSING: 'neutral',
+  PENDING: 'info',
+  AVAILABLE: 'success',
+  PROBLEMATIC: 'danger',
+};
+
+export const FISCAL_DOCUMENT_ORIGIN_LABELS: Record<FiscalDocumentOrigin, string> = {
+  DRIVER: 'App do motorista',
+  ADMIN: 'Painel administrativo',
+};
+
 export const SUBSCRIPTION_PAYMENT_STATUS_TONE: Record<SubscriptionPaymentStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
   PENDING: 'info',
   PAID: 'success',
   OVERDUE: 'danger',
   CANCELLED: 'neutral',
+};
+
+// Fase 59 -- Gestao de Fretes, Contratos e Tabelas de Frete.
+export const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
+  DRAFT: 'Rascunho',
+  ACTIVE: 'Ativo',
+  SUSPENDED: 'Suspenso',
+  EXPIRED: 'Vencido',
+  CANCELLED: 'Cancelado',
+};
+
+export const CONTRACT_STATUS_TONE: Record<ContractStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  DRAFT: 'neutral',
+  ACTIVE: 'success',
+  SUSPENDED: 'warning',
+  EXPIRED: 'danger',
+  CANCELLED: 'danger',
+};
+
+export const FREIGHT_TABLE_STATUS_LABELS: Record<FreightTableStatus, string> = {
+  DRAFT: 'Rascunho',
+  ACTIVE: 'Ativa',
+  SUSPENDED: 'Suspensa',
+  EXPIRED: 'Vencida',
+  CANCELLED: 'Cancelada',
+};
+
+export const FREIGHT_TABLE_STATUS_TONE: Record<FreightTableStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  DRAFT: 'neutral',
+  ACTIVE: 'success',
+  SUSPENDED: 'warning',
+  EXPIRED: 'danger',
+  CANCELLED: 'danger',
+};
+
+export const FREIGHT_RULE_STATUS_LABELS: Record<FreightRuleStatus, string> = {
+  ACTIVE: 'Vigente',
+  ARCHIVED: 'Substituída',
+};
+
+export const FREIGHT_RULE_STATUS_TONE: Record<FreightRuleStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  ACTIVE: 'success',
+  ARCHIVED: 'neutral',
+};
+
+// Fase 60 -- Faturamento Operacional e Conciliacao Comercial.
+export const TRIP_BILLING_STATUS_LABELS: Record<TripBillingStatus, string> = {
+  DRAFT: 'Rascunho',
+  READY: 'Pronto para faturar',
+  PARTIALLY_INVOICED: 'Faturado parcialmente',
+  INVOICED: 'Faturado',
+  PAID: 'Recebido',
+  CANCELLED: 'Cancelado',
+};
+
+export const TRIP_BILLING_STATUS_TONE: Record<TripBillingStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  DRAFT: 'neutral',
+  READY: 'info',
+  PARTIALLY_INVOICED: 'warning',
+  INVOICED: 'success',
+  PAID: 'success',
+  CANCELLED: 'danger',
 };

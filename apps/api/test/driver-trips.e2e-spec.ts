@@ -6,6 +6,9 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 
+const VALID_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+const FAKE_EXECUTABLE = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00]); // "MZ" (PE/EXE)
+
 // Fase 25 -- cobre os 24 cenarios da secao 24: viagem persistente/retomada,
 // localizacao GPS, parada, abastecimento (online e "offline"/idempotente),
 // excecao de eixo (padrao/timeout/exceção/retorno), conciliacao usando o
@@ -1055,6 +1058,119 @@ describe('Driver Trips (e2e)', () => {
         .get(`/api/v1/driver/trips/${tripId}`)
         .set('Authorization', adminAuth)
         .expect(403);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 56 -- comprovante de entrega (POST /driver/trips/:id/delivery-proof)
+  // ==========================================================================
+  describe('comprovante de entrega', () => {
+    it('registra o comprovante, derivando vehicleId/driverId/customerId automaticamente da viagem (nunca aceitos do cliente)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DeliveryProof1');
+      const { driverAuth, driverId, vehicleId, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-dp-1')
+        .field('observation', 'Entregue ao porteiro')
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(201);
+
+      expect(res.body.data.documentType).toBe('DELIVERY_PROOF');
+      expect(res.body.data.source).toBe('UPLOAD');
+      expect(res.body.data.origin).toBe('DRIVER');
+      expect(res.body.data.status).toBe('PENDING');
+      expect(res.body.data.tripId).toBe(tripId);
+      expect(res.body.data.vehicleId).toBe(vehicleId);
+      expect(res.body.data.driverId).toBe(driverId);
+      expect(res.body.data.metadata).toMatchObject({ observation: 'Entregue ao porteiro' });
+      expect(res.body.data.issueDate).toBeTruthy();
+
+      const document = await prisma.fiscalDocument.findUnique({ where: { id: res.body.data.id } });
+      expect(document?.tenantId).toBe(tenantId);
+      expect(document?.deviceEventId).toBe('dev-dp-1');
+    });
+
+    it('idempotente por deviceEventId: reenviar (retry offline) nao cria um segundo comprovante', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DeliveryProof2');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const first = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-dp-retry')
+        .attach('file', VALID_JPEG, 'comprovante1.jpg')
+        .expect(201);
+
+      const second = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-dp-retry')
+        .attach('file', VALID_JPEG, 'comprovante2-retry.jpg')
+        .expect(201);
+
+      expect(second.body.data.id).toBe(first.body.data.id);
+      expect(await prisma.fiscalDocument.count({ where: { tenantId, documentType: 'DELIVERY_PROOF' } })).toBe(1);
+    });
+
+    it('rejeita arquivo com assinatura binaria invalida (executavel renomeado)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DeliveryProof3');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-dp-invalid')
+        .attach('file', FAKE_EXECUTABLE, 'malicioso.jpg')
+        .expect(400);
+
+      expect(await prisma.fiscalDocument.count({ where: { tenantId, documentType: 'DELIVERY_PROOF' } })).toBe(0);
+    });
+
+    it('isolamento tenant: motorista de outro tenant nao consegue registrar comprovante numa viagem que nao e sua (404)', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('DeliveryProof4A');
+      const tenantB = await createTenantAndLoginAsAdmin('DeliveryProof4B');
+      const { tripId } = await setupDriverWithTrip(tenantA.adminAuth, tenantA.tenantId);
+      const driverB = await setupDriverWithTrip(tenantB.adminAuth, tenantB.tenantId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverB.driverAuth)
+        .field('deviceEventId', 'dev-dp-cross-tenant')
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(404);
+    });
+
+    it('RBAC: usuario administrativo (nao DRIVER) nao acessa a rota do motorista (403)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DeliveryProof5');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', adminAuth)
+        .field('deviceEventId', 'dev-dp-rbac')
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(403);
+    });
+
+    it('historico de auditoria (endpoint administrativo) reflete a submissao pelo app do motorista', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DeliveryProof6');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      void tenantId;
+
+      const uploadRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-dp-history')
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(201);
+
+      const historyRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${uploadRes.body.data.id}/history`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(historyRes.body.data.items.map((i: { action: string }) => i.action)).toContain('fiscal.delivery_proof_submitted');
     });
   });
 });

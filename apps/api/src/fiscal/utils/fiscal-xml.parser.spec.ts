@@ -127,6 +127,38 @@ describe('parseFiscalXml -- MDF-e', () => {
     expect(result?.recipientDocument).toBeNull();
     expect(result?.amount).toBeNull();
   });
+
+  it('Fase 55 -- sem <infDoc>/<chNFe>/<chCTe>, manifestedAccessKeys e null (nunca inventado)', () => {
+    expect(parseFiscalXml(MDFE_XML)?.manifestedAccessKeys).toBeNull();
+  });
+
+  it('Fase 55 -- extrai chaves manifestadas (chNFe/chCTe) quando presentes no XML', () => {
+    const withManifest = `<?xml version="1.0" encoding="UTF-8"?>
+<mdfeProc versao="3.00">
+  <MDFe>
+    <infMDFe Id="MDFe35260812345678000199580010000091011234567890" versao="3.00">
+      <ide><serie>1</serie><nMDF>9101</nMDF><dhEmi>2026-08-03T07:00:00-03:00</dhEmi></ide>
+      <emit><CNPJ>11222333000144</CNPJ><xNome>Transportadora Exemplo LTDA</xNome></emit>
+      <infDoc>
+        <infMunDescarga>
+          <infCTe><chCTe>35260811222333000144570010000056781234567890</chCTe></infCTe>
+          <infNFe><chNFe>35260812345678000199550010000012341234567890</chNFe></infNFe>
+        </infMunDescarga>
+      </infDoc>
+    </infMDFe>
+  </MDFe>
+</mdfeProc>`;
+    const result = parseFiscalXml(withManifest);
+    expect(result?.manifestedAccessKeys).toEqual([
+      '35260811222333000144570010000056781234567890',
+      '35260812345678000199550010000012341234567890',
+    ]);
+  });
+
+  it('Fase 55 -- NF-e/CT-e nunca tem manifestedAccessKeys (so MDF-e manifesta outros documentos)', () => {
+    expect(parseFiscalXml(NFE_XML)?.manifestedAccessKeys).toBeNull();
+    expect(parseFiscalXml(CTE_XML)?.manifestedAccessKeys).toBeNull();
+  });
 });
 
 describe('parseFiscalXml -- tolerancia e campos ausentes', () => {

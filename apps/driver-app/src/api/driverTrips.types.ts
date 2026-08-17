@@ -158,3 +158,23 @@ export interface RouteComparison {
   tollCountDiff: number;
   totalTollAmountDiff: number | null;
 }
+
+// Fase 56 -- comprovante de entrega. Visao MINIMA do FiscalDocument que o
+// app do motorista realmente consome (nunca a entity administrativa
+// inteira -- mesmo principio de DriverRoute acima).
+export type DeliveryProofStatus = 'PENDING' | 'VALID' | 'INVALID' | 'CANCELLED';
+
+export interface DeliveryProof {
+  id: string;
+  tripId: string | null;
+  status: DeliveryProofStatus;
+  fileName: string | null;
+  issueDate: string | null;
+  createdAt: string;
+}
+
+export interface SubmitDeliveryProofInput {
+  deviceEventId: string;
+  observation?: string;
+  capturedAt?: string;
+}

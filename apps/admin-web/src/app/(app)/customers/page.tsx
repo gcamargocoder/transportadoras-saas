@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Plus } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
@@ -22,6 +23,7 @@ import type { CustomerEntity } from '../../../types/entities';
 const PAGE_SIZE = 20;
 
 export default function CustomersPage(): JSX.Element {
+  const router = useRouter();
   const { user } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -92,6 +94,7 @@ export default function CustomersPage(): JSX.Element {
           isError={query.isError}
           onRetry={() => query.refetch()}
           getRowId={(c) => c.id}
+          onRowClick={(c) => router.push(`/customers/${c.id}`)}
           emptyTitle="Nenhum cliente encontrado"
         />
         {query.data && <Pagination meta={query.data.meta} onPageChange={setPage} />}

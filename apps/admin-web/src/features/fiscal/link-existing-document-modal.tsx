@@ -10,27 +10,32 @@ import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { listFiscalDocuments, updateFiscalDocument } from '../../lib/api/fiscal.api';
 import { FISCAL_DOCUMENT_TYPE_LABELS } from '../../lib/labels';
+import type { FiscalDocumentType } from '../../types/enums';
 
 // Fase 53, secao 1 -- vincula um FiscalDocument JA EXISTENTE (sem vinculo
 // nenhum) a esta viagem, via PATCH /fiscal/documents/:id. Nunca cria um
 // documento novo aqui (evita duplicacao) -- para isso ja existem os
 // modais de upload/importacao (pre-vinculados a viagem).
+// Fase 57 -- documentType opcional filtra a listagem por tipo (ex: CIOT),
+// reaproveitado pela secao CIOT da aba fiscal sem criar um modal novo.
 export function LinkExistingDocumentModal({
   open,
   onClose,
   tripId,
+  documentType,
 }: {
   open: boolean;
   onClose: () => void;
   tripId: string;
+  documentType?: FiscalDocumentType;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [documentId, setDocumentId] = useState('');
 
   const unlinkedQuery = useQuery({
-    queryKey: ['fiscal-documents', 'unlinked-picker'],
-    queryFn: ({ signal }) => listFiscalDocuments({ unlinkedOnly: true, pageSize: 100 }, signal),
+    queryKey: ['fiscal-documents', 'unlinked-picker', documentType],
+    queryFn: ({ signal }) => listFiscalDocuments({ unlinkedOnly: true, pageSize: 100, ...(documentType ? { documentType } : {}) }, signal),
     enabled: open,
   });
 
@@ -59,7 +64,11 @@ export function LinkExistingDocumentModal({
       open={open}
       onClose={handleClose}
       title="Vincular documento existente"
-      description="Documentos fiscais já cadastrados, ainda sem vínculo operacional."
+      description={
+        documentType
+          ? `Documentos ${FISCAL_DOCUMENT_TYPE_LABELS[documentType]} já cadastrados, ainda sem vínculo operacional.`
+          : 'Documentos fiscais já cadastrados, ainda sem vínculo operacional.'
+      }
       footer={
         <>
           <Button variant="outline" onClick={handleClose} disabled={mutation.isPending}>

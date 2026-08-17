@@ -14,6 +14,7 @@ import { AdvancesTab } from '../../../../features/trips/tabs/advances-tab';
 import { ExpensesTab } from '../../../../features/trips/tabs/expenses-tab';
 import { FinancialTab } from '../../../../features/trips/tabs/financial-tab';
 import { FiscalTab } from '../../../../features/trips/tabs/fiscal-tab';
+import { FreightTab } from '../../../../features/trips/tabs/freight-tab';
 import { OperacaoTab } from '../../../../features/trips/tabs/operacao-tab';
 import { OverviewTab } from '../../../../features/trips/tabs/overview-tab';
 import { ReconciliationTab } from '../../../../features/trips/tabs/reconciliation-tab';
@@ -34,7 +35,8 @@ type TabValue =
   | 'revenues'
   | 'advances'
   | 'financial'
-  | 'fiscal';
+  | 'fiscal'
+  | 'freight';
 
 export default function TripDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
@@ -76,6 +78,7 @@ export default function TripDetailPage(): JSX.Element {
           { value: 'advances', label: 'Adiantamentos' },
           { value: 'financial', label: 'Financeiro' },
           { value: 'fiscal', label: 'Documentos fiscais' },
+          { value: 'freight', label: 'Comercial' },
         ]}
         active={tab}
         onChange={(v) => setTab(v as TabValue)}
@@ -93,6 +96,7 @@ export default function TripDetailPage(): JSX.Element {
         {tab === 'advances' && <AdvancesTab tripId={trip.id} />}
         {tab === 'financial' && <FinancialTab tripId={trip.id} />}
         {tab === 'fiscal' && <FiscalTab tripId={trip.id} />}
+        {tab === 'freight' && <FreightTab tripId={trip.id} />}
       </div>
     </div>
   );

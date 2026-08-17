@@ -63,6 +63,14 @@ describe('classifyFiscalDocumentIssues -- chave de acesso', () => {
     const issues = classifyFiscalDocumentIssues(baseDoc({ accessKey: null, source: FiscalDocumentSource.UPLOAD }));
     expect(issues).not.toContain(FiscalIssueCode.INVALID_ACCESS_KEY);
   });
+
+  it('Fase 57 -- nunca aponta INVALID_ACCESS_KEY para CIOT (nao tem esse formato, mesmo com um valor digitado no campo e DV incorreto)', () => {
+    const garbageKey = `${'0'.repeat(43)}9`; // DV real para 43 zeros seria 0, nunca 9 -- proposital, invalido se avaliado
+    const issues = classifyFiscalDocumentIssues(
+      baseDoc({ documentType: FiscalDocumentType.CIOT, accessKey: garbageKey, source: FiscalDocumentSource.UPLOAD }),
+    );
+    expect(issues).not.toContain(FiscalIssueCode.INVALID_ACCESS_KEY);
+  });
 });
 
 describe('classifyFiscalDocumentIssues -- tipo incompativel', () => {
@@ -158,6 +166,20 @@ describe('classifyFiscalDocumentIssues -- vinculo', () => {
 
     const noVehicleLinked = classifyFiscalDocumentIssues(baseDoc({ tripId: 'trip-1' }));
     expect(noVehicleLinked).not.toContain(FiscalIssueCode.INCONSISTENT_LINK);
+  });
+
+  it('Fase 55 -- aponta INCONSISTENT_LINK quando o cliente do documento diverge do cliente real da viagem', () => {
+    const byCustomer = classifyFiscalDocumentIssues(
+      baseDoc({ tripId: 'trip-1', customerId: 'customer-A', tripCustomerId: 'customer-B' }),
+    );
+    expect(byCustomer).toContain(FiscalIssueCode.INCONSISTENT_LINK);
+  });
+
+  it('Fase 55 -- nunca aponta divergencia de cliente quando a viagem nao tem cliente informado', () => {
+    const noCustomerOnTrip = classifyFiscalDocumentIssues(
+      baseDoc({ tripId: 'trip-1', customerId: 'customer-A', tripCustomerId: null }),
+    );
+    expect(noCustomerOnTrip).not.toContain(FiscalIssueCode.INCONSISTENT_LINK);
   });
 
   it('aponta NO_TRIP_CONTEXT quando ha veiculo/motorista/cliente mas nenhuma viagem', () => {

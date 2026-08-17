@@ -400,4 +400,83 @@ describe('syncQueue -- pause/resume/complete', () => {
       expect(fields.deviceEventId).toBe('dev-3');
     });
   });
+
+  // Fase 56 -- comprovante de entrega. Mesmo padrao exato de
+  // CHECKLIST-EVIDENCE acima (arquivo local persistido + deviceEventId) --
+  // nenhuma fila/mecanismo de retry novo.
+  describe('DELIVERY-PROOF', () => {
+    it('online: envia o arquivo local (path persistido) imediatamente', async () => {
+      api.submitDeliveryProof.mockResolvedValue({} as never);
+
+      const result = await submitOrQueue({
+        kind: 'delivery-proof',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-dp-1',
+        capturedAt: '2026-09-01T14:00:00.000Z',
+        localFileUri: 'file:///docs/delivery-proof/foto.jpg',
+        fileName: 'foto.jpg',
+        mimeType: 'image/jpeg',
+      });
+
+      expect(result.queued).toBe(false);
+      expect(api.submitDeliveryProof).toHaveBeenCalledWith(
+        'trip-1',
+        { deviceEventId: 'dev-dp-1', capturedAt: '2026-09-01T14:00:00.000Z' },
+        { uri: 'file:///docs/delivery-proof/foto.jpg', name: 'foto.jpg', type: 'image/jpeg' },
+      );
+    });
+
+    it('online com observacao: repassa o campo para a API', async () => {
+      api.submitDeliveryProof.mockResolvedValue({} as never);
+
+      await submitOrQueue({
+        kind: 'delivery-proof',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-dp-2',
+        capturedAt: '2026-09-01T14:05:00.000Z',
+        observation: 'Entregue ao porteiro',
+        localFileUri: 'file:///docs/delivery-proof/foto2.jpg',
+        fileName: 'foto2.jpg',
+        mimeType: 'image/jpeg',
+      });
+
+      expect(api.submitDeliveryProof).toHaveBeenCalledWith(
+        'trip-1',
+        { deviceEventId: 'dev-dp-2', capturedAt: '2026-09-01T14:05:00.000Z', observation: 'Entregue ao porteiro' },
+        expect.anything(),
+      );
+    });
+
+    it('offline: entra na fila, persiste no AsyncStorage (sobrevive a reinicializacao do app) e o retry apos reconexao usa o mesmo deviceEventId', async () => {
+      api.submitDeliveryProof.mockRejectedValueOnce(new Error('network down'));
+
+      const result = await submitOrQueue({
+        kind: 'delivery-proof',
+        tripId: 'trip-1',
+        deviceEventId: 'dev-dp-3',
+        capturedAt: '2026-09-01T14:10:00.000Z',
+        localFileUri: 'file:///docs/delivery-proof/foto3.jpg',
+        fileName: 'foto3.jpg',
+        mimeType: 'image/jpeg',
+      });
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(1);
+
+      // "Estado apos reinicializacao" -- a fila vive no AsyncStorage
+      // (persistente), nunca em memoria volatil: ler diretamente a chave
+      // simula o app sendo fechado/reaberto sem perder o item pendente.
+      const raw = await AsyncStorage.getItem('driverapp.syncQueue');
+      const queue = JSON.parse(raw!) as Array<{ kind: string; deviceEventId?: string }>;
+      expect(queue.some((a) => a.kind === 'delivery-proof' && a.deviceEventId === 'dev-dp-3')).toBe(true);
+
+      // Reconexao: flushQueue reenvia o MESMO deviceEventId -- idempotencia
+      // real fica no backend (FiscalDocument.deviceEventId, unique).
+      api.submitDeliveryProof.mockResolvedValue({} as never);
+      const flushResult = await flushQueue();
+      expect(flushResult.sent).toBe(1);
+      expect(flushResult.remaining).toBe(0);
+      const [, fields] = api.submitDeliveryProof.mock.calls[1]!;
+      expect(fields.deviceEventId).toBe('dev-dp-3');
+    });
+  });
 });

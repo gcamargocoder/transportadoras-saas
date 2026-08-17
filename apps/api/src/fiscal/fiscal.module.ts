@@ -16,5 +16,9 @@ import { FiscalDocumentsService } from './services/fiscal-documents.service';
   ],
   controllers: [FiscalDocumentsController],
   providers: [FiscalDocumentsService],
+  // Fase 56 -- DriverTripsModule reaproveita FiscalDocumentsService
+  // (comprovante de entrega), mesmo padrao ja usado por ChecklistsModule/
+  // FuelSuppliesModule (nenhum service paralelo).
+  exports: [FiscalDocumentsService],
 })
 export class FiscalModule {}

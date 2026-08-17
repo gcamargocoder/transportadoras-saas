@@ -601,29 +601,31 @@ enum TenantModule {
   STOPS
   DASHBOARDS
   REPORTS
+  /// Fase 59 -- gestao de fretes, contratos e tabelas de frete.
+  FREIGHT
 }
 
 /// Transportadora — raiz do isolamento multi-tenant. Toda tabela operacional
 /// referencia Tenant direta ou indiretamente.
 model Tenant {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String       @id @default(uuid()) @db.Uuid
   /// Razao social.
   name      String
   /// Nome fantasia (opcional -- nem toda transportadora usa um).
-  tradeName String?  @map("trade_name")
-  document  String   @unique @map("document") @db.VarChar(20) // CNPJ
+  tradeName String?      @map("trade_name")
+  document  String       @unique @map("document") @db.VarChar(20) // CNPJ
   /// Identificador amigavel/URL-safe, unico. Ainda nao usado para roteamento
   /// (sem subdominio nesta fase) -- preparado para resolucao futura de tenant
   /// por subdominio/dominio personalizado (ex: "acme" em acme.app.com).
-  slug      String   @unique
+  slug      String       @unique
   /// URL do logotipo da empresa. Upload de arquivo fica para fase futura --
   /// aqui e apenas a referencia (ex: URL de um storage externo).
-  logoUrl   String?  @map("logo_url")
-  isActive  Boolean  @default(true) @map("is_active")
+  logoUrl   String?      @map("logo_url")
+  isActive  Boolean      @default(true) @map("is_active")
   /// Fase 47 -- ver comentario do enum TenantStatus.
   status    TenantStatus @default(ACTIVE)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
 
   settings                TenantSettings?
   plan                    TenantPlan?
@@ -682,6 +684,14 @@ model Tenant {
   checklistExecutions     ChecklistExecution[]
   checklistEvidence       ChecklistEvidence[]
   fiscalDocuments         FiscalDocument[]
+  /// Fase 59 -- gestao de fretes, contratos e tabelas de frete.
+  contracts               Contract[]
+  freightTables           FreightTable[]
+  freightRules            FreightRule[]
+  tripFreights            TripFreight[]
+  /// Fase 60 -- faturamento operacional.
+  tripBillings            TripBilling[]
+  tripBillingEntries      TripBillingEntry[]
 
   @@map("tenants")
 }
@@ -743,7 +753,7 @@ model TenantPlan {
   maxStorageMb   Int?           @map("max_storage_mb")
   /// Modulos habilitados -- default = todos (nunca bloqueia modulo ja em
   /// uso por um tenant existente).
-  enabledModules TenantModule[] @default([TRIPS, TOLLS, FUEL, MAINTENANCE, TIRES, CHECKLIST, STOPS, DASHBOARDS, REPORTS]) @map("enabled_modules")
+  enabledModules TenantModule[] @default([TRIPS, TOLLS, FUEL, MAINTENANCE, TIRES, CHECKLIST, STOPS, DASHBOARDS, REPORTS, FREIGHT]) @map("enabled_modules")
   createdAt      DateTime       @default(now()) @map("created_at")
   updatedAt      DateTime       @updatedAt @map("updated_at")
 
@@ -793,25 +803,25 @@ enum SubscriptionPaymentStatus {
 /// (ex: upgrade de features acordado antes do upgrade comercial formal),
 /// nunca sincronizado automaticamente entre os dois.
 model TenantSubscription {
-  id            String                     @id @default(uuid()) @db.Uuid
-  tenantId      String                     @unique @map("tenant_id") @db.Uuid
-  planTier      TenantPlanTier             @map("plan_tier")
-  amount        Decimal                    @db.Decimal(10, 2)
-  periodicity   BillingPeriodicity
-  paymentMethod SubscriptionPaymentMethod  @map("payment_method")
-  startDate     DateTime                   @map("start_date")
+  id                     String                    @id @default(uuid()) @db.Uuid
+  tenantId               String                    @unique @map("tenant_id") @db.Uuid
+  planTier               TenantPlanTier            @map("plan_tier")
+  amount                 Decimal                   @db.Decimal(10, 2)
+  periodicity            BillingPeriodicity
+  paymentMethod          SubscriptionPaymentMethod @map("payment_method")
+  startDate              DateTime                  @map("start_date")
   /// Dia do mes de vencimento (1-31), usado pelo calculo de proximo
   /// vencimento (billing-date.util.ts) -- nunca calculado no frontend.
-  dueDay        Int                        @map("due_day")
-  nextDueDate   DateTime                   @map("next_due_date")
-  status        SubscriptionStatus         @default(PENDING)
-  notes         String?                    @db.Text
+  dueDay                 Int                       @map("due_day")
+  nextDueDate            DateTime                  @map("next_due_date")
+  status                 SubscriptionStatus        @default(PENDING)
+  notes                  String?                   @db.Text
   /// Preparacao Stripe (Fase 50, secao 12) -- nunca lidos/escritos por
   /// nenhum codigo nesta fase, so reservam o campo para integracao futura.
-  externalCustomerId     String?           @map("external_customer_id")
-  externalSubscriptionId String?           @map("external_subscription_id")
-  createdAt     DateTime                   @default(now()) @map("created_at")
-  updatedAt     DateTime                   @updatedAt @map("updated_at")
+  externalCustomerId     String?                   @map("external_customer_id")
+  externalSubscriptionId String?                   @map("external_subscription_id")
+  createdAt              DateTime                  @default(now()) @map("created_at")
+  updatedAt              DateTime                  @updatedAt @map("updated_at")
 
   tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   payments SubscriptionPayment[]
@@ -826,19 +836,19 @@ model TenantSubscription {
 /// linha NOVA, nunca altera uma existente (pedido explicito: nao alterar
 /// retroativamente, nao permitir apagar historico financeiro).
 model SubscriptionPayment {
-  id                String                     @id @default(uuid()) @db.Uuid
-  tenantId          String                     @map("tenant_id") @db.Uuid
-  subscriptionId    String                     @map("subscription_id") @db.Uuid
-  amount            Decimal                    @db.Decimal(10, 2)
-  dueDate           DateTime                   @map("due_date")
-  paidAt            DateTime?                  @map("paid_at")
-  paymentMethod     SubscriptionPaymentMethod  @map("payment_method")
-  status            SubscriptionPaymentStatus  @default(PENDING)
-  reference         String?                    @db.Text
+  id                String                    @id @default(uuid()) @db.Uuid
+  tenantId          String                    @map("tenant_id") @db.Uuid
+  subscriptionId    String                    @map("subscription_id") @db.Uuid
+  amount            Decimal                   @db.Decimal(10, 2)
+  dueDate           DateTime                  @map("due_date")
+  paidAt            DateTime?                 @map("paid_at")
+  paymentMethod     SubscriptionPaymentMethod @map("payment_method")
+  status            SubscriptionPaymentStatus @default(PENDING)
+  reference         String?                   @db.Text
   /// Preparacao Stripe -- nunca lido/escrito nesta fase.
-  externalPaymentId String?                    @map("external_payment_id")
-  createdBy         String                     @map("created_by") @db.Uuid
-  createdAt         DateTime                   @default(now()) @map("created_at")
+  externalPaymentId String?                   @map("external_payment_id")
+  createdBy         String                    @map("created_by") @db.Uuid
+  createdAt         DateTime                  @default(now()) @map("created_at")
 
   tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subscription TenantSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
@@ -867,34 +877,46 @@ model UserAccount {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  tenant                         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant                         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   driverProfile                  Driver?
   auditLogs                      AuditLog[]
-  acknowledgedAlerts             Alert[]              @relation("AlertAcknowledgedBy")
+  acknowledgedAlerts             Alert[]               @relation("AlertAcknowledgedBy")
   notifications                  Notification[]
   refreshTokens                  RefreshToken[]
   vehicleMaintenancesResponsible VehicleMaintenance[]
   importJobsCreated              ImportJob[]
-  tripExpensesCreated            TripExpense[]        @relation("TripExpenseCreator")
-  tripExpensesUpdated            TripExpense[]        @relation("TripExpenseUpdater")
-  tripExpensesApproved           TripExpense[]        @relation("TripExpenseApprover")
-  tripRevenuesCreated            TripRevenue[]        @relation("TripRevenueCreator")
-  tripRevenuesUpdated            TripRevenue[]        @relation("TripRevenueUpdater")
-  tripAdvancesCreated            TripAdvance[]        @relation("TripAdvanceCreator")
-  tripAdvancesUpdated            TripAdvance[]        @relation("TripAdvanceUpdater")
-  tripSettlementsClosed          TripSettlement[]     @relation("TripSettlementCloser")
-  fuelSuppliesCreated            FuelSupply[]         @relation("FuelSupplyCreator")
-  fuelSuppliesUpdated            FuelSupply[]         @relation("FuelSupplyUpdater")
-  tiresCreated                   Tire[]               @relation("TireCreator")
-  tiresUpdated                   Tire[]               @relation("TireUpdater")
-  tireMovementsCreated           TireMovement[]       @relation("TireMovementCreator")
-  tireRetreadsCreated            TireRetread[]        @relation("TireRetreadCreator")
-  tireInspectionsCreated         TireInspection[]     @relation("TireInspectionCreator")
-  tireDisposalsCreated           TireDisposal[]       @relation("TireDisposalCreator")
-  tollRatesCreated               TollRate[]           @relation("TollRateCreator")
+  tripExpensesCreated            TripExpense[]         @relation("TripExpenseCreator")
+  tripExpensesUpdated            TripExpense[]         @relation("TripExpenseUpdater")
+  tripExpensesApproved           TripExpense[]         @relation("TripExpenseApprover")
+  tripRevenuesCreated            TripRevenue[]         @relation("TripRevenueCreator")
+  tripRevenuesUpdated            TripRevenue[]         @relation("TripRevenueUpdater")
+  tripAdvancesCreated            TripAdvance[]         @relation("TripAdvanceCreator")
+  tripAdvancesUpdated            TripAdvance[]         @relation("TripAdvanceUpdater")
+  tripSettlementsClosed          TripSettlement[]      @relation("TripSettlementCloser")
+  fuelSuppliesCreated            FuelSupply[]          @relation("FuelSupplyCreator")
+  fuelSuppliesUpdated            FuelSupply[]          @relation("FuelSupplyUpdater")
+  tiresCreated                   Tire[]                @relation("TireCreator")
+  tiresUpdated                   Tire[]                @relation("TireUpdater")
+  tireMovementsCreated           TireMovement[]        @relation("TireMovementCreator")
+  tireRetreadsCreated            TireRetread[]         @relation("TireRetreadCreator")
+  tireInspectionsCreated         TireInspection[]      @relation("TireInspectionCreator")
+  tireDisposalsCreated           TireDisposal[]        @relation("TireDisposalCreator")
+  tollRatesCreated               TollRate[]            @relation("TollRateCreator")
   subscriptionPaymentsCreated    SubscriptionPayment[]
-  fiscalDocumentsCreated         FiscalDocument[]     @relation("FiscalDocumentCreator")
-  fiscalDocumentsUpdated         FiscalDocument[]     @relation("FiscalDocumentUpdater")
+  fiscalDocumentsCreated         FiscalDocument[]      @relation("FiscalDocumentCreator")
+  fiscalDocumentsUpdated         FiscalDocument[]      @relation("FiscalDocumentUpdater")
+  contractsCreated               Contract[]            @relation("ContractCreator")
+  contractsUpdated               Contract[]            @relation("ContractUpdater")
+  freightTablesCreated           FreightTable[]        @relation("FreightTableCreator")
+  freightTablesUpdated           FreightTable[]        @relation("FreightTableUpdater")
+  freightRulesCreated            FreightRule[]         @relation("FreightRuleCreator")
+  freightRulesUpdated            FreightRule[]         @relation("FreightRuleUpdater")
+  tripFreightsCreated            TripFreight[]         @relation("TripFreightCreator")
+  tripFreightsUpdated            TripFreight[]         @relation("TripFreightUpdater")
+  tripBillingsCreated            TripBilling[]         @relation("TripBillingCreator")
+  tripBillingsUpdated            TripBilling[]         @relation("TripBillingUpdater")
+  tripBillingsCancelled          TripBilling[]         @relation("TripBillingCanceller")
+  tripBillingEntriesCreated      TripBillingEntry[]    @relation("TripBillingEntryCreator")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1589,6 +1611,9 @@ model Customer {
   trips           Trip[]
   revenues        TripRevenue[]
   fiscalDocuments FiscalDocument[]
+  /// Fase 59 -- gestao de fretes, contratos e tabelas de frete.
+  contracts       Contract[]
+  freightTables   FreightTable[]
 
   @@index([tenantId])
   @@map("customers")
@@ -1607,10 +1632,13 @@ model Location {
   createdAt DateTime                              @default(now()) @map("created_at")
   updatedAt DateTime                              @updatedAt @map("updated_at")
 
-  tenant             Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  fleets             Fleet[]
-  tripsAsOrigin      Trip[]  @relation("TripOrigin")
-  tripsAsDestination Trip[]  @relation("TripDestination")
+  tenant                    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleets                    Fleet[]
+  tripsAsOrigin             Trip[]        @relation("TripOrigin")
+  tripsAsDestination        Trip[]        @relation("TripDestination")
+  /// Fase 59 -- criterio opcional de origem/destino de uma FreightRule.
+  freightRulesAsOrigin      FreightRule[] @relation("FreightRuleOrigin")
+  freightRulesAsDestination FreightRule[] @relation("FreightRuleDestination")
 
   @@index([tenantId])
   @@map("locations")
@@ -1767,6 +1795,13 @@ model Trip {
   axleEvents          AxleEvent[]
   checklistExecutions ChecklistExecution[]
   fiscalDocuments     FiscalDocument[]
+  /// Fase 59 -- resultado comercial (contrato/tabela/regra/valores) aplicado
+  /// a esta viagem. 1:1 opcional -- viagem sem cotacao comercial continua
+  /// funcionando normalmente.
+  freight             TripFreight?
+  /// Fase 60 -- faturamento operacional (situacao/valor faturavel/faturado)
+  /// desta viagem. 1:1 opcional.
+  billing             TripBilling?
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -2677,12 +2712,18 @@ model TripRevenue {
   createdAt     DateTime        @default(now()) @map("created_at")
   updatedAt     DateTime        @updatedAt @map("updated_at")
 
-  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip       Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  customer   Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  attachment Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
-  creator    UserAccount  @relation("TripRevenueCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  updater    UserAccount? @relation("TripRevenueUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip         Trip              @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  attachment   Attachment?       @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator      UserAccount       @relation("TripRevenueCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater      UserAccount?      @relation("TripRevenueUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  /// Fase 59 -- presente quando esta receita foi gerada a partir de um
+  /// valor comercial de frete (ver TripFreight.revenueId, unique).
+  tripFreight  TripFreight?
+  /// Fase 60 -- presente quando esta receita foi gerada por um lancamento
+  /// de faturamento operacional (ver TripBillingEntry.revenueId, unique).
+  billingEntry TripBillingEntry?
 
   @@index([tenantId])
   @@index([tenantId, tripId])
@@ -3186,7 +3227,7 @@ model FiscalDocument {
   series            String?
   issueDate         DateTime?            @map("issue_date")
   senderName        String?              @map("sender_name")
-  senderDocument     String?             @map("sender_document")
+  senderDocument    String?              @map("sender_document")
   recipientName     String?              @map("recipient_name")
   recipientDocument String?              @map("recipient_document")
   status            FiscalDocumentStatus @default(PENDING)
@@ -3204,6 +3245,12 @@ model FiscalDocument {
   /// lista minima de colunas pedida na Fase 52) -- preserva o dado bruto,
   /// nunca descartado nem inventado quando ausente.
   metadata          Json?                @default("{}")
+  /// Fase 56 -- idempotencia de submissao offline pelo Driver App (mesmo
+  /// padrao de ChecklistExecution/TripStop/FuelSupply/AxleEvent): reenviar a
+  /// fila (syncQueue.ts) apos reconexao nunca cria um segundo comprovante.
+  /// Sempre null para documentos criados pelo fluxo administrativo (upload/
+  /// import), unico por tenant (Postgres permite multiplos NULL sob unique).
+  deviceEventId     String?              @unique @map("device_event_id")
   tripId            String?              @map("trip_id") @db.Uuid
   vehicleId         String?              @map("vehicle_id") @db.Uuid
   driverId          String?              @map("driver_id") @db.Uuid
@@ -3230,6 +3277,341 @@ model FiscalDocument {
   @@index([tenantId, driverId])
   @@index([tenantId, issueDate])
   @@map("fiscal_documents")
+}
+
+// ============================================================================
+// FRETE COMERCIAL — contratos, tabelas de frete, regras e precificacao (Fase 59)
+// ============================================================================
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+  CANCELLED
+
+  @@map("contract_status")
+}
+
+/// Contrato comercial de frete com um cliente. Nao confundir com CIOT/CT-e
+/// (Fases 52-58, modulo fiscal/documental -- aquele e o documento fiscal do
+/// transporte contratado; este e o acordo comercial que da origem ao preco).
+/// Nenhuma regra fiscal e alterada/lida por este model.
+model Contract {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  customerId      String         @map("customer_id") @db.Uuid
+  code            String
+  description     String?
+  status          ContractStatus @default(DRAFT)
+  startDate       DateTime       @map("start_date")
+  /// Nulo = sem data de termino definida. Contrato so e considerado
+  /// "vencido" quando endDate esta no passado -- nunca inferido por outro
+  /// criterio (ver ContractsService.assertUsable).
+  endDate         DateTime?      @map("end_date")
+  notes           String?        @db.Text
+  /// Condicoes comerciais em texto livre (ex: prazo de pagamento, reajuste,
+  /// SLA) -- nenhuma estrutura obrigatoria foi pedida para esta fase.
+  commercialTerms String?        @map("commercial_terms") @db.Text
+  createdBy       String         @map("created_by") @db.Uuid
+  updatedBy       String?        @map("updated_by") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  freightTables FreightTable[]
+  tripFreights  TripFreight[]
+  creator       UserAccount    @relation("ContractCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater       UserAccount?   @relation("ContractUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@index([tenantId, endDate])
+  @@map("contracts")
+}
+
+enum FreightTableStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+  CANCELLED
+
+  @@map("freight_table_status")
+}
+
+/// Tabela de frete de um cliente (agrupa 1+ FreightRule). O calculo NUNCA
+/// acopla direto a tabela -- sempre passa pela regra (FreightRule) vigente
+/// dentro dela, permitindo que a mesma tabela evolua sem quebrar o historico
+/// (ver FreightRule para o versionamento propriamente dito).
+model FreightTable {
+  id             String             @id @default(uuid()) @db.Uuid
+  tenantId       String             @map("tenant_id") @db.Uuid
+  customerId     String             @map("customer_id") @db.Uuid
+  contractId     String?            @map("contract_id") @db.Uuid
+  name           String
+  code           String
+  status         FreightTableStatus @default(DRAFT)
+  effectiveFrom  DateTime           @map("effective_from")
+  /// Nulo = sem termino definido.
+  effectiveUntil DateTime?          @map("effective_until")
+  notes          String?            @db.Text
+  createdBy      String             @map("created_by") @db.Uuid
+  updatedBy      String?            @map("updated_by") @db.Uuid
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract     Contract?     @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  rules        FreightRule[]
+  tripFreights TripFreight[]
+  creator      UserAccount   @relation("FreightTableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater      UserAccount?  @relation("FreightTableUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@index([tenantId, contractId])
+  @@index([tenantId, status])
+  @@map("freight_tables")
+}
+
+/// ACTIVE = pode ser selecionada pelo motor de calculo; ARCHIVED = fechada
+/// por uma nova versao (ver previousVersionId/nextVersion), preservada
+/// apenas para historico -- nunca apagada (secao 4 da Fase 59).
+enum FreightRuleStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@map("freight_rule_status")
+}
+
+/// Regra de precificacao dentro de uma FreightTable. Versionada: uma edicao
+/// comercial NUNCA altera a linha em uso -- fecha a versao atual
+/// (status ARCHIVED, effectiveUntil = agora) e cria uma nova linha
+/// (version + 1, previousVersionId apontando pra anterior), mesmo espirito
+/// de ChecklistTemplate (Fase 38, encadeamento de versao) combinado com
+/// TollRate (Fase 23/33, vigencia effectiveFrom/effectiveUntil) -- aqui os
+/// dois são necessarios: o encadeamento preserva a arvore de historico
+/// navegavel, a vigencia permite a consulta "qual regra valia nesta data"
+/// que TripFreight depende para nunca mudar retroativamente (secao 4).
+/// Todos os criterios sao opcionais -- uma regra pode usar so os que
+/// precisar (nulo = nao restringe por aquele criterio).
+model FreightRule {
+  id                String            @id @default(uuid()) @db.Uuid
+  tenantId          String            @map("tenant_id") @db.Uuid
+  freightTableId    String            @map("freight_table_id") @db.Uuid
+  version           Int               @default(1)
+  status            FreightRuleStatus @default(ACTIVE)
+  previousVersionId String?           @unique @map("previous_version_id") @db.Uuid
+  effectiveFrom     DateTime          @map("effective_from")
+  effectiveUntil    DateTime?         @map("effective_until")
+
+  // --- criterios (todos opcionais; nulo = nao restringe) ---
+  originLocationId      String?      @map("origin_location_id") @db.Uuid
+  destinationLocationId String?      @map("destination_location_id") @db.Uuid
+  /// Regiao textual (ex: UF/regiao) -- distinta de originLocationId (ponto
+  /// operacional especifico); nunca inferida automaticamente de coordenadas.
+  originRegion          String?      @map("origin_region")
+  destinationRegion     String?      @map("destination_region")
+  /// Texto livre -- nenhuma taxonomia oficial de tipo de carga existe hoje
+  /// no projeto, nao inventada aqui.
+  cargoType             String?      @map("cargo_type")
+  /// Reaproveita o enum ja existente (Vehicle/ChecklistTemplate) -- nunca
+  /// duplicado.
+  vehicleType           VehicleType? @map("vehicle_type")
+  minWeightKg           Decimal?     @map("min_weight_kg") @db.Decimal(10, 2)
+  maxWeightKg           Decimal?     @map("max_weight_kg") @db.Decimal(10, 2)
+  minCubageM3           Decimal?     @map("min_cubage_m3") @db.Decimal(10, 2)
+  maxCubageM3           Decimal?     @map("max_cubage_m3") @db.Decimal(10, 2)
+  /// Desempate deterministico explicito quando 2+ regras sao igualmente
+  /// especificas para os mesmos parametros (maior prioridade vence) -- ver
+  /// selectApplicableFreightRule em freight-calculation.util.ts.
+  priority              Int          @default(0)
+
+  // --- composicao de valor (todos opcionais; ausente = 0 no calculo) ---
+  baseAmount            Decimal? @map("base_amount") @db.Decimal(10, 2)
+  perKmAmount           Decimal? @map("per_km_amount") @db.Decimal(10, 2)
+  perTonAmount          Decimal? @map("per_ton_amount") @db.Decimal(10, 2)
+  /// Piso aplicado sobre base+perKm+perTon (nunca sobre pedagio/adicionais).
+  minimumAmount         Decimal? @map("minimum_amount") @db.Decimal(10, 2)
+  tollAmount            Decimal? @map("toll_amount") @db.Decimal(10, 2)
+  riskAdditionalAmount  Decimal? @map("risk_additional_amount") @db.Decimal(10, 2)
+  nightAdditionalAmount Decimal? @map("night_additional_amount") @db.Decimal(10, 2)
+  dailyRateAmount       Decimal? @map("daily_rate_amount") @db.Decimal(10, 2)
+  demurrageAmount       Decimal? @map("demurrage_amount") @db.Decimal(10, 2)
+  /// Taxas nomeadas livremente: [{label: string, amount: number}] -- unica
+  /// forma extensivel sem precisar de coluna nova a cada taxa nova pedida
+  /// pelo negocio.
+  otherFees             Json?    @map("other_fees")
+
+  notes     String?  @db.Text
+  createdBy String   @map("created_by") @db.Uuid
+  updatedBy String?  @map("updated_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  freightTable        FreightTable  @relation(fields: [freightTableId], references: [id], onDelete: Cascade)
+  originLocation      Location?     @relation("FreightRuleOrigin", fields: [originLocationId], references: [id], onDelete: SetNull)
+  destinationLocation Location?     @relation("FreightRuleDestination", fields: [destinationLocationId], references: [id], onDelete: SetNull)
+  previousVersion     FreightRule?  @relation("FreightRuleVersions", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  nextVersion         FreightRule?  @relation("FreightRuleVersions")
+  tripFreights        TripFreight[]
+  creator             UserAccount   @relation("FreightRuleCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater             UserAccount?  @relation("FreightRuleUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, freightTableId])
+  @@index([tenantId, status])
+  @@index([tenantId, freightTableId, status, effectiveFrom])
+  @@map("freight_rules")
+}
+
+/// Resultado comercial aplicado a UMA viagem -- 1:1 com Trip (mesmo espirito
+/// de TripSettlement/TripMetrics). Os valores monetarios sao sempre um
+/// SNAPSHOT gravado no momento em que a cotacao foi aplicada: mesmo que a
+/// FreightRule/FreightTable/Contract referenciados sejam arquivados ou
+/// tenham uma nova versao criada depois, os valores aqui NUNCA mudam
+/// retroativamente (secao 4/regras importantes da Fase 59).
+model TripFreight {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  tripId           String   @unique @map("trip_id") @db.Uuid
+  contractId       String?  @map("contract_id") @db.Uuid
+  freightTableId   String?  @map("freight_table_id") @db.Uuid
+  freightRuleId    String?  @map("freight_rule_id") @db.Uuid
+  /// Parametros de entrada usados no calculo (origem/destino/distancia/peso/
+  /// cubagem/veiculo/tipo de carga/adicionais aplicados) -- preservado para
+  /// auditoria/reproducibilidade, nunca reprocessado automaticamente depois.
+  calculationInput Json     @map("calculation_input")
+  baseAmount       Decimal? @map("base_amount") @db.Decimal(10, 2)
+  additionsAmount  Decimal? @map("additions_amount") @db.Decimal(10, 2)
+  tollAmount       Decimal? @map("toll_amount") @db.Decimal(10, 2)
+  feesAmount       Decimal? @map("fees_amount") @db.Decimal(10, 2)
+  /// Valor calculado pelo motor (secao 5) -- nunca editado manualmente.
+  estimatedAmount  Decimal? @map("estimated_amount") @db.Decimal(10, 2)
+  /// Valor efetivamente contratado/negociado -- pode divergir do estimado
+  /// (negociacao humana), editavel via PATCH; nunca sobrescreve o estimado.
+  contractedAmount Decimal? @map("contracted_amount") @db.Decimal(10, 2)
+  /// Valor final de fechamento (opcional) -- distinto de contractedAmount
+  /// (o que foi negociado) e de receita realizada (o que foi efetivamente
+  /// registrado no financeiro, ver TripRevenue via revenueId).
+  finalAmount      Decimal? @map("final_amount") @db.Decimal(10, 2)
+  /// Vinculo com a receita (TripRevenue, Fase 51) gerada a partir deste
+  /// valor -- unico por TripFreight, garante que aplicar a receita nunca
+  /// cria duplicidade (secao 8: "nao criar receita duplicada").
+  revenueId        String?  @unique @map("revenue_id") @db.Uuid
+  createdBy        String   @map("created_by") @db.Uuid
+  updatedBy        String?  @map("updated_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip         Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  contract     Contract?     @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  freightTable FreightTable? @relation(fields: [freightTableId], references: [id], onDelete: SetNull)
+  freightRule  FreightRule?  @relation(fields: [freightRuleId], references: [id], onDelete: SetNull)
+  revenue      TripRevenue?  @relation(fields: [revenueId], references: [id], onDelete: SetNull)
+  creator      UserAccount   @relation("TripFreightCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater      UserAccount?  @relation("TripFreightUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, contractId])
+  @@index([tenantId, freightTableId])
+  @@map("trip_freights")
+}
+
+// ============================================================================
+// FATURAMENTO OPERACIONAL — conciliacao comercial da viagem (Fase 60)
+// ============================================================================
+
+/// DRAFT = sem valor faturavel ainda (TripFreight sem valor calculado).
+/// READY = valor faturavel disponivel, nada faturado ainda.
+/// PARTIALLY_INVOICED = invoicedAmount > 0 e < billableAmount.
+/// INVOICED = invoicedAmount >= billableAmount (saldo zerado).
+/// PAID = confirmacao manual de recebimento -- o projeto nao tem nenhuma
+/// integracao de pagamento (Stripe/PIX/debito automatico, fora de escopo),
+/// entao este status e SEMPRE definido explicitamente por um humano via
+/// PATCH, nunca inferido/calculado automaticamente.
+/// CANCELLED = bloqueia qualquer novo faturamento; entradas ja geradas
+/// (TripBillingEntry/TripRevenue) NUNCA sao apagadas (historico imutavel).
+enum TripBillingStatus {
+  DRAFT
+  READY
+  PARTIALLY_INVOICED
+  INVOICED
+  PAID
+  CANCELLED
+
+  @@map("trip_billing_status")
+}
+
+/// Container de faturamento de UMA viagem -- 1:1 com Trip (mesmo espirito
+/// de TripFreight/TripSettlement/TripMetrics, Fase 51/59). billableAmount
+/// e SEMPRE lido do snapshot ja gravado em TripFreight (contractedAmount
+/// -> finalAmount -> estimatedAmount, mesma prioridade ja usada pelo
+/// FreightPricingService.applyRevenue da Fase 59) -- nunca recalculado
+/// aqui, nunca reprocessado com uma regra comercial atualmente vigente
+/// (Fase 59, secao 4: valores historicos de viagem nunca mudam
+/// retroativamente). invoicedAmount e a soma das TripBillingEntry --
+/// nunca editado diretamente, sempre derivado das entradas.
+model TripBilling {
+  id             String            @id @default(uuid()) @db.Uuid
+  tenantId       String            @map("tenant_id") @db.Uuid
+  tripId         String            @unique @map("trip_id") @db.Uuid
+  status         TripBillingStatus @default(READY)
+  /// Nulo quando a viagem ainda nao tem nenhum valor comercial calculado
+  /// (TripFreight ausente ou sem valor) -- nunca inventado/estimado.
+  billableAmount Decimal?          @map("billable_amount") @db.Decimal(10, 2)
+  invoicedAmount Decimal           @default(0) @map("invoiced_amount") @db.Decimal(10, 2)
+  notes          String?           @db.Text
+  cancelledAt    DateTime?         @map("cancelled_at")
+  cancelledBy    String?           @map("cancelled_by") @db.Uuid
+  createdBy      String            @map("created_by") @db.Uuid
+  updatedBy      String?           @map("updated_by") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip      Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  entries   TripBillingEntry[]
+  creator   UserAccount        @relation("TripBillingCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater   UserAccount?       @relation("TripBillingUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  canceller UserAccount?       @relation("TripBillingCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("trip_billings")
+}
+
+/// Lancamento IMUTAVEL de faturamento (total ou parcial) -- ledger
+/// append-only, mesmo espirito de SubscriptionPayment (Fase 50): nenhum
+/// endpoint de update/delete existe para este model. Cada entrada gera
+/// EXATAMENTE 1 TripRevenue (revenueId @unique -- nunca duplicada,
+/// reaproveitando TripRevenuesService.create integralmente).
+model TripBillingEntry {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  tripBillingId String   @map("trip_billing_id") @db.Uuid
+  amount        Decimal  @db.Decimal(10, 2)
+  revenueId     String   @unique @map("revenue_id") @db.Uuid
+  notes         String?  @db.Text
+  createdBy     String   @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tripBilling TripBilling @relation(fields: [tripBillingId], references: [id], onDelete: Cascade)
+  revenue     TripRevenue @relation(fields: [revenueId], references: [id], onDelete: Restrict)
+  creator     UserAccount @relation("TripBillingEntryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, tripBillingId])
+  @@map("trip_billing_entries")
 }
 
 // ============================================================================

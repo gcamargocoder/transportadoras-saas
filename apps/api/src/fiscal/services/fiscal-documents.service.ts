@@ -19,17 +19,28 @@ import { PLAN_ERRORS } from '../../tenants/constants/plan-error.constants';
 import { EXTENSION_TO_FILE_SIGNATURE_KIND } from '../constants/fiscal-file.constants';
 import { FindFiscalDocumentsQueryDto } from '../dto/find-fiscal-documents-query.dto';
 import { ImportFiscalXmlDto } from '../dto/import-fiscal-xml.dto';
+import { SubmitDeliveryProofDto } from '../dto/submit-delivery-proof.dto';
 import { UpdateFiscalDocumentDto } from '../dto/update-fiscal-document.dto';
 import { UploadFiscalDocumentDto } from '../dto/upload-fiscal-document.dto';
 import { FiscalDashboardEntity, FiscalDocumentStatusCountEntity, FiscalDocumentTypeCountEntity, FiscalIssueCountEntity } from '../entities/fiscal-dashboard.entity';
-import { FiscalDocumentEntity } from '../entities/fiscal-document.entity';
+import { FiscalDocumentEntity, RelatedFiscalDocumentEntity } from '../entities/fiscal-document.entity';
 import { PaginatedFiscalDocumentsEntity } from '../entities/paginated-fiscal-documents.entity';
-import { TripDocumentStatusEntity } from '../entities/trip-document-status.entity';
+import { TripDocumentMatrixRowEntity, TripDocumentStatusEntity } from '../entities/trip-document-status.entity';
 import { toFiscalDocumentEntity, FiscalDocumentWithRelations } from '../mappers/fiscal-document.mapper';
 import { normalizeAccessKey } from '../utils/access-key.util';
 import { classifyFiscalDocumentIssues, FiscalDocumentIssueInput, FiscalIssueCode, isWellFormedXml } from '../utils/fiscal-document-validation.util';
+import { buildRelatedDocumentIdSet, extractManifestedAccessKeys } from '../utils/fiscal-relationship.util';
 import { parseFiscalXml } from '../utils/fiscal-xml.parser';
+import {
+  buildTripDocumentMatrix,
+  computeDeliveryProofStatus,
+  computeTripDocumentComplianceStatus,
+  TripDocumentComplianceStatus,
+} from '../utils/trip-compliance.util';
 import { aggregateMonthlySeries } from '../../common/utils/monthly-series.util';
+
+const UNLINKED_CANDIDATES_LIMIT = 10;
+const RELATED_DOCUMENTS_LIMIT = 20;
 
 const PROBLEMATIC_DOCUMENTS_LIMIT = 10;
 
@@ -41,6 +52,28 @@ const FISCAL_DOCUMENT_INCLUDE = {
   creator: true,
   updater: true,
 } satisfies Prisma.FiscalDocumentInclude;
+
+const RELATED_DOCUMENT_SELECT = {
+  id: true,
+  documentType: true,
+  documentNumber: true,
+  accessKey: true,
+  status: true,
+  fileName: true,
+  tripId: true,
+} satisfies Prisma.FiscalDocumentSelect;
+
+function toRelatedFiscalDocumentEntity(row: Prisma.FiscalDocumentGetPayload<{ select: typeof RELATED_DOCUMENT_SELECT }>): RelatedFiscalDocumentEntity {
+  const entity = new RelatedFiscalDocumentEntity();
+  entity.id = row.id;
+  entity.documentType = row.documentType;
+  entity.documentNumber = row.documentNumber;
+  entity.accessKey = row.accessKey;
+  entity.status = row.status;
+  entity.fileName = row.fileName;
+  entity.tripId = row.tripId;
+  return entity;
+}
 
 interface LinkFields {
   tripId?: string | undefined;
@@ -81,7 +114,14 @@ export class FiscalDocumentsService {
   }
 
   async findOne(tenantId: string, id: string): Promise<FiscalDocumentEntity> {
-    return this.buildEntityWithIssues(tenantId, await this.findOwnedOrThrow(tenantId, id));
+    const document = await this.findOwnedOrThrow(tenantId, id);
+    const entity = await this.buildEntityWithIssues(tenantId, document);
+    // Fase 55, secao 3 -- so calculado no detalhe (1 documento), nunca em
+    // listagem/dashboard (evita N+1 -- ver comentario em computeRelatedDocuments).
+    const related = await this.computeRelatedDocuments(tenantId, document);
+    entity.relatedDocuments = related.relatedDocuments;
+    entity.relatedDocumentsAvailable = related.relatedDocumentsAvailable;
+    return entity;
   }
 
   // POST /fiscal/documents/upload -- upload direto (PDF/XML/JPG/JPEG/PNG),
@@ -235,7 +275,12 @@ export class FiscalDocumentsService {
       }
 
       const id = randomUUID();
-      const metadataJson: Record<string, unknown> = compact({ amount: parsed.amount ?? undefined });
+      // Fase 55, secao 3 -- so gravado quando o proprio XML do MDF-e ja
+      // declara as chaves manifestadas (<chNFe>/<chCTe>); nunca inferido.
+      const metadataJson: Record<string, unknown> = compact({
+        amount: parsed.amount ?? undefined,
+        manifestedAccessKeys: parsed.manifestedAccessKeys ?? undefined,
+      });
 
       const document = await runSerializable(this.prisma, async (tx) => {
         const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
@@ -356,6 +401,115 @@ export class FiscalDocumentsService {
     return this.buildEntityWithIssues(tenantId, document);
   }
 
+  // Fase 56 -- POST /driver/trips/:id/delivery-proof (Driver App, offline-
+  // first). Idempotente por deviceEventId (mesmo padrao de
+  // ChecklistExecution/TripStop/FuelSupply/AxleEvent): reenviar apos
+  // reconexao (fila syncQueue.ts) nunca cria um segundo comprovante --
+  // devolve o ja existente e descarta o arquivo duplicado recem-recebido.
+  // vehicleId/customerId SEMPRE derivados da viagem (nunca aceitos do
+  // cliente); driverId e o motorista autenticado (DriverGuard), nunca
+  // informado no corpo da requisicao.
+  async submitDeliveryProofFromDriverApp(
+    tenantId: string,
+    driverId: string,
+    tripId: string,
+    dto: SubmitDeliveryProofDto,
+    file: Express.Multer.File,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<FiscalDocumentEntity> {
+    try {
+      const kind = EXTENSION_TO_FILE_SIGNATURE_KIND[extname(file.originalname).toLowerCase()];
+      if (!kind) {
+        throw new BadRequestException('Extensao de arquivo nao suportada.');
+      }
+      await assertValidFileSignature(file.path, kind);
+
+      const existing = await this.prisma.fiscalDocument.findFirst({
+        where: { tenantId, deviceEventId: dto.deviceEventId },
+        include: FISCAL_DOCUMENT_INCLUDE,
+      });
+      if (existing) {
+        await fs.unlink(file.path).catch(() => undefined);
+        return this.buildEntityWithIssues(tenantId, existing);
+      }
+
+      // tripId ja foi validado contra este motorista pelo controller
+      // (DriverTripsService.getOne) -- esta busca e so para derivar
+      // vehicleId/customerId REAIS, nunca confiados do cliente.
+      const trip = await this.prisma.trip.findFirst({
+        where: { id: tripId, tenantId, deletedAt: null },
+        select: { customerId: true, composition: { select: { vehicleId: true } } },
+      });
+      if (!trip) {
+        throw new NotFoundException('Viagem (tripId) nao encontrada nesta empresa.');
+      }
+
+      const id = randomUUID();
+      const document = await runSerializable(this.prisma, async (tx) => {
+        const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+        const usedBytes = await getStorageUsedBytes(tx, tenantId);
+        assertStorageUnderLimit(usedBytes, file.size, plan?.maxStorageMb, PLAN_ERRORS.STORAGE_LIMIT_REACHED);
+
+        const attachment = await tx.attachment.create({
+          data: {
+            tenantId,
+            entityName: 'FiscalDocument',
+            entityId: id,
+            storageKey: file.filename,
+            uploadedById: actor.userId,
+            sizeBytes: file.size,
+          },
+        });
+
+        return tx.fiscalDocument.create({
+          data: {
+            id,
+            tenantId,
+            documentType: FiscalDocumentType.DELIVERY_PROOF,
+            status: FiscalDocumentStatus.PENDING,
+            source: FiscalDocumentSource.UPLOAD,
+            attachmentId: attachment.id,
+            fileName: file.originalname,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            deviceEventId: dto.deviceEventId,
+            // "identificar data/hora" (secao 1) -- reaproveita a coluna
+            // issueDate ja existente, nunca uma coluna nova so para isso.
+            issueDate: dto.capturedAt ? new Date(dto.capturedAt) : new Date(),
+            tripId,
+            vehicleId: trip.composition?.vehicleId ?? null,
+            driverId,
+            customerId: trip.customerId ?? null,
+            createdBy: actor.userId,
+            // Observacao livre: sem coluna propria (nao fazia parte do
+            // schema minimo), vai para metadata (mesmo padrao ja usado por
+            // "amount"/"manifestedAccessKeys" -- nunca uma coluna nova para
+            // um campo secundario).
+            ...(dto.observation ? { metadata: { observation: dto.observation } as Prisma.InputJsonValue } : {}),
+          },
+          include: FISCAL_DOCUMENT_INCLUDE,
+        });
+      });
+
+      await this.audit.log({
+        tenantId,
+        userId: actor.userId,
+        action: 'fiscal.delivery_proof_submitted',
+        entityName: 'FiscalDocument',
+        entityId: document.id,
+        newValue: toJsonSafe({ documentType: document.documentType, fileName: document.fileName, tripId }),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      });
+
+      return this.buildEntityWithIssues(tenantId, document);
+    } catch (error) {
+      await fs.unlink(file.path).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async remove(tenantId: string, id: string, actor: AuditActor, metadata: RequestMetadata): Promise<void> {
     const before = await this.findOwnedOrThrow(tenantId, id);
 
@@ -425,7 +579,10 @@ export class FiscalDocumentsService {
           vehicleId: true,
           driverId: true,
           customerId: true,
-          trip: { select: { driverId: true, composition: { select: { vehicleId: true } } } },
+          // Fase 58 -- necessario para buildRelatedDocumentIdSet (le
+          // metadata.manifestedAccessKeys de cada MDF-e do lote).
+          metadata: true,
+          trip: { select: { driverId: true, customerId: true, composition: { select: { vehicleId: true } } } },
         },
       }),
       this.getDuplicateGroupKeys(tenantId),
@@ -452,6 +609,7 @@ export class FiscalDocumentsService {
         hasDuplicateCandidate: key !== null && duplicateKeys.has(key),
         tripVehicleId: row.trip?.composition?.vehicleId ?? null,
         tripDriverId: row.trip?.driverId ?? null,
+        tripCustomerId: row.trip?.customerId ?? null,
       });
       issuesById.set(row.id, issues);
     }
@@ -469,10 +627,13 @@ export class FiscalDocumentsService {
       return entry;
     });
 
-    // Criterio ampliado (secao 2 do pedido): PENDING/INVALID (como na Fase
-    // 53) OU 1+ inconsistencia estrutural, mesmo que VALID/CANCELLED.
-    const problematicIds = classificationRows
-      .filter((row) => row.status === FiscalDocumentStatus.PENDING || row.status === FiscalDocumentStatus.INVALID || (issuesById.get(row.id)?.length ?? 0) > 0)
+    // Criterio ampliado (secao 2 do pedido Fase 54): PENDING/INVALID (como
+    // na Fase 53) OU 1+ inconsistencia estrutural, mesmo que VALID/CANCELLED.
+    const problematicRowsFull = classificationRows.filter(
+      (row) => row.status === FiscalDocumentStatus.PENDING || row.status === FiscalDocumentStatus.INVALID || (issuesById.get(row.id)?.length ?? 0) > 0,
+    );
+    const problematicIds = problematicRowsFull
+      .slice()
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, PROBLEMATIC_DOCUMENTS_LIMIT)
       .map((row) => row.id);
@@ -485,6 +646,86 @@ export class FiscalDocumentsService {
           })
         : [];
     const problematicById = new Map(problematicRows.map((row) => [row.id, row]));
+
+    // Fase 55, secao 2/5 -- extraido diretamente de alerts (nunca uma
+    // segunda contagem paralela).
+    const operationalDivergenceCount = alertCounts.get(FiscalIssueCode.INCONSISTENT_LINK) ?? 0;
+
+    // Fase 55, secao 5 -- agrupamento por viagem EM MEMORIA sobre o mesmo
+    // lote ja carregado (nenhuma query por viagem): so conta viagens com
+    // pelo menos 1 documento no escopo do filtro atual.
+    const tripGroups = new Map<string, typeof classificationRows>();
+    for (const row of classificationRows) {
+      if (!row.tripId) continue;
+      const group = tripGroups.get(row.tripId);
+      if (group) group.push(row);
+      else tripGroups.set(row.tripId, [row]);
+    }
+    let tripsWithDocumentsOk = 0;
+    let tripsWithDocumentsAttention = 0;
+    let tripsWithDocumentsProblematic = 0;
+    for (const rows of tripGroups.values()) {
+      const status = computeTripDocumentComplianceStatus({
+        totalDocuments: rows.length,
+        invalidCount: rows.filter((r) => r.status === FiscalDocumentStatus.INVALID).length,
+        cancelledCount: rows.filter((r) => r.status === FiscalDocumentStatus.CANCELLED).length,
+        pendingCount: rows.filter((r) => r.status === FiscalDocumentStatus.PENDING).length,
+        hasOperationalDivergence: rows.some((r) => (issuesById.get(r.id) ?? []).includes(FiscalIssueCode.INCONSISTENT_LINK)),
+      });
+      if (status === TripDocumentComplianceStatus.OK) tripsWithDocumentsOk += 1;
+      else if (status === TripDocumentComplianceStatus.ATTENTION) tripsWithDocumentsAttention += 1;
+      else if (status === TripDocumentComplianceStatus.PROBLEMATIC) tripsWithDocumentsProblematic += 1;
+      // UNAVAILABLE nunca ocorre aqui -- todo grupo tem >=1 documento.
+    }
+
+    // Fase 56, secao 5 -- comprovante de entrega, MESMO universo de viagens
+    // de tripsWithDocuments* (tripGroups ja calculado acima) -- nunca uma
+    // query nova ao modulo Trips so para achar "todas as viagens do tenant"
+    // (fora do escopo desta agregacao fiscal).
+    let tripsWithDeliveryProof = 0;
+    let tripsWithoutDeliveryProof = 0;
+    for (const rows of tripGroups.values()) {
+      if (rows.some((r) => r.documentType === FiscalDocumentType.DELIVERY_PROOF)) tripsWithDeliveryProof += 1;
+      else tripsWithoutDeliveryProof += 1;
+    }
+    const deliveryProofDenominator = tripsWithDeliveryProof + tripsWithoutDeliveryProof;
+    const deliveryProofCoverageAvailable = deliveryProofDenominator > 0;
+    const deliveryProofCoveragePercent = deliveryProofCoverageAvailable
+      ? Math.round((tripsWithDeliveryProof / deliveryProofDenominator) * 100)
+      : null;
+
+    const deliveryProofRows = classificationRows.filter((row) => row.documentType === FiscalDocumentType.DELIVERY_PROOF);
+    const deliveryProofPendingCount = deliveryProofRows.filter(
+      (row) => row.status === FiscalDocumentStatus.PENDING && (issuesById.get(row.id)?.length ?? 0) === 0,
+    ).length;
+    const deliveryProofProblematicCount = deliveryProofRows.filter(
+      (row) =>
+        row.status === FiscalDocumentStatus.INVALID ||
+        row.status === FiscalDocumentStatus.CANCELLED ||
+        (issuesById.get(row.id)?.length ?? 0) > 0,
+    ).length;
+
+    // Fase 57 -- CIOT. Mesma logica em memoria sobre classificationRows/
+    // issuesById ja carregados (zero queries novas). linked/unlinked usa a
+    // MESMA semantica de linkedCount/unlinkedCount (Fase 53), so filtrada
+    // por tipo.
+    const ciotRows = classificationRows.filter((row) => row.documentType === FiscalDocumentType.CIOT);
+    const ciotUnlinkedCount = ciotRows.filter((row) => !row.tripId && !row.vehicleId && !row.driverId && !row.customerId).length;
+    const ciotLinkedCount = ciotRows.length - ciotUnlinkedCount;
+    const ciotPendingCount = ciotRows.filter((row) => row.status === FiscalDocumentStatus.PENDING).length;
+    const ciotInvalidCount = ciotRows.filter((row) => row.status === FiscalDocumentStatus.INVALID).length;
+    const ciotProblematicCount = ciotRows.filter(
+      (row) => row.status === FiscalDocumentStatus.PENDING || row.status === FiscalDocumentStatus.INVALID || (issuesById.get(row.id)?.length ?? 0) > 0,
+    ).length;
+    const ciotOperationalDivergenceCount = ciotRows.filter((row) => (issuesById.get(row.id) ?? []).includes(FiscalIssueCode.INCONSISTENT_LINK)).length;
+
+    // Fase 58 -- MDF-e <-> CT-e/NF-e, em memoria sobre o MESMO lote
+    // (classificationRows) ja carregado -- zero queries novas. So conta
+    // como relacionado quando as DUAS pontas (MDF-e + o documento
+    // manifestado) estao no escopo do filtro atual.
+    const relatedDocumentsCount = buildRelatedDocumentIdSet(
+      classificationRows.map((row) => ({ id: row.id, documentType: row.documentType, accessKey: row.accessKey, metadata: row.metadata })),
+    ).size;
 
     const byType: FiscalDocumentTypeCountEntity[] = byTypeRaw
       .map((row) => {
@@ -531,6 +772,35 @@ export class FiscalDocumentsService {
       classificationRows.map((row) => ({ date: row.issueDate ?? row.createdAt, value: 1 })),
       12,
     );
+    entity.tripsWithDocumentsOk = tripsWithDocumentsOk;
+    entity.tripsWithDocumentsAttention = tripsWithDocumentsAttention;
+    entity.tripsWithDocumentsProblematic = tripsWithDocumentsProblematic;
+    entity.operationalDivergenceCount = operationalDivergenceCount;
+    entity.problemsMonthlyEvolution = aggregateMonthlySeries(
+      problematicRowsFull.map((row) => ({ date: row.issueDate ?? row.createdAt, value: 1 })),
+      12,
+    );
+    entity.tripsWithDeliveryProof = tripsWithDeliveryProof;
+    entity.tripsWithoutDeliveryProof = tripsWithoutDeliveryProof;
+    entity.deliveryProofCoveragePercent = deliveryProofCoveragePercent;
+    entity.deliveryProofCoverageAvailable = deliveryProofCoverageAvailable;
+    entity.deliveryProofPendingCount = deliveryProofPendingCount;
+    entity.deliveryProofProblematicCount = deliveryProofProblematicCount;
+    entity.deliveryProofMonthlyEvolution = aggregateMonthlySeries(
+      deliveryProofRows.map((row) => ({ date: row.issueDate ?? row.createdAt, value: 1 })),
+      12,
+    );
+    entity.ciotLinkedCount = ciotLinkedCount;
+    entity.ciotUnlinkedCount = ciotUnlinkedCount;
+    entity.ciotPendingCount = ciotPendingCount;
+    entity.ciotInvalidCount = ciotInvalidCount;
+    entity.ciotProblematicCount = ciotProblematicCount;
+    entity.ciotOperationalDivergenceCount = ciotOperationalDivergenceCount;
+    entity.ciotMonthlyEvolution = aggregateMonthlySeries(
+      ciotRows.map((row) => ({ date: row.issueDate ?? row.createdAt, value: 1 })),
+      12,
+    );
+    entity.relatedDocumentsCount = relatedDocumentsCount;
     return entity;
   }
 
@@ -539,7 +809,17 @@ export class FiscalDocumentsService {
   // so o complemento do catalogo -- nunca uma lista de documentos
   // obrigatorios (regra de negocio inexistente no projeto).
   async getTripDocumentStatus(tenantId: string, tripId: string): Promise<TripDocumentStatusEntity> {
-    await this.assertLinkedEntitiesExist(tenantId, { tripId });
+    // Fase 55 -- busca o proprio contexto (veiculo real/motorista/cliente da
+    // viagem) na mesma query que ja confirma a existencia da viagem,
+    // substituindo o antigo assertLinkedEntitiesExist so-existencia (nunca 2
+    // queries de trip onde 1 basta).
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, deletedAt: null },
+      select: { driverId: true, customerId: true, composition: { select: { vehicleId: true } } },
+    });
+    if (!trip) {
+      throw new NotFoundException('Viagem (tripId) nao encontrada nesta empresa.');
+    }
 
     // Fase 54 -- documentos de 1 viagem sao um conjunto naturalmente
     // pequeno: 1 findMany completo + 1 groupBy de duplicidade (tenant
@@ -576,6 +856,65 @@ export class FiscalDocumentsService {
     // Nunca inventa percentual -- ver comentario em TripDocumentStatusEntity.
     entity.completenessPercent = null;
     entity.completenessAvailable = false;
+
+    // Fase 55, secao 7 -- documentos SEM viagem, mas com evidencia objetiva
+    // (mesmo veiculo/motorista/cliente da viagem) -- 1 query bounded (take),
+    // so executada quando ha pelo menos 1 campo para comparar (nunca
+    // matching agressivo -- ver isSafeUnlinkedCandidate).
+    const tripVehicleId = trip.composition?.vehicleId ?? null;
+    const matchClauses: Prisma.FiscalDocumentWhereInput[] = [];
+    if (tripVehicleId) matchClauses.push({ vehicleId: tripVehicleId });
+    if (trip.driverId) matchClauses.push({ driverId: trip.driverId });
+    if (trip.customerId) matchClauses.push({ customerId: trip.customerId });
+
+    const candidateRows =
+      matchClauses.length > 0
+        ? await this.prisma.fiscalDocument.findMany({
+            where: { tenantId, tripId: null, OR: matchClauses },
+            include: FISCAL_DOCUMENT_INCLUDE,
+            orderBy: { createdAt: 'desc' },
+            take: UNLINKED_CANDIDATES_LIMIT,
+          })
+        : [];
+    entity.unlinkedCandidates = candidateRows.map((document) => this.attachValidationIssues(toFiscalDocumentEntity(document), document, duplicateKeys));
+
+    // Fase 55, secao 1 -- matriz por tipo, enriquecida com unlinkedRelatedCount
+    // (agrupamento em memoria dos candidatos ja buscados acima, zero queries
+    // extra).
+    const matrix: TripDocumentMatrixRowEntity[] = buildTripDocumentMatrix(
+      items.map((item) => ({ documentType: item.documentType, status: item.status, validationIssues: item.validationIssues })),
+    );
+    for (const row of matrix) {
+      row.unlinkedRelatedCount = entity.unlinkedCandidates.filter((c) => c.documentType === row.documentType).length;
+    }
+
+    // Fase 58 -- MDF-e <-> CT-e/NF-e desta viagem, em memoria sobre os
+    // documentos ja carregados acima (zero queries extra). So conta como
+    // relacionado quando as DUAS pontas estao entre os documentos desta
+    // viagem -- nunca por aproximacao de numero/data/valor.
+    const relatedIds = buildRelatedDocumentIdSet(
+      documents.map((document) => ({ id: document.id, documentType: document.documentType, accessKey: document.accessKey, metadata: document.metadata })),
+    );
+    for (const row of matrix) {
+      row.relatedCount = documents.filter((document) => document.documentType === row.documentType && relatedIds.has(document.id)).length;
+    }
+
+    entity.matrix = matrix;
+
+    // Fase 55, secao 4 -- situacao documental (OK/ATTENTION/PROBLEMATIC/
+    // UNAVAILABLE), NUNCA "conformidade SEFAZ" -- ver TripDocumentComplianceStatus.
+    entity.complianceStatus = computeTripDocumentComplianceStatus({
+      totalDocuments: entity.totalDocuments,
+      invalidCount: entity.invalidCount,
+      cancelledCount: entity.cancelledCount,
+      pendingCount: entity.pendingCount,
+      hasOperationalDivergence: items.some((item) => item.validationIssues.includes(FiscalIssueCode.INCONSISTENT_LINK)),
+    });
+
+    // Fase 56, secao 3 -- sempre derivado da linha DELIVERY_PROOF da matriz
+    // ja calculada acima (zero I/O extra), nunca uma maquina de estados nova.
+    entity.deliveryProofStatus = computeDeliveryProofStatus(matrix.find((row) => row.documentType === FiscalDocumentType.DELIVERY_PROOF));
+
     return entity;
   }
 
@@ -729,6 +1068,7 @@ export class FiscalDocumentsService {
       hasDuplicateCandidate,
       tripVehicleId: document.trip?.composition?.vehicleId ?? null,
       tripDriverId: document.trip?.driverId ?? null,
+      tripCustomerId: document.trip?.customerId ?? null,
     };
   }
 
@@ -768,6 +1108,48 @@ export class FiscalDocumentsService {
     const entity = toFiscalDocumentEntity(document);
     entity.validationIssues = classifyFiscalDocumentIssues(this.toIssueInput(document, hasDuplicateCandidate));
     return entity;
+  }
+
+  // Fase 55, secao 3 -- relacao MDF-e <-> CT-e/NF-e, SOMENTE derivada de
+  // dados ja existentes (metadata.manifestedAccessKeys, extraido do proprio
+  // XML na importacao -- ver fiscal-xml.parser.ts). Nunca infere por
+  // emitente/data/proximidade. So chamado por findOne (1 documento por vez,
+  // nunca em listagem/dashboard) -- o custo de ate 1 query extra fica
+  // restrito ao detalhe, nunca escala com o numero de documentos listados.
+  private async computeRelatedDocuments(
+    tenantId: string,
+    document: FiscalDocumentWithRelations,
+  ): Promise<{ relatedDocuments: RelatedFiscalDocumentEntity[]; relatedDocumentsAvailable: boolean }> {
+    if (document.documentType === FiscalDocumentType.MDFE) {
+      const manifestedAccessKeys = extractManifestedAccessKeys(document.metadata);
+      if (!manifestedAccessKeys) {
+        return { relatedDocuments: [], relatedDocumentsAvailable: false };
+      }
+      const rows = await this.prisma.fiscalDocument.findMany({
+        where: { tenantId, accessKey: { in: manifestedAccessKeys } },
+        select: RELATED_DOCUMENT_SELECT,
+        take: RELATED_DOCUMENTS_LIMIT,
+      });
+      return { relatedDocuments: rows.map(toRelatedFiscalDocumentEntity), relatedDocumentsAvailable: true };
+    }
+
+    if (document.documentType === FiscalDocumentType.NFE || document.documentType === FiscalDocumentType.CTE) {
+      // Busca reversa (que MDF-e manifesta este documento?) so e viavel de
+      // forma bounded quando ha uma viagem para restringir o escopo -- sem
+      // isso, seria necessario varrer todo o metadata JSON do tenant.
+      // Declarado indisponivel em vez de fazer uma busca sem limite.
+      if (!document.accessKey || !document.tripId) {
+        return { relatedDocuments: [], relatedDocumentsAvailable: false };
+      }
+      const mdfeCandidates = await this.prisma.fiscalDocument.findMany({
+        where: { tenantId, tripId: document.tripId, documentType: FiscalDocumentType.MDFE },
+        select: { ...RELATED_DOCUMENT_SELECT, metadata: true },
+      });
+      const related = mdfeCandidates.filter((row) => extractManifestedAccessKeys(row.metadata)?.includes(document.accessKey!) ?? false);
+      return { relatedDocuments: related.map(toRelatedFiscalDocumentEntity), relatedDocumentsAvailable: true };
+    }
+
+    return { relatedDocuments: [], relatedDocumentsAvailable: false };
   }
 
   // Fase 54 -- 1 unica query agregada (groupBy) para descobrir quais

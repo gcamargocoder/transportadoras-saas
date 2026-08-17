@@ -44,6 +44,9 @@ export function toFiscalDocumentEntity(document: FiscalDocumentWithRelations): F
   entity.customerName = document.customer?.name ?? null;
   entity.createdBy = document.createdBy;
   entity.creatorName = document.creator.name;
+  // Fase 56 -- ver FiscalDocumentOrigin (nunca coluna nova, so o role do
+  // criador ja incluido).
+  entity.origin = document.creator.role === 'DRIVER' ? 'DRIVER' : 'ADMIN';
   entity.updatedBy = document.updatedBy;
   entity.updaterName = document.updater?.name ?? null;
   entity.createdAt = document.createdAt;
@@ -53,5 +56,10 @@ export function toFiscalDocumentEntity(document: FiscalDocumentWithRelations): F
   // sobrescreve este campo (a duplicidade exige contexto em lote que o
   // mapper, deliberadamente burro/sem acesso a outras linhas, nao tem).
   entity.validationIssues = [];
+  // Fase 55 -- default seguro: so GET /fiscal/documents/:id calcula a
+  // relacao de verdade (1 query bounded); demais chamadores deixam
+  // indisponivel em vez de fingir que verificaram (ver FiscalDocumentEntity).
+  entity.relatedDocuments = [];
+  entity.relatedDocumentsAvailable = false;
   return entity;
 }

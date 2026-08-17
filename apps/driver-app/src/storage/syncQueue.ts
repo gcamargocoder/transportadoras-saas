@@ -90,6 +90,21 @@ type PendingAction =
       localFileUri: string;
       fileName: string;
       mimeType: string;
+    }
+  // Fase 56 -- comprovante de entrega. Mesmo principio de checklist-evidence
+  // acima: localFileUri sempre o path persistido (ver storage/
+  // deliveryProofFiles.ts), deviceEventId garante idempotencia no backend
+  // (FiscalDocument.deviceEventId, unique) -- reenviar apos reconexao nunca
+  // cria um segundo comprovante.
+  | {
+      kind: 'delivery-proof';
+      tripId: string;
+      deviceEventId: string;
+      observation?: string;
+      capturedAt: string;
+      localFileUri: string;
+      fileName: string;
+      mimeType: string;
     };
 
 const STORAGE_KEY = 'driverapp.syncQueue';
@@ -184,6 +199,17 @@ async function runAction(action: PendingAction): Promise<void> {
             latitude: action.latitude,
             longitude: action.longitude,
           }),
+        },
+        { uri: action.localFileUri, name: action.fileName, type: action.mimeType },
+      );
+      return;
+    case 'delivery-proof':
+      await driverTripsApi.submitDeliveryProof(
+        action.tripId,
+        {
+          deviceEventId: action.deviceEventId,
+          capturedAt: action.capturedAt,
+          ...compact({ observation: action.observation }),
         },
         { uri: action.localFileUri, name: action.fileName, type: action.mimeType },
       );

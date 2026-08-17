@@ -279,6 +279,13 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
               </View>
               <View style={{ flexGrow: 1, minWidth: '45%' }}>
                 <Button
+                  label="Comprovante de entrega"
+                  variant="secondary"
+                  onPress={() => navigation.navigate('DeliveryProof', { tripId: activeTrip.id })}
+                />
+              </View>
+              <View style={{ flexGrow: 1, minWidth: '45%' }}>
+                <Button
                   label="Checklist pos-viagem"
                   variant="secondary"
                   onPress={() => navigation.navigate('Checklist', { tripId: activeTrip.id, type: 'POST_TRIP' })}

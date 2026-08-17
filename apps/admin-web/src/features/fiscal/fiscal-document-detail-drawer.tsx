@@ -13,10 +13,11 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { listDrivers } from '../../lib/api/drivers.api';
-import { deleteFiscalDocument, getFiscalDocumentHistory, updateFiscalDocument } from '../../lib/api/fiscal.api';
+import { deleteFiscalDocument, getFiscalDocument, getFiscalDocumentHistory, updateFiscalDocument } from '../../lib/api/fiscal.api';
 import { listVehicles } from '../../lib/api/fleet.api';
 import { listCustomers } from '../../lib/api/trips.api';
 import {
+  FISCAL_DOCUMENT_ORIGIN_LABELS,
   FISCAL_DOCUMENT_SOURCE_LABELS,
   FISCAL_DOCUMENT_STATUS_LABELS,
   FISCAL_DOCUMENT_STATUS_TONE,
@@ -33,6 +34,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'fiscal.document_updated': 'Metadados atualizados',
   'fiscal.document_linked': 'Vínculo alterado',
   'fiscal.document_deleted': 'Documento removido',
+  'fiscal.delivery_proof_submitted': 'Comprovante de entrega registrado (app do motorista)',
 };
 
 function formatBytes(bytes: number | null): string {
@@ -82,6 +84,15 @@ export function FiscalDocumentDetailDrawer({
     onError: (error) => toast.error('Não foi possível atualizar o documento.', toFriendlyMessage(error)),
   });
 
+  // Fase 55 -- relatedDocuments so vem calculado no detalhe (GET /:id), nunca
+  // na listagem/dashboard (evita N+1 la) -- por isso busca sob demanda aqui,
+  // mesmo padrao do historyQuery abaixo.
+  const detailQuery = useQuery({
+    queryKey: ['fiscal-documents', 'detail', document?.id],
+    queryFn: () => getFiscalDocument(document!.id),
+    enabled: document !== null,
+  });
+
   const historyQuery = useQuery({
     queryKey: ['fiscal-documents', 'history', document?.id],
     queryFn: () => getFiscalDocumentHistory(document!.id, { pageSize: 10 }),
@@ -110,7 +121,9 @@ export function FiscalDocumentDetailDrawer({
               <p className="text-sm font-semibold text-ink">{FISCAL_DOCUMENT_TYPE_LABELS[document.documentType]}</p>
               <Badge tone={FISCAL_DOCUMENT_STATUS_TONE[document.status]}>{FISCAL_DOCUMENT_STATUS_LABELS[document.status]}</Badge>
             </div>
-            <p className="mt-0.5 text-xs text-ink-subtle">{FISCAL_DOCUMENT_SOURCE_LABELS[document.source]}</p>
+            <p className="mt-0.5 text-xs text-ink-subtle">
+              {FISCAL_DOCUMENT_SOURCE_LABELS[document.source]} · {FISCAL_DOCUMENT_ORIGIN_LABELS[document.origin]}
+            </p>
           </div>
 
           <div className="rounded-md bg-surface-muted p-2.5">
@@ -130,6 +143,27 @@ export function FiscalDocumentDetailDrawer({
               Validação apenas estrutural (formato, chave, campos e vínculo) — nunca autorização/autenticidade perante a SEFAZ.
             </p>
           </div>
+
+          {detailQuery.data && detailQuery.data.relatedDocumentsAvailable && (
+            <div className="rounded-md bg-surface-muted p-2.5">
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-subtle">Documentos relacionados</p>
+              {detailQuery.data.relatedDocuments.length === 0 ? (
+                <p className="text-xs text-ink-subtle">Nenhum documento relacionado identificado.</p>
+              ) : (
+                <ul className="flex flex-col gap-1.5">
+                  {detailQuery.data.relatedDocuments.map((related) => (
+                    <li key={related.id} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="truncate text-ink">
+                        {FISCAL_DOCUMENT_TYPE_LABELS[related.documentType]} · {related.documentNumber ?? related.fileName ?? related.id.slice(0, 8)}
+                      </span>
+                      <Badge tone={FISCAL_DOCUMENT_STATUS_TONE[related.status]}>{FISCAL_DOCUMENT_STATUS_LABELS[related.status]}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-1.5 text-[11px] text-ink-subtle">Relação derivada das chaves manifestadas no XML — nunca inferida.</p>
+            </div>
+          )}
 
           <dl className="flex flex-col gap-2 text-sm">
             <div className="flex justify-between gap-3">

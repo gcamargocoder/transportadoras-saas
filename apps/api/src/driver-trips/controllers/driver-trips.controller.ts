@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -45,8 +46,12 @@ import { TripStopsService } from '../../trip-operations/services/trip-stops.serv
 import { CreateDriverFuelSupplyDto } from '../../fuel-supplies/dto/create-driver-fuel-supply.dto';
 import { FuelSupplyEntity } from '../../fuel-supplies/entities/fuel-supply.entity';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
+import { SubmitDeliveryProofDto } from '../../fiscal/dto/submit-delivery-proof.dto';
+import { FiscalDocumentEntity } from '../../fiscal/entities/fiscal-document.entity';
+import { FiscalDocumentsService } from '../../fiscal/services/fiscal-documents.service';
 import { TripEntity } from '../../trips/entities/trip.entity';
 import { DRIVER_TRIP_ROLES } from '../constants/driver-trip-roles.constants';
+import { buildDriverDeliveryProofMulterOptions } from '../config/driver-delivery-proof-storage.config';
 import { DriverContext } from '../context/driver-context';
 import { NearbyTollPlazasQueryDto } from '../dto/nearby-toll-plazas-query.dto';
 import { StartTripDto } from '../dto/start-trip.dto';
@@ -82,6 +87,7 @@ export class DriverTripsController {
     private readonly routingService: RoutingService,
     private readonly checklistTemplatesService: ChecklistTemplatesService,
     private readonly checklistExecutionsService: ChecklistExecutionsService,
+    private readonly fiscalDocumentsService: FiscalDocumentsService,
     private readonly tenantContext: TenantContext,
     private readonly driverContext: DriverContext,
   ) {}
@@ -492,6 +498,60 @@ export class DriverTripsController {
       this.tenantContext.requireTenantId(),
       this.driverContext.requireDriverId(),
       id,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  // ==========================================================================
+  // COMPROVANTE DE ENTREGA (Fase 56) -- FiscalDocumentsService vive em modulo
+  // proprio (FiscalModule), importado aqui exatamente como
+  // ChecklistsModule/FuelSuppliesModule acima: nenhum service/controller
+  // paralelo. vehicleId/driverId/customerId nunca vem do corpo da requisicao
+  // -- sempre derivados da viagem (ja validada contra ESTE motorista logo
+  // abaixo) e do motorista autenticado.
+  // ==========================================================================
+
+  @Post('trips/:id/delivery-proof')
+  @Throttle(UPLOAD_THROTTLE)
+  @UseInterceptors(FileInterceptor('file', buildDriverDeliveryProofMulterOptions()))
+  @UseFilters(MulterExceptionFilter)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'deviceEventId'],
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Foto (camera/galeria) ou PDF do comprovante de entrega.' },
+        deviceEventId: { type: 'string' },
+        observation: { type: 'string' },
+        capturedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+  })
+  @ApiOperation({
+    summary:
+      'Registra o comprovante de entrega (DELIVERY_PROOF) desta viagem. Idempotente por deviceEventId (fila offline) -- ' +
+      'reenviar apos reconexao nunca cria um segundo comprovante.',
+  })
+  @ApiOkResponse({ type: FiscalDocumentEntity })
+  async submitDeliveryProof(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SubmitDeliveryProofDto,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<FiscalDocumentEntity> {
+    if (!file) {
+      throw new BadRequestException('Arquivo obrigatorio. Extensoes aceitas: .pdf, .jpg, .jpeg, .png.');
+    }
+    const tenantId = this.tenantContext.requireTenantId();
+    const driverId = this.driverContext.requireDriverId();
+    await this.driverTripsService.getOne(tenantId, driverId, id);
+    return this.fiscalDocumentsService.submitDeliveryProofFromDriverApp(
+      tenantId,
+      driverId,
+      id,
+      dto,
+      file,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
