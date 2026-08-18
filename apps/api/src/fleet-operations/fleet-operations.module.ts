@@ -11,5 +11,8 @@ import { FleetOperationsMetricsService } from './services/fleet-operations-metri
   imports: [FuelSuppliesModule, TiresModule],
   controllers: [FleetOperationsController],
   providers: [FleetOperationsMetricsService],
+  // Fase 62 -- exportado para VehicleOverviewService (FleetModule)
+  // reaproveitar getFinancialDashboard sem recalcular custo/receita.
+  exports: [FleetOperationsMetricsService],
 })
 export class FleetOperationsModule {}

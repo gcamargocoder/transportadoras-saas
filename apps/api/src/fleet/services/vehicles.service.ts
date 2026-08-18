@@ -4,6 +4,7 @@ import {
   TripStatus,
   Vehicle,
   VehicleMaintenanceStatus,
+  VehicleOwnershipType,
   VehicleStatus,
 } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
@@ -23,10 +24,19 @@ import { FindVehiclesQueryDto } from '../dto/find-vehicles-query.dto';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto';
 import { PaginatedVehiclesEntity } from '../entities/paginated-vehicles.entity';
+import { VehicleDriverAssignmentEntity } from '../entities/vehicle-driver-assignment.entity';
+import { VehicleSummaryEntity } from '../entities/vehicle-summary.entity';
 import { VehicleEntity } from '../entities/vehicle.entity';
 import { hasActiveRelationship } from '../interfaces/vehicle-relationship-counts.interface';
-import { toVehicleEntity } from '../mappers/vehicle.mapper';
+import { VehicleDerivedContext, toVehicleEntity } from '../mappers/vehicle.mapper';
 import { normalizePlate } from '../utils/normalize-plate.util';
+import { resolveVehicleStatusChangeAction } from '../utils/vehicle-status-transition.util';
+
+const ACTIVE_TRIP_STATUSES: TripStatus[] = [TripStatus.IN_PROGRESS, TripStatus.PAUSED];
+
+const CURRENT_DRIVER_ASSIGNMENT_INCLUDE = {
+  driver: { select: { id: true, name: true } },
+} satisfies Prisma.DriverVehicleAssignmentInclude;
 
 @Injectable()
 export class VehiclesService {
@@ -42,6 +52,11 @@ export class VehiclesService {
       ...(query.fleetId ? { fleetId: query.fleetId } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.ownershipType ? { ownershipType: query.ownershipType } : {}),
+      ...(query.currentDriverId
+        ? { driverAssignments: { some: { driverId: query.currentDriverId, endedAt: null } } }
+        : {}),
+      ...(query.availability ? this.buildAvailabilityWhere(query.availability) : {}),
       ...(query.category
         ? { category: { contains: query.category, mode: Prisma.QueryMode.insensitive } }
         : {}),
@@ -83,14 +98,92 @@ export class VehiclesService {
       this.prisma.vehicle.count({ where }),
     ]);
 
+    // Motorista atual + "em viagem agora" resolvidos em lote (2 queries no
+    // total para a pagina inteira) -- nunca 1 por linha (secao 12 da Fase 62).
+    const derivedContexts = await this.getDerivedContextMap(
+      tenantId,
+      items.map((item) => item.id),
+    );
+
     const result = new PaginatedVehiclesEntity();
-    result.items = items.map(toVehicleEntity);
+    result.items = items.map((item) => toVehicleEntity(item, derivedContexts.get(item.id)));
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
 
   async findOne(tenantId: string, id: string): Promise<VehicleEntity> {
-    return toVehicleEntity(await this.findActiveOrThrow(tenantId, id));
+    const vehicle = await this.findActiveOrThrow(tenantId, id);
+    const derivedContexts = await this.getDerivedContextMap(tenantId, [id]);
+    return toVehicleEntity(vehicle, derivedContexts.get(id));
+  }
+
+  // GET /vehicles/summary -- contagens do tenant inteiro via groupBy/count
+  // em paralelo, independente da quantidade de veiculos (secao 11/12 da
+  // Fase 62).
+  async getSummary(tenantId: string): Promise<VehicleSummaryEntity> {
+    const baseWhere: Prisma.VehicleWhereInput = { tenantId, deletedAt: null };
+
+    const [total, byStatus, byOwnership, totalOnTrip] = await Promise.all([
+      this.prisma.vehicle.count({ where: baseWhere }),
+      this.prisma.vehicle.groupBy({ by: ['status'], where: baseWhere, _count: { _all: true } }),
+      this.prisma.vehicle.groupBy({ by: ['ownershipType'], where: baseWhere, _count: { _all: true } }),
+      this.countVehiclesOnTrip(baseWhere),
+    ]);
+
+    const findCount = (
+      rows: { _count: { _all: number } }[],
+      predicate: (row: unknown) => boolean,
+    ): number => rows.filter(predicate).reduce((sum, row) => sum + row._count._all, 0);
+
+    const totalActive = findCount(byStatus, (row) => (row as { status: VehicleStatus }).status === VehicleStatus.ACTIVE);
+
+    const entity = new VehicleSummaryEntity();
+    entity.total = total;
+    entity.totalActive = totalActive;
+    entity.totalInactive = findCount(byStatus, (row) => (row as { status: VehicleStatus }).status === VehicleStatus.INACTIVE);
+    entity.totalSuspended = findCount(byStatus, (row) => (row as { status: VehicleStatus }).status === VehicleStatus.SUSPENDED);
+    entity.totalMaintenance = findCount(byStatus, (row) => (row as { status: VehicleStatus }).status === VehicleStatus.MAINTENANCE);
+    entity.totalOnTrip = totalOnTrip;
+    entity.totalAvailable = Math.max(totalActive - totalOnTrip, 0);
+    entity.totalUnavailable = Math.max(total - entity.totalAvailable, 0);
+    entity.totalOwn = findCount(byOwnership, (row) => (row as { ownershipType: VehicleOwnershipType }).ownershipType === VehicleOwnershipType.OWN);
+    entity.totalAggregated = findCount(byOwnership, (row) => (row as { ownershipType: VehicleOwnershipType }).ownershipType === VehicleOwnershipType.AGGREGATED);
+    entity.totalThirdParty = findCount(byOwnership, (row) => (row as { ownershipType: VehicleOwnershipType }).ownershipType === VehicleOwnershipType.THIRD_PARTY);
+    return entity;
+  }
+
+  // GET /vehicles/:id/driver-assignments -- mesma tabela DriverVehicleAssignment
+  // (Fase 61) filtrada pelo veiculo, nunca duplicada (secao 5 da Fase 62).
+  async getDriverAssignments(tenantId: string, vehicleId: string): Promise<VehicleDriverAssignmentEntity[]> {
+    await this.findActiveOrThrow(tenantId, vehicleId);
+    return this.getDriverAssignmentsRaw(tenantId, vehicleId);
+  }
+
+  // Sem checagem de existencia -- reaproveitado internamente por
+  // VehicleOverviewService, que ja validou o veiculo antes.
+  async getDriverAssignmentsRaw(tenantId: string, vehicleId: string): Promise<VehicleDriverAssignmentEntity[]> {
+    const assignments = await this.prisma.driverVehicleAssignment.findMany({
+      where: { tenantId, vehicleId },
+      include: { driver: { select: { id: true, name: true, type: true, status: true } }, creator: true },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    return assignments.map((assignment) => {
+      const entity = new VehicleDriverAssignmentEntity();
+      entity.id = assignment.id;
+      entity.vehicleId = assignment.vehicleId;
+      entity.driverId = assignment.driverId;
+      entity.driverName = assignment.driver.name;
+      entity.driverType = assignment.driver.type;
+      entity.driverStatus = assignment.driver.status;
+      entity.startedAt = assignment.startedAt;
+      entity.endedAt = assignment.endedAt;
+      entity.notes = assignment.notes;
+      entity.createdBy = assignment.createdBy;
+      entity.creatorName = assignment.creator.name;
+      entity.createdAt = assignment.createdAt;
+      return entity;
+    });
   }
 
   // Historico de auditoria do veiculo (AuditService.findByEntity e generico
@@ -154,6 +247,7 @@ export class VehiclesService {
             modelYear: dto.modelYear,
             color: dto.color,
             category: dto.category,
+            ownershipType: dto.ownershipType,
             fuelType: dto.fuelType,
             tankCapacityLiters: dto.tankCapacityLiters,
             averageConsumptionKmL: dto.averageConsumptionKmL,
@@ -179,6 +273,7 @@ export class VehiclesService {
         type: vehicle.type,
         brand: vehicle.brand,
         model: vehicle.model,
+        ownershipType: vehicle.ownershipType,
       }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
@@ -224,6 +319,7 @@ export class VehiclesService {
         color: dto.color,
         type: dto.type,
         category: dto.category,
+        ownershipType: dto.ownershipType,
         fuelType: dto.fuelType,
         tankCapacityLiters: dto.tankCapacityLiters,
         averageConsumptionKmL: dto.averageConsumptionKmL,
@@ -236,10 +332,15 @@ export class VehiclesService {
       }),
     });
 
+    // Alteracao de classificacao ganha sua propria acao de auditoria
+    // distinta (mesmo padrao de driver.classification_changed, Fase 61),
+    // sem duplicar o log generico abaixo.
+    const ownershipChanged = dto.ownershipType !== undefined && dto.ownershipType !== before.ownershipType;
+
     await this.audit.log({
       tenantId,
       userId: actor.userId,
-      action: 'vehicle.updated',
+      action: ownershipChanged ? 'vehicle.ownership_changed' : 'vehicle.updated',
       entityName: 'Vehicle',
       entityId: id,
       previousValue: toJsonSafe(before),
@@ -248,7 +349,8 @@ export class VehiclesService {
       userAgent: metadata.userAgent,
     });
 
-    return toVehicleEntity(vehicle);
+    const derivedContexts = await this.getDerivedContextMap(tenantId, [id]);
+    return toVehicleEntity(vehicle, derivedContexts.get(id));
   }
 
   async updateStatus(
@@ -268,7 +370,7 @@ export class VehiclesService {
     await this.audit.log({
       tenantId,
       userId: actor.userId,
-      action: 'vehicle.status_changed',
+      action: resolveVehicleStatusChangeAction(before.status, vehicle.status),
       entityName: 'Vehicle',
       entityId: id,
       previousValue: { status: before.status },
@@ -277,7 +379,8 @@ export class VehiclesService {
       userAgent: metadata.userAgent,
     });
 
-    return toVehicleEntity(vehicle);
+    const derivedContexts = await this.getDerivedContextMap(tenantId, [id]);
+    return toVehicleEntity(vehicle, derivedContexts.get(id));
   }
 
   async softDelete(
@@ -364,6 +467,73 @@ export class VehiclesService {
       throw new NotFoundException('Veiculo nao encontrado.');
     }
     return vehicle;
+  }
+
+  // Fase 62 -- "em viagem agora" reaproveita EXATAMENTE o mesmo criterio ja
+  // usado por FleetOperationsMetricsService.countVehiclesOnTrip: composicao
+  // do veiculo vinculada a um Trip IN_PROGRESS/PAUSED.
+  private countVehiclesOnTrip(vehicleWhere: Prisma.VehicleWhereInput): Promise<number> {
+    return this.prisma.vehicle.count({
+      where: { ...vehicleWhere, tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } } },
+    });
+  }
+
+  private buildAvailabilityWhere(
+    availability: 'AVAILABLE' | 'ON_TRIP' | 'UNAVAILABLE',
+  ): Prisma.VehicleWhereInput {
+    const onTripFilter: Prisma.VehicleWhereInput = {
+      tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } },
+    };
+    if (availability === 'ON_TRIP') {
+      return { status: VehicleStatus.ACTIVE, ...onTripFilter };
+    }
+    if (availability === 'AVAILABLE') {
+      return {
+        status: VehicleStatus.ACTIVE,
+        tripCompositions: { none: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } },
+      };
+    }
+    // UNAVAILABLE = nao-ACTIVE OU ACTIVE em viagem.
+    return { OR: [{ status: { not: VehicleStatus.ACTIVE } }, onTripFilter] };
+  }
+
+  // Resolve motorista atual + "em viagem agora" de varios veiculos em 2
+  // queries no total (nunca 1 por linha) -- secao 12 da Fase 62.
+  private async getDerivedContextMap(
+    tenantId: string,
+    vehicleIds: string[],
+  ): Promise<Map<string, VehicleDerivedContext>> {
+    if (vehicleIds.length === 0) return new Map();
+
+    const [currentAssignments, onTripRows] = await Promise.all([
+      this.prisma.driverVehicleAssignment.findMany({
+        where: { tenantId, vehicleId: { in: vehicleIds }, endedAt: null },
+        include: CURRENT_DRIVER_ASSIGNMENT_INCLUDE,
+      }),
+      this.prisma.vehicle.findMany({
+        where: {
+          tenantId,
+          id: { in: vehicleIds },
+          tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } },
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    const onTripSet = new Set(onTripRows.map((row) => row.id));
+    const map = new Map<string, VehicleDerivedContext>();
+    for (const vehicleId of vehicleIds) {
+      map.set(vehicleId, { currentDriverId: null, currentDriverName: null, onTrip: onTripSet.has(vehicleId) });
+    }
+    for (const assignment of currentAssignments) {
+      const existing = map.get(assignment.vehicleId);
+      map.set(assignment.vehicleId, {
+        currentDriverId: assignment.driverId,
+        currentDriverName: assignment.driver.name,
+        onTrip: existing?.onTrip ?? onTripSet.has(assignment.vehicleId),
+      });
+    }
+    return map;
   }
 
   private assertYearConsistency(manufactureYear?: number, modelYear?: number): void {

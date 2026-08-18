@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { DriverStatus, DriverType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -32,11 +33,21 @@ export class FindDriversQueryDto extends PaginationQueryDto {
   @MaxLength(150)
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Filtra por status (ativo/inativo).' })
+  @ApiPropertyOptional({ description: 'Filtra por status legado (ativo/inativo) -- prefira "status".' })
   @IsOptional()
   @ParseBooleanQuery()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ enum: DriverType, description: 'Filtra por classificacao operacional.' })
+  @IsOptional()
+  @IsEnum(DriverType, { message: 'type invalido.' })
+  type?: DriverType;
+
+  @ApiPropertyOptional({ enum: DriverStatus, description: 'Filtra por status operacional.' })
+  @IsOptional()
+  @IsEnum(DriverStatus, { message: 'status invalido.' })
+  status?: DriverStatus;
 
   @ApiPropertyOptional({ description: 'Filtra por CPF exato (com ou sem formatacao).' })
   @IsOptional()

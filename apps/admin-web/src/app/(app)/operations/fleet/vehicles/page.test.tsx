@@ -28,6 +28,7 @@ function buildOverview(overrides: Partial<FleetVehiclesOverviewEntity> = {}): Fl
     totalVehicles: 12,
     activeCount: 10,
     inactiveCount: 1,
+    suspendedCount: 0,
     maintenanceCount: 1,
     soldCount: 0,
     vehiclesOnTrip: 4,
@@ -40,6 +41,10 @@ function buildOverview(overrides: Partial<FleetVehiclesOverviewEntity> = {}): Fl
       { status: 'ACTIVE', count: 10 },
       { status: 'INACTIVE', count: 1 },
       { status: 'MAINTENANCE', count: 1 },
+    ],
+    byOwnershipType: [
+      { ownershipType: 'OWN', count: 10 },
+      { ownershipType: 'AGGREGATED', count: 2 },
     ],
     byFuelType: [{ fuelType: 'DIESEL_S10', count: 12 }],
     byFleet: [

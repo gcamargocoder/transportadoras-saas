@@ -13,7 +13,7 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { updateVehicle } from '../../lib/api/fleet.api';
-import { VEHICLE_FUEL_TYPE_LABELS, VEHICLE_TYPE_LABELS } from '../../lib/labels';
+import { VEHICLE_FUEL_TYPE_LABELS, VEHICLE_OWNERSHIP_TYPE_LABELS, VEHICLE_TYPE_LABELS } from '../../lib/labels';
 import type { VehicleEntity } from '../../types/entities';
 import type { VehicleFuelType } from '../../types/enums';
 
@@ -22,6 +22,7 @@ const schema = z.object({
   brand: z.string().min(1, 'Informe a marca.'),
   model: z.string().min(1, 'Informe o modelo.'),
   type: z.enum(['TRACTOR_UNIT', 'TRUCK', 'VAN', 'PICKUP', 'OTHER']),
+  ownershipType: z.enum(['OWN', 'AGGREGATED', 'THIRD_PARTY']),
   fuelType: z.string().optional(),
   axleCount: z.coerce
     .number()
@@ -62,6 +63,7 @@ export function UpdateVehicleModal({
         brand: vehicle.brand,
         model: vehicle.model,
         type: vehicle.type,
+        ownershipType: vehicle.ownershipType,
         fuelType: vehicle.fuelType ?? '',
         axleCount: vehicle.axleCount ?? undefined,
         odometerKm: vehicle.odometerKm ?? undefined,
@@ -119,6 +121,15 @@ export function UpdateVehicleModal({
         <FormField label="Tipo" htmlFor="type" required>
           <Select id="type" {...register('type')}>
             {Object.entries(VEHICLE_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Propriedade" htmlFor="ownershipType" required>
+          <Select id="ownershipType" {...register('ownershipType')}>
+            {Object.entries(VEHICLE_OWNERSHIP_TYPE_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>

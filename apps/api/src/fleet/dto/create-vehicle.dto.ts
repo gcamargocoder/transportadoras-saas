@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { VehicleFuelType, VehicleType } from '@prisma/client';
+import { VehicleFuelType, VehicleOwnershipType, VehicleType } from '@prisma/client';
 import {
   IsEnum,
   IsInt,
@@ -86,6 +86,15 @@ export class CreateVehicleDto {
   @IsString()
   @MaxLength(50)
   category?: string;
+
+  @ApiPropertyOptional({
+    enum: VehicleOwnershipType,
+    default: VehicleOwnershipType.OWN,
+    description: 'Classificacao de propriedade: proprio, agregado ou terceiro.',
+  })
+  @IsOptional()
+  @IsEnum(VehicleOwnershipType, { message: 'ownershipType invalido.' })
+  ownershipType?: VehicleOwnershipType;
 
   @ApiPropertyOptional({ enum: VehicleFuelType, example: VehicleFuelType.DIESEL_S10 })
   @IsOptional()

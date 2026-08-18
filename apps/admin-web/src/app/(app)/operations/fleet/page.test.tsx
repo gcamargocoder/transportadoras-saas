@@ -53,6 +53,7 @@ function buildDashboard(overrides: Partial<FleetOperationsDashboardEntity> = {})
       totalVehicles: 10,
       activeVehicles: 8,
       inactiveVehicles: 1,
+      suspendedVehicles: 0,
       maintenanceVehicles: 1,
       soldVehicles: 0,
       activeTrips: 3,

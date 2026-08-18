@@ -1,8 +1,31 @@
-import { Vehicle } from '@prisma/client';
+import { Vehicle, VehicleStatus } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
-import { VehicleEntity } from '../entities/vehicle.entity';
+import { VehicleAvailabilityValue, VehicleEntity } from '../entities/vehicle.entity';
 
-export function toVehicleEntity(vehicle: Vehicle): VehicleEntity {
+// Fase 62 -- contexto derivado (motorista atual + em viagem agora),
+// resolvido em lote pelo VehiclesService (nunca 1 query por veiculo) e
+// injetado aqui, mesmo padrao de DriverCurrentVehicleContext (drivers/mappers/driver.mapper.ts).
+export interface VehicleDerivedContext {
+  currentDriverId: string | null;
+  currentDriverName: string | null;
+  onTrip: boolean;
+}
+
+const NO_DERIVED_CONTEXT: VehicleDerivedContext = {
+  currentDriverId: null,
+  currentDriverName: null,
+  onTrip: false,
+};
+
+function resolveAvailability(status: VehicleStatus, onTrip: boolean): VehicleAvailabilityValue {
+  if (status !== VehicleStatus.ACTIVE) return 'UNAVAILABLE';
+  return onTrip ? 'ON_TRIP' : 'AVAILABLE';
+}
+
+export function toVehicleEntity(
+  vehicle: Vehicle,
+  context: VehicleDerivedContext = NO_DERIVED_CONTEXT,
+): VehicleEntity {
   const entity = new VehicleEntity();
   entity.id = vehicle.id;
   entity.tenantId = vehicle.tenantId;
@@ -27,6 +50,10 @@ export function toVehicleEntity(vehicle: Vehicle): VehicleEntity {
   entity.axleCount = vehicle.axleCount;
   entity.notes = vehicle.notes;
   entity.status = vehicle.status;
+  entity.ownershipType = vehicle.ownershipType;
+  entity.currentDriverId = context.currentDriverId;
+  entity.currentDriverName = context.currentDriverName;
+  entity.availability = resolveAvailability(vehicle.status, context.onTrip);
   entity.createdAt = vehicle.createdAt;
   entity.updatedAt = vehicle.updatedAt;
   return entity;

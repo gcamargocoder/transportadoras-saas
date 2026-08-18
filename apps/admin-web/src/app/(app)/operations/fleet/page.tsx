@@ -156,6 +156,12 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
               />
               <StatCard label="Disponíveis" value={formatNumber(query.data.overview.vehiclesAvailable)} tone="success" />
               <StatCard
+                label="Suspensos"
+                value={formatNumber(query.data.overview.suspendedVehicles)}
+                icon={AlertTriangle}
+                tone={query.data.overview.suspendedVehicles > 0 ? 'warning' : 'success'}
+              />
+              <StatCard
                 label="Em manutenção"
                 value={formatNumber(query.data.overview.maintenanceVehicles)}
                 icon={Wrench}

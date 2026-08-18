@@ -1173,4 +1173,69 @@ describe('Driver Trips (e2e)', () => {
       expect(historyRes.body.data.items.map((i: { action: string }) => i.action)).toContain('fiscal.delivery_proof_submitted');
     });
   });
+
+  // Fase 61 -- motorista SUSPENDED/INACTIVE perde acesso operacional ao
+  // Driver App. Nenhuma mudanca foi feita no DriverGuard: ele ja bloqueava
+  // por Driver.isActive antes desta fase, e DriversService.updateStatus
+  // mantem isActive sempre sincronizado com o novo status -- este teste
+  // comprova que a sincronizacao e suficiente, sem duplicar a checagem.
+  describe('Fase 61 -- status operacional bloqueia o Driver App', () => {
+    it('motorista SUSPENDED perde acesso as rotas do Driver App (mesmo com token valido)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Fase61Suspended');
+      const { driverId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/driver/trips/active')
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'SUSPENDED' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/driver/trips/active')
+        .set('Authorization', driverAuth)
+        .expect(403);
+    });
+
+    it('motorista INACTIVE perde acesso as rotas do Driver App', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Fase61Inactive');
+      const { driverId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'INACTIVE' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/driver/trips/active')
+        .set('Authorization', driverAuth)
+        .expect(403);
+    });
+
+    it('reativar (ACTIVE) devolve o acesso ao Driver App', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Fase61Reactivate');
+      const { driverId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'SUSPENDED' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/driver/trips/active')
+        .set('Authorization', driverAuth)
+        .expect(200);
+    });
+  });
 });

@@ -6,7 +6,7 @@ export class UpdateVehicleStatusDto {
   @ApiProperty({
     enum: VehicleStatus,
     example: VehicleStatus.MAINTENANCE,
-    description: 'Situacao do veiculo: ACTIVE, INACTIVE, MAINTENANCE ou SOLD.',
+    description: 'Situacao do veiculo: ACTIVE, INACTIVE, SUSPENDED, MAINTENANCE ou SOLD.',
   })
   @IsEnum(VehicleStatus, { message: 'status invalido.' })
   status!: VehicleStatus;

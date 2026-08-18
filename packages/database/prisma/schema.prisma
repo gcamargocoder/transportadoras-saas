@@ -69,10 +69,27 @@ enum VehicleType {
 enum VehicleStatus {
   ACTIVE
   INACTIVE
+  /// Fase 62 -- impedimento temporario de operar (ex: pendencia documental,
+  /// decisao administrativa), distinto de MAINTENANCE (fisicamente em
+  /// oficina) e INACTIVE (desativado). TripsService.startTrip ja bloqueia
+  /// qualquer status != ACTIVE ("veiculo inativo") -- SUSPENDED e coberto
+  /// automaticamente, sem alterar essa validacao central.
+  SUSPENDED
   MAINTENANCE
   SOLD
 
   @@map("vehicle_status")
+}
+
+/// Fase 62 -- classificacao de propriedade do veiculo, mesmo espirito de
+/// DriverType (Fase 61): nomenclatura identica (OWN/AGGREGATED/THIRD_PARTY)
+/// para consistencia entre motorista e veiculo.
+enum VehicleOwnershipType {
+  OWN
+  AGGREGATED
+  THIRD_PARTY
+
+  @@map("vehicle_ownership_type")
 }
 
 enum VehicleFuelType {
@@ -627,71 +644,73 @@ model Tenant {
   createdAt DateTime     @default(now()) @map("created_at")
   updatedAt DateTime     @updatedAt @map("updated_at")
 
-  settings                TenantSettings?
-  plan                    TenantPlan?
+  settings                 TenantSettings?
+  plan                     TenantPlan?
   /// Fase 50 -- relacao comercial (assinatura/cobranca), distinta de
   /// TenantPlan (que governa modulos/limites).
-  subscription            TenantSubscription?
-  subscriptionPayments    SubscriptionPayment[]
-  users                   UserAccount[]
-  fleets                  Fleet[]
-  vehicles                Vehicle[]
-  trailers                Trailer[]
-  drivers                 Driver[]
-  customers               Customer[]
-  locations               Location[]
-  trips                   Trip[]
-  vehicleTags             VehicleTag[]
-  vehicleMaintenances     VehicleMaintenance[]
-  maintenancePlans        MaintenancePlan[]
-  documents               Document[]
-  attachments             Attachment[]
-  externalReferences      ExternalReference[]
-  auditLogs               AuditLog[]
-  tripCompositions        TripComposition[]
-  tripCompositionTrailers TripCompositionTrailer[]
-  axleConfigurations      AxleConfiguration[]
-  routeVersions           RouteVersion[]
-  routeEvents             RouteEvent[]
-  routePlans              RoutePlan[]
-  routePlanTolls          RoutePlanToll[]
-  trackingPoints          TrackingPoint[]
-  tripStops               TripStop[]
-  axleEvents              AxleEvent[]
-  alerts                  Alert[]
-  notifications           Notification[]
-  telemetry               Telemetry[]
-  tripExpenses            TripExpense[]
-  tripRevenues            TripRevenue[]
-  tripAdvances            TripAdvance[]
-  tripSettlements         TripSettlement[]
-  tripMetrics             TripMetrics[]
-  driverShifts            DriverShift[]
-  tollTransactions        TollTransaction[]
-  tollAudits              TollAudit[]
-  tollRoutes              TollRoute[]
-  tollRouteStops          TollRouteStop[]
-  importJobs              ImportJob[]
-  importJobErrors         ImportJobError[]
-  fuelStations            FuelStation[]
-  fuelSupplies            FuelSupply[]
-  tires                   Tire[]
-  tireMovements           TireMovement[]
-  tireRetreads            TireRetread[]
-  tireInspections         TireInspection[]
-  tireDisposals           TireDisposal[]
-  checklistTemplates      ChecklistTemplate[]
-  checklistExecutions     ChecklistExecution[]
-  checklistEvidence       ChecklistEvidence[]
-  fiscalDocuments         FiscalDocument[]
+  subscription             TenantSubscription?
+  subscriptionPayments     SubscriptionPayment[]
+  users                    UserAccount[]
+  fleets                   Fleet[]
+  vehicles                 Vehicle[]
+  trailers                 Trailer[]
+  drivers                  Driver[]
+  customers                Customer[]
+  locations                Location[]
+  trips                    Trip[]
+  vehicleTags              VehicleTag[]
+  vehicleMaintenances      VehicleMaintenance[]
+  maintenancePlans         MaintenancePlan[]
+  documents                Document[]
+  attachments              Attachment[]
+  externalReferences       ExternalReference[]
+  auditLogs                AuditLog[]
+  tripCompositions         TripComposition[]
+  tripCompositionTrailers  TripCompositionTrailer[]
+  axleConfigurations       AxleConfiguration[]
+  routeVersions            RouteVersion[]
+  routeEvents              RouteEvent[]
+  routePlans               RoutePlan[]
+  routePlanTolls           RoutePlanToll[]
+  trackingPoints           TrackingPoint[]
+  tripStops                TripStop[]
+  axleEvents               AxleEvent[]
+  alerts                   Alert[]
+  notifications            Notification[]
+  telemetry                Telemetry[]
+  tripExpenses             TripExpense[]
+  tripRevenues             TripRevenue[]
+  tripAdvances             TripAdvance[]
+  tripSettlements          TripSettlement[]
+  tripMetrics              TripMetrics[]
+  driverShifts             DriverShift[]
+  tollTransactions         TollTransaction[]
+  tollAudits               TollAudit[]
+  tollRoutes               TollRoute[]
+  tollRouteStops           TollRouteStop[]
+  importJobs               ImportJob[]
+  importJobErrors          ImportJobError[]
+  fuelStations             FuelStation[]
+  fuelSupplies             FuelSupply[]
+  tires                    Tire[]
+  tireMovements            TireMovement[]
+  tireRetreads             TireRetread[]
+  tireInspections          TireInspection[]
+  tireDisposals            TireDisposal[]
+  checklistTemplates       ChecklistTemplate[]
+  checklistExecutions      ChecklistExecution[]
+  checklistEvidence        ChecklistEvidence[]
+  fiscalDocuments          FiscalDocument[]
   /// Fase 59 -- gestao de fretes, contratos e tabelas de frete.
-  contracts               Contract[]
-  freightTables           FreightTable[]
-  freightRules            FreightRule[]
-  tripFreights            TripFreight[]
+  contracts                Contract[]
+  freightTables            FreightTable[]
+  freightRules             FreightRule[]
+  tripFreights             TripFreight[]
   /// Fase 60 -- faturamento operacional.
-  tripBillings            TripBilling[]
-  tripBillingEntries      TripBillingEntry[]
+  tripBillings             TripBilling[]
+  tripBillingEntries       TripBillingEntry[]
+  /// Fase 61 -- motoristas, agregados e terceiros.
+  driverVehicleAssignments DriverVehicleAssignment[]
 
   @@map("tenants")
 }
@@ -877,46 +896,47 @@ model UserAccount {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  tenant                         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  driverProfile                  Driver?
-  auditLogs                      AuditLog[]
-  acknowledgedAlerts             Alert[]               @relation("AlertAcknowledgedBy")
-  notifications                  Notification[]
-  refreshTokens                  RefreshToken[]
-  vehicleMaintenancesResponsible VehicleMaintenance[]
-  importJobsCreated              ImportJob[]
-  tripExpensesCreated            TripExpense[]         @relation("TripExpenseCreator")
-  tripExpensesUpdated            TripExpense[]         @relation("TripExpenseUpdater")
-  tripExpensesApproved           TripExpense[]         @relation("TripExpenseApprover")
-  tripRevenuesCreated            TripRevenue[]         @relation("TripRevenueCreator")
-  tripRevenuesUpdated            TripRevenue[]         @relation("TripRevenueUpdater")
-  tripAdvancesCreated            TripAdvance[]         @relation("TripAdvanceCreator")
-  tripAdvancesUpdated            TripAdvance[]         @relation("TripAdvanceUpdater")
-  tripSettlementsClosed          TripSettlement[]      @relation("TripSettlementCloser")
-  fuelSuppliesCreated            FuelSupply[]          @relation("FuelSupplyCreator")
-  fuelSuppliesUpdated            FuelSupply[]          @relation("FuelSupplyUpdater")
-  tiresCreated                   Tire[]                @relation("TireCreator")
-  tiresUpdated                   Tire[]                @relation("TireUpdater")
-  tireMovementsCreated           TireMovement[]        @relation("TireMovementCreator")
-  tireRetreadsCreated            TireRetread[]         @relation("TireRetreadCreator")
-  tireInspectionsCreated         TireInspection[]      @relation("TireInspectionCreator")
-  tireDisposalsCreated           TireDisposal[]        @relation("TireDisposalCreator")
-  tollRatesCreated               TollRate[]            @relation("TollRateCreator")
-  subscriptionPaymentsCreated    SubscriptionPayment[]
-  fiscalDocumentsCreated         FiscalDocument[]      @relation("FiscalDocumentCreator")
-  fiscalDocumentsUpdated         FiscalDocument[]      @relation("FiscalDocumentUpdater")
-  contractsCreated               Contract[]            @relation("ContractCreator")
-  contractsUpdated               Contract[]            @relation("ContractUpdater")
-  freightTablesCreated           FreightTable[]        @relation("FreightTableCreator")
-  freightTablesUpdated           FreightTable[]        @relation("FreightTableUpdater")
-  freightRulesCreated            FreightRule[]         @relation("FreightRuleCreator")
-  freightRulesUpdated            FreightRule[]         @relation("FreightRuleUpdater")
-  tripFreightsCreated            TripFreight[]         @relation("TripFreightCreator")
-  tripFreightsUpdated            TripFreight[]         @relation("TripFreightUpdater")
-  tripBillingsCreated            TripBilling[]         @relation("TripBillingCreator")
-  tripBillingsUpdated            TripBilling[]         @relation("TripBillingUpdater")
-  tripBillingsCancelled          TripBilling[]         @relation("TripBillingCanceller")
-  tripBillingEntriesCreated      TripBillingEntry[]    @relation("TripBillingEntryCreator")
+  tenant                          Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driverProfile                   Driver?
+  auditLogs                       AuditLog[]
+  acknowledgedAlerts              Alert[]                   @relation("AlertAcknowledgedBy")
+  notifications                   Notification[]
+  refreshTokens                   RefreshToken[]
+  vehicleMaintenancesResponsible  VehicleMaintenance[]
+  importJobsCreated               ImportJob[]
+  tripExpensesCreated             TripExpense[]             @relation("TripExpenseCreator")
+  tripExpensesUpdated             TripExpense[]             @relation("TripExpenseUpdater")
+  tripExpensesApproved            TripExpense[]             @relation("TripExpenseApprover")
+  tripRevenuesCreated             TripRevenue[]             @relation("TripRevenueCreator")
+  tripRevenuesUpdated             TripRevenue[]             @relation("TripRevenueUpdater")
+  tripAdvancesCreated             TripAdvance[]             @relation("TripAdvanceCreator")
+  tripAdvancesUpdated             TripAdvance[]             @relation("TripAdvanceUpdater")
+  tripSettlementsClosed           TripSettlement[]          @relation("TripSettlementCloser")
+  fuelSuppliesCreated             FuelSupply[]              @relation("FuelSupplyCreator")
+  fuelSuppliesUpdated             FuelSupply[]              @relation("FuelSupplyUpdater")
+  tiresCreated                    Tire[]                    @relation("TireCreator")
+  tiresUpdated                    Tire[]                    @relation("TireUpdater")
+  tireMovementsCreated            TireMovement[]            @relation("TireMovementCreator")
+  tireRetreadsCreated             TireRetread[]             @relation("TireRetreadCreator")
+  tireInspectionsCreated          TireInspection[]          @relation("TireInspectionCreator")
+  tireDisposalsCreated            TireDisposal[]            @relation("TireDisposalCreator")
+  tollRatesCreated                TollRate[]                @relation("TollRateCreator")
+  subscriptionPaymentsCreated     SubscriptionPayment[]
+  fiscalDocumentsCreated          FiscalDocument[]          @relation("FiscalDocumentCreator")
+  fiscalDocumentsUpdated          FiscalDocument[]          @relation("FiscalDocumentUpdater")
+  contractsCreated                Contract[]                @relation("ContractCreator")
+  contractsUpdated                Contract[]                @relation("ContractUpdater")
+  freightTablesCreated            FreightTable[]            @relation("FreightTableCreator")
+  freightTablesUpdated            FreightTable[]            @relation("FreightTableUpdater")
+  freightRulesCreated             FreightRule[]             @relation("FreightRuleCreator")
+  freightRulesUpdated             FreightRule[]             @relation("FreightRuleUpdater")
+  tripFreightsCreated             TripFreight[]             @relation("TripFreightCreator")
+  tripFreightsUpdated             TripFreight[]             @relation("TripFreightUpdater")
+  tripBillingsCreated             TripBilling[]             @relation("TripBillingCreator")
+  tripBillingsUpdated             TripBilling[]             @relation("TripBillingUpdater")
+  tripBillingsCancelled           TripBilling[]             @relation("TripBillingCanceller")
+  tripBillingEntriesCreated       TripBillingEntry[]        @relation("TripBillingEntryCreator")
+  driverVehicleAssignmentsCreated DriverVehicleAssignment[] @relation("DriverVehicleAssignmentCreator")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1029,13 +1049,15 @@ model Vehicle {
   axleCount             Int?             @map("axle_count")
   notes                 String?
   status                VehicleStatus    @default(ACTIVE)
+  /// Fase 62 -- classificacao de propriedade (mesmo espirito de Driver.type).
+  ownershipType         VehicleOwnershipType @default(OWN) @map("ownership_type")
   /// Exclusao logica (mesmo padrao ja usado em Driver/UserAccount).
   deletedAt             DateTime?        @map("deleted_at")
   createdAt             DateTime         @default(now()) @map("created_at")
   updatedAt             DateTime         @updatedAt @map("updated_at")
 
-  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  fleet                   Fleet?               @relation(fields: [fleetId], references: [id], onDelete: SetNull)
+  tenant                  Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleet                   Fleet?                    @relation(fields: [fleetId], references: [id], onDelete: SetNull)
   tripCompositions        TripComposition[]
   tags                    VehicleTag[]
   telemetry               Telemetry[]
@@ -1047,17 +1069,22 @@ model Vehicle {
   tripStops               TripStop[]
   axleEvents              AxleEvent[]
   routePlans              RoutePlan[]
-  tires                   Tire[]               @relation("TireCurrentVehicle")
-  tireMovementsAsPrevious TireMovement[]       @relation("TireMovementPreviousVehicle")
-  tireMovementsAsNew      TireMovement[]       @relation("TireMovementNewVehicle")
+  tires                   Tire[]                    @relation("TireCurrentVehicle")
+  tireMovementsAsPrevious TireMovement[]            @relation("TireMovementPreviousVehicle")
+  tireMovementsAsNew      TireMovement[]            @relation("TireMovementNewVehicle")
   checklistExecutions     ChecklistExecution[]
   fiscalDocuments         FiscalDocument[]
+  /// Fase 61 -- historico de motoristas (proprios/agregados) vinculados a
+  /// este veiculo.
+  driverAssignments       DriverVehicleAssignment[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
   @@unique([tenantId, chassisNumber])
   @@index([tenantId])
   @@index([fleetId])
+  @@index([tenantId, ownershipType])
+  @@index([tenantId, status])
   @@map("vehicles")
 }
 
@@ -1505,41 +1532,84 @@ model VehicleTag {
 // MOTORISTAS — perfil, jornada
 // ============================================================================
 
+/// Classificacao operacional do motorista (Fase 61). OWN = proprio,
+/// pertence a operacao direta da transportadora. AGGREGATED = agregado,
+/// vinculado operacionalmente mas com relacao contratual propria.
+/// THIRD_PARTY = terceiro, motorista/servico externo utilizado pela
+/// transportadora. Default OWN preserva o comportamento de todos os
+/// motoristas ja cadastrados antes desta fase (nunca reclassificados
+/// automaticamente para AGGREGATED/THIRD_PARTY).
+enum DriverType {
+  OWN
+  AGGREGATED
+  THIRD_PARTY
+
+  @@map("driver_type")
+}
+
+/// Status operacional do motorista (Fase 61), mesmo espirito de
+/// VehicleStatus. SUSPENDED e distinto de INACTIVE: suspensao e um
+/// bloqueio temporario/disciplinar, inativo e um encerramento efetivo do
+/// vinculo -- ambos bloqueiam nova atribuicao a viagem (ver
+/// Driver.isActive, mantido sincronizado com este campo).
+enum DriverStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+
+  @@map("driver_status")
+}
+
 /// Perfil operacional do motorista. userAccountId e opcional -- so existe
 /// quando o motorista tem login no app (Driver App). Documentos (CNH,
 /// exame medico, MOPP, ANTT...) NAO sao campos aqui -- usam o model
 /// Document generico/polimorfico (ownerType=DRIVER, ownerId=Driver.id).
 model Driver {
-  id              String    @id @default(uuid()) @db.Uuid
-  tenantId        String    @map("tenant_id") @db.Uuid
-  userAccountId   String?   @unique @map("user_account_id") @db.Uuid
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @map("tenant_id") @db.Uuid
+  userAccountId   String?      @unique @map("user_account_id") @db.Uuid
   name            String
-  cpf             String    @db.VarChar(11)
-  rg              String?   @db.VarChar(20)
-  cnhNumber       String    @map("cnh_number") @db.VarChar(20)
-  cnhCategory     String    @map("cnh_category") @db.VarChar(5)
-  cnhExpiresAt    DateTime  @map("cnh_expires_at")
-  birthDate       DateTime? @map("birth_date")
+  cpf             String       @db.VarChar(11)
+  rg              String?      @db.VarChar(20)
+  cnhNumber       String       @map("cnh_number") @db.VarChar(20)
+  cnhCategory     String       @map("cnh_category") @db.VarChar(5)
+  cnhExpiresAt    DateTime     @map("cnh_expires_at")
+  birthDate       DateTime?    @map("birth_date")
   phone           String?
   email           String?
   address         String?
   city            String?
-  state           String?   @db.VarChar(2)
-  zipCode         String?   @map("zip_code") @db.VarChar(9)
+  state           String?      @db.VarChar(2)
+  zipCode         String?      @map("zip_code") @db.VarChar(9)
   notes           String?
-  admissionDate   DateTime? @map("admission_date")
+  admissionDate   DateTime?    @map("admission_date")
   /// Preenchida no desligamento do motorista -- distinta de deletedAt
   /// (desligado ainda e um registro historico valido; excluido logicamente
   /// nao deveria mais aparecer em listagens).
-  terminationDate DateTime? @map("termination_date")
-  isActive        Boolean   @default(true) @map("is_active")
+  terminationDate DateTime?    @map("termination_date")
+  /// Fase 61 -- classificacao operacional (proprio/agregado/terceiro).
+  type            DriverType   @default(OWN)
+  /// Fase 61 -- status operacional detalhado. SEMPRE mantido sincronizado
+  /// com isActive pelo DriversService (isActive = status == ACTIVE) --
+  /// isActive continua sendo o campo lido por TODAS as checagens ja
+  /// existentes (TripsService.assertDriverAvailable, inicio de viagem,
+  /// DriverGuard do Driver App), nunca duplicando essa logica: um
+  /// motorista SUSPENDED ou INACTIVE ja fica automaticamente bloqueado
+  /// para nova viagem/acesso ao app so pela sincronizacao de isActive,
+  /// sem precisar alterar nenhum desses pontos.
+  status          DriverStatus @default(ACTIVE)
+  /// Fase 61 -- disponibilidade operacional (ex: em folga/em viagem longa),
+  /// distinta de status (vinculo) -- indicacao manual, nunca inferida
+  /// automaticamente de viagens em andamento.
+  isAvailable     Boolean      @default(true) @map("is_available")
+  isActive        Boolean      @default(true) @map("is_active")
   /// Exclusao logica (mesmo padrao de UserAccount.deletedAt).
-  deletedAt       DateTime? @map("deleted_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime?    @map("deleted_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
 
-  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userAccount         UserAccount?         @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
+  tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userAccount         UserAccount?              @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
   trips               Trip[]
   shifts              DriverShift[]
   tollTransactions    TollTransaction[]
@@ -1550,11 +1620,49 @@ model Driver {
   axleEvents          AxleEvent[]
   checklistExecutions ChecklistExecution[]
   fiscalDocuments     FiscalDocument[]
+  /// Fase 61 -- historico de vinculo com veiculo (atual = endedAt null).
+  vehicleAssignments  DriverVehicleAssignment[]
 
   @@unique([tenantId, cpf])
   @@unique([tenantId, cnhNumber])
   @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, status])
   @@map("drivers")
+}
+
+/// Historico de vinculo motorista <-> veiculo (Fase 61) -- distinto de
+/// DriverShift (jornada de trabalho) e de TripComposition (composicao
+/// usada numa viagem especifica). Mesmo espirito de
+/// Tire[]@relation("TireCurrentVehicle")/TireMovement (Fase 45): o vinculo
+/// ATUAL e a linha com endedAt nulo; trocar de veiculo fecha a linha atual
+/// (endedAt = agora) e abre uma nova, preservando o historico completo --
+/// nunca apaga/sobrescreve uma atribuicao anterior. Nunca altera
+/// retroativamente TripComposition/Trip ja registradas.
+model DriverVehicleAssignment {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  driverId  String    @map("driver_id") @db.Uuid
+  vehicleId String    @map("vehicle_id") @db.Uuid
+  startedAt DateTime  @map("started_at")
+  /// Nulo = vinculo atual (no maximo 1 linha com endedAt nulo por
+  /// motorista, garantido pelo DriversService, nunca por constraint de
+  /// banco -- mesmo padrao ja aceito no projeto para TollRate/FreightRule).
+  endedAt   DateTime? @map("ended_at")
+  notes     String?   @db.Text
+  createdBy String    @map("created_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driver  Driver      @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle Vehicle     @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  creator UserAccount @relation("DriverVehicleAssignmentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, driverId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, driverId, endedAt])
+  @@map("driver_vehicle_assignments")
 }
 
 /// Jornada de trabalho do motorista. trip_id e opcional -- a jornada pode

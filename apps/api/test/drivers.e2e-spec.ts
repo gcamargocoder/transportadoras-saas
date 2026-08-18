@@ -207,7 +207,7 @@ describe('Drivers (e2e)', () => {
       const deactivateRes = await request(app.getHttpServer())
         .patch(`/api/v1/drivers/${driver.id}/status`)
         .set('Authorization', auth)
-        .send({ isActive: false })
+        .send({ status: 'INACTIVE' })
         .expect(200);
       expect(deactivateRes.body.data.isActive).toBe(false);
 
@@ -215,7 +215,7 @@ describe('Drivers (e2e)', () => {
       const reactivateRes = await request(app.getHttpServer())
         .patch(`/api/v1/drivers/${driver.id}/status`)
         .set('Authorization', auth)
-        .send({ isActive: true })
+        .send({ status: 'ACTIVE' })
         .expect(200);
       expect(reactivateRes.body.data.isActive).toBe(true);
 
@@ -262,7 +262,7 @@ describe('Drivers (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/v1/drivers/${inactiveRes.body.data.id}/status`)
         .set('Authorization', auth)
-        .send({ isActive: false })
+        .send({ status: 'INACTIVE' })
         .expect(200);
     });
 

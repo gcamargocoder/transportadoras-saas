@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Plus } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Plus, Truck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../components/ui/badge';
@@ -15,16 +15,24 @@ import { PageHeader } from '../../../components/ui/page-header';
 import { Pagination } from '../../../components/ui/pagination';
 import { SearchInput } from '../../../components/ui/search-input';
 import { Select } from '../../../components/ui/select';
+import { StatCard } from '../../../components/ui/stat-card';
 import { useAuth } from '../../../hooks/use-auth';
 import { useDebounce } from '../../../hooks/use-debounce';
 import { useTenantPlan } from '../../../hooks/use-tenant-plan';
-import { listVehicles } from '../../../lib/api/fleet.api';
+import { getVehicleSummary, listVehicles } from '../../../lib/api/fleet.api';
 import { FLEET_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { CreateVehicleModal } from '../../../features/fleet/create-vehicle-modal';
 import { VEHICLE_STATUS_TONE } from '../../../features/fleet/status';
-import { VEHICLE_STATUS_LABELS, VEHICLE_TYPE_LABELS } from '../../../lib/labels';
+import {
+  VEHICLE_AVAILABILITY_LABELS,
+  VEHICLE_AVAILABILITY_TONE,
+  VEHICLE_OWNERSHIP_TYPE_LABELS,
+  VEHICLE_OWNERSHIP_TYPE_TONE,
+  VEHICLE_STATUS_LABELS,
+  VEHICLE_TYPE_LABELS,
+} from '../../../lib/labels';
 import type { VehicleEntity } from '../../../types/entities';
-import type { VehicleStatus } from '../../../types/enums';
+import type { VehicleAvailability, VehicleOwnershipType, VehicleStatus } from '../../../types/enums';
 import { formatNumber } from '../../../utils/format';
 
 const PAGE_SIZE = 20;
@@ -36,11 +44,19 @@ export default function VehiclesPage(): JSX.Element {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<VehicleStatus | ''>('');
+  const [ownershipType, setOwnershipType] = useState<VehicleOwnershipType | ''>('');
+  const [availability, setAvailability] = useState<VehicleAvailability | ''>('');
   const [createOpen, setCreateOpen] = useState(false);
   const debouncedSearch = useDebounce(search);
+  const hasActiveFilters = Boolean(search || status || ownershipType || availability);
+
+  const summaryQuery = useQuery({
+    queryKey: ['vehicles', 'summary'],
+    queryFn: ({ signal }) => getVehicleSummary(signal),
+  });
 
   const query = useQuery({
-    queryKey: ['vehicles', { page, search: debouncedSearch, status }],
+    queryKey: ['vehicles', { page, search: debouncedSearch, status, ownershipType, availability }],
     queryFn: ({ signal }) =>
       listVehicles(
         {
@@ -48,6 +64,8 @@ export default function VehiclesPage(): JSX.Element {
           pageSize: PAGE_SIZE,
           search: debouncedSearch || undefined,
           status: status || undefined,
+          ownershipType: ownershipType || undefined,
+          availability: availability || undefined,
         },
         signal,
       ),
@@ -67,12 +85,29 @@ export default function VehiclesPage(): JSX.Element {
         ),
       },
       { header: 'Tipo', accessorFn: (row) => VEHICLE_TYPE_LABELS[row.type] },
+      {
+        header: 'Propriedade',
+        cell: ({ row }) => (
+          <Badge tone={VEHICLE_OWNERSHIP_TYPE_TONE[row.original.ownershipType]}>
+            {VEHICLE_OWNERSHIP_TYPE_LABELS[row.original.ownershipType]}
+          </Badge>
+        ),
+      },
+      { header: 'Motorista atual', accessorFn: (row) => row.currentDriverName ?? '—' },
       { header: 'Odômetro', cell: ({ row }) => `${formatNumber(row.original.odometerKm)} km` },
       {
         header: 'Status',
         cell: ({ row }) => (
           <Badge tone={VEHICLE_STATUS_TONE[row.original.status]}>
             {VEHICLE_STATUS_LABELS[row.original.status]}
+          </Badge>
+        ),
+      },
+      {
+        header: 'Disponibilidade',
+        cell: ({ row }) => (
+          <Badge tone={VEHICLE_AVAILABILITY_TONE[row.original.availability]}>
+            {VEHICLE_AVAILABILITY_LABELS[row.original.availability]}
           </Badge>
         ),
       },
@@ -100,11 +135,29 @@ export default function VehiclesPage(): JSX.Element {
         }
       />
 
+      {summaryQuery.data && (
+        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <StatCard label="Ativos" value={String(summaryQuery.data.totalActive)} icon={CheckCircle2} tone="success" />
+          <StatCard label="Disponíveis" value={String(summaryQuery.data.totalAvailable)} icon={Truck} tone="info" />
+          <StatCard label="Em viagem" value={String(summaryQuery.data.totalOnTrip)} />
+          <StatCard
+            label="Suspensos"
+            value={String(summaryQuery.data.totalSuspended)}
+            icon={AlertTriangle}
+            tone={summaryQuery.data.totalSuspended > 0 ? 'warning' : 'success'}
+          />
+          <StatCard label="Em manutenção" value={String(summaryQuery.data.totalMaintenance)} />
+          <StatCard label="Inativos" value={String(summaryQuery.data.totalInactive)} />
+        </div>
+      )}
+
       <FilterBar
-        hasActiveFilters={Boolean(search || status)}
+        hasActiveFilters={hasActiveFilters}
         onClear={() => {
           setSearch('');
           setStatus('');
+          setOwnershipType('');
+          setAvailability('');
           setPage(1);
         }}
       >
@@ -118,7 +171,7 @@ export default function VehiclesPage(): JSX.Element {
             placeholder="Placa, marca, modelo..."
           />
         </FormField>
-        <FormField label="Status" htmlFor="vehicle-status" className="w-full sm:w-48">
+        <FormField label="Status" htmlFor="vehicle-status" className="w-full sm:w-44">
           <Select
             id="vehicle-status"
             value={status}
@@ -131,6 +184,40 @@ export default function VehiclesPage(): JSX.Element {
             {(Object.keys(VEHICLE_STATUS_LABELS) as VehicleStatus[]).map((s) => (
               <option key={s} value={s}>
                 {VEHICLE_STATUS_LABELS[s]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Propriedade" htmlFor="vehicle-ownership" className="w-full sm:w-40">
+          <Select
+            id="vehicle-ownership"
+            value={ownershipType}
+            onChange={(e) => {
+              setOwnershipType(e.target.value as VehicleOwnershipType | '');
+              setPage(1);
+            }}
+          >
+            <option value="">Todas</option>
+            {(Object.keys(VEHICLE_OWNERSHIP_TYPE_LABELS) as VehicleOwnershipType[]).map((t) => (
+              <option key={t} value={t}>
+                {VEHICLE_OWNERSHIP_TYPE_LABELS[t]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Disponibilidade" htmlFor="vehicle-availability" className="w-full sm:w-44">
+          <Select
+            id="vehicle-availability"
+            value={availability}
+            onChange={(e) => {
+              setAvailability(e.target.value as VehicleAvailability | '');
+              setPage(1);
+            }}
+          >
+            <option value="">Todas</option>
+            {(Object.keys(VEHICLE_AVAILABILITY_LABELS) as VehicleAvailability[]).map((a) => (
+              <option key={a} value={a}>
+                {VEHICLE_AVAILABILITY_LABELS[a]}
               </option>
             ))}
           </Select>

@@ -12,7 +12,7 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { createVehicle } from '../../lib/api/fleet.api';
-import { VEHICLE_FUEL_TYPE_LABELS, VEHICLE_TYPE_LABELS } from '../../lib/labels';
+import { VEHICLE_FUEL_TYPE_LABELS, VEHICLE_OWNERSHIP_TYPE_LABELS, VEHICLE_TYPE_LABELS } from '../../lib/labels';
 import type { VehicleFuelType } from '../../types/enums';
 
 const schema = z.object({
@@ -20,6 +20,7 @@ const schema = z.object({
   brand: z.string().min(1, 'Informe a marca.'),
   model: z.string().min(1, 'Informe o modelo.'),
   type: z.enum(['TRACTOR_UNIT', 'TRUCK', 'VAN', 'PICKUP', 'OTHER']),
+  ownershipType: z.enum(['OWN', 'AGGREGATED', 'THIRD_PARTY']),
   fuelType: z.string().optional(),
   axleCount: z.coerce
     .number()
@@ -52,7 +53,10 @@ export function CreateVehicleModal({
     handleSubmit,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { type: 'TRUCK' } });
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { type: 'TRUCK', ownershipType: 'OWN' },
+  });
 
   const mutation = useMutation({
     mutationFn: (values: FormValues) =>
@@ -116,6 +120,15 @@ export function CreateVehicleModal({
         <FormField label="Tipo" htmlFor="type" required>
           <Select id="type" {...register('type')}>
             {Object.entries(VEHICLE_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Propriedade" htmlFor="ownershipType" required>
+          <Select id="ownershipType" {...register('ownershipType')}>
+            {Object.entries(VEHICLE_OWNERSHIP_TYPE_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>

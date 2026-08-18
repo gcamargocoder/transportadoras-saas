@@ -13,6 +13,8 @@ import type {
   ContractStatus,
   DeliveryProofStatus,
   DocumentType,
+  DriverStatus,
+  DriverType,
   ExpenseCategory,
   ExpensePaymentMethod,
   ExpenseStatus,
@@ -61,8 +63,11 @@ import type {
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
+  VehicleAvailability,
+  VehicleOwnershipType,
   VehicleStatus,
   VehicleType,
+  DocumentExpiryStatus,
 } from './enums';
 
 export interface UserEntity {
@@ -233,8 +238,35 @@ export interface DriverEntity {
   admissionDate: string | null;
   terminationDate: string | null;
   isActive: boolean;
+  type: DriverType;
+  status: DriverStatus;
+  isAvailable: boolean;
+  currentVehicleId: string | null;
+  currentVehiclePlate: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DriverVehicleAssignmentEntity {
+  id: string;
+  driverId: string;
+  vehicleId: string;
+  vehiclePlate: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  notes: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+}
+
+export interface DriverSummaryEntity {
+  totalOwn: number;
+  totalAggregated: number;
+  totalThirdParty: number;
+  totalActive: number;
+  totalInactive: number;
+  totalSuspended: number;
 }
 
 export interface DriverDocumentEntity {
@@ -282,8 +314,116 @@ export interface VehicleEntity {
   axleCount: number | null;
   notes: string | null;
   status: VehicleStatus;
+  ownershipType: VehicleOwnershipType;
+  currentDriverId: string | null;
+  currentDriverName: string | null;
+  availability: VehicleAvailability;
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 62 -- Gestao Avancada de Veiculos e Frota.
+export interface VehicleSummaryEntity {
+  total: number;
+  totalActive: number;
+  totalInactive: number;
+  totalSuspended: number;
+  totalMaintenance: number;
+  totalAvailable: number;
+  totalUnavailable: number;
+  totalOnTrip: number;
+  totalOwn: number;
+  totalAggregated: number;
+  totalThirdParty: number;
+}
+
+export interface VehicleDriverAssignmentEntity {
+  id: string;
+  vehicleId: string;
+  driverId: string;
+  driverName: string | null;
+  driverType: DriverType | null;
+  driverStatus: DriverStatus | null;
+  startedAt: string;
+  endedAt: string | null;
+  notes: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+}
+
+export interface VehicleDocumentEntity {
+  id: string;
+  vehicleId: string;
+  type: DocumentType;
+  number: string | null;
+  issuedAt: string | null;
+  expiresAt: string | null;
+  expiryStatus: DocumentExpiryStatus;
+  createdAt: string;
+}
+
+export interface VehicleCurrentDriverEntity {
+  driverId: string;
+  driverName: string;
+  driverType: DriverType;
+  driverStatus: DriverStatus;
+  startedAt: string;
+}
+
+export interface VehicleCurrentTripEntity {
+  tripId: string;
+  status: TripStatus;
+  driverId: string | null;
+  driverName: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  originName: string | null;
+  destinationName: string | null;
+  plannedDeparture: string | null;
+  plannedArrival: string | null;
+  actualDeparture: string | null;
+}
+
+export interface VehicleRecentTripEntity {
+  tripId: string;
+  status: TripStatus;
+  driverName: string | null;
+  originName: string | null;
+  destinationName: string | null;
+  plannedDeparture: string | null;
+  createdAt: string;
+}
+
+export interface VehicleMetricsEntity {
+  totalTrips: number;
+  completedTrips: number;
+  inProgressTrips: number;
+  cancelledTrips: number;
+  totalDistanceKm: number | null;
+  totalRevenue: number;
+  totalExpenses: number;
+  totalCost: number;
+  financialResult: number;
+  marginPercent: number | null;
+  documentsCount: number;
+  documentsProblematic: number;
+  maintenancesCount: number;
+  fuelSuppliesCount: number;
+  driverHistoryCount: number;
+}
+
+export interface VehicleOverviewEntity {
+  vehicle: VehicleEntity;
+  currentDriver: VehicleCurrentDriverEntity | null;
+  currentTrip: VehicleCurrentTripEntity | null;
+  currentTripInconsistent: boolean;
+  metrics: VehicleMetricsEntity;
+  documents: VehicleDocumentEntity[];
+  alerts: FleetAlertEntity[];
+  driverHistory: VehicleDriverAssignmentEntity[];
+  recentTrips: VehicleRecentTripEntity[];
+  history: AuditLogEntity[];
 }
 
 export interface TrailerEntity {
@@ -1185,6 +1325,7 @@ export interface FleetOverviewEntity {
   totalVehicles: number;
   activeVehicles: number;
   inactiveVehicles: number;
+  suspendedVehicles: number;
   maintenanceVehicles: number;
   soldVehicles: number;
   activeTrips: number;
@@ -1454,7 +1595,15 @@ export type FleetAlertType =
   | 'EXCESSIVE_DOWNTIME'
   | 'CRITICAL_COMPONENT'
   | 'TIRE_NEAR_REPLACEMENT'
-  | 'DOWNTIME_COST_OUTLIER';
+  | 'DOWNTIME_COST_OUTLIER'
+  // Fase 62 -- visao operacional do veiculo (GET /vehicles/:id/overview).
+  | 'VEHICLE_SUSPENDED'
+  | 'VEHICLE_INACTIVE'
+  | 'VEHICLE_DOCUMENT_EXPIRED'
+  | 'VEHICLE_DOCUMENT_EXPIRING_SOON'
+  | 'VEHICLE_DRIVER_UNAVAILABLE'
+  | 'VEHICLE_TRIP_DATA_INCONSISTENCY'
+  | 'VEHICLE_OPEN_MAINTENANCE';
 
 export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
 
@@ -1608,6 +1757,12 @@ export interface FleetVehicleStatusBreakdownEntity {
   count: number;
 }
 
+// Fase 62 -- distribuicao OWN/AGGREGATED/THIRD_PARTY.
+export interface FleetVehicleOwnershipBreakdownEntity {
+  ownershipType: VehicleOwnershipType;
+  count: number;
+}
+
 export interface FleetVehicleFuelTypeBreakdownEntity {
   fuelType: VehicleFuelType | null;
   count: number;
@@ -1629,12 +1784,14 @@ export interface FleetVehiclesOverviewEntity {
   totalVehicles: number;
   activeCount: number;
   inactiveCount: number;
+  suspendedCount: number;
   maintenanceCount: number;
   soldCount: number;
   vehiclesOnTrip: number;
   vehiclesAvailable: number;
   byType: FleetVehicleTypeBreakdownEntity[];
   byStatus: FleetVehicleStatusBreakdownEntity[];
+  byOwnershipType: FleetVehicleOwnershipBreakdownEntity[];
   byFuelType: FleetVehicleFuelTypeBreakdownEntity[];
   byFleet: FleetVehicleFleetBreakdownEntity[];
   averageAgeYears: FleetVehicleAverageMetricEntity;

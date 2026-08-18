@@ -1,11 +1,18 @@
 import type { Paginated, PaginationParams } from '../../types/api';
-import type { DriverDocumentEntity, DriverEntity } from '../../types/entities';
-import type { DocumentType } from '../../types/enums';
+import type {
+  DriverDocumentEntity,
+  DriverEntity,
+  DriverSummaryEntity,
+  DriverVehicleAssignmentEntity,
+} from '../../types/entities';
+import type { DocumentType, DriverStatus, DriverType } from '../../types/enums';
 import { api } from './http';
 
 export interface FindDriversQuery extends PaginationParams {
   search?: string | undefined;
   isActive?: boolean | undefined;
+  type?: DriverType | undefined;
+  status?: DriverStatus | undefined;
   cpf?: string | undefined;
   cnhCategory?: string | undefined;
   cnhExpiringInDays?: number | undefined;
@@ -29,12 +36,18 @@ export interface CreateDriverPayload {
   zipCode?: string | undefined;
   notes?: string | undefined;
   admissionDate?: string | undefined;
+  type?: DriverType | undefined;
+  isAvailable?: boolean | undefined;
 }
 
 export type UpdateDriverPayload = Partial<CreateDriverPayload>;
 
 export function listDrivers(query: FindDriversQuery, signal?: AbortSignal) {
   return api.get<Paginated<DriverEntity>>('/drivers', query, signal);
+}
+
+export function getDriverSummary(signal?: AbortSignal) {
+  return api.get<DriverSummaryEntity>('/drivers/summary', undefined, signal);
 }
 
 export function getDriver(id: string) {
@@ -49,8 +62,8 @@ export function updateDriver(id: string, payload: UpdateDriverPayload) {
   return api.patch<DriverEntity>(`/drivers/${id}`, payload);
 }
 
-export function updateDriverStatus(id: string, isActive: boolean) {
-  return api.patch<DriverEntity>(`/drivers/${id}/status`, { isActive });
+export function updateDriverStatus(id: string, status: DriverStatus) {
+  return api.patch<DriverEntity>(`/drivers/${id}/status`, { status });
 }
 
 export function deleteDriver(id: string) {
@@ -70,4 +83,16 @@ export interface CreateDriverDocumentPayload {
 
 export function createDriverDocument(driverId: string, payload: CreateDriverDocumentPayload) {
   return api.post<DriverDocumentEntity>(`/drivers/${driverId}/documents`, payload);
+}
+
+export function getDriverVehicleAssignments(driverId: string) {
+  return api.get<DriverVehicleAssignmentEntity[]>(`/drivers/${driverId}/vehicle-assignments`);
+}
+
+export function assignDriverVehicle(driverId: string, vehicleId: string, notes?: string) {
+  return api.post<DriverVehicleAssignmentEntity[]>(`/drivers/${driverId}/vehicle-assignments`, { vehicleId, notes });
+}
+
+export function endDriverVehicleAssignment(driverId: string) {
+  return api.post<DriverVehicleAssignmentEntity[]>(`/drivers/${driverId}/vehicle-assignments/end`, {});
 }

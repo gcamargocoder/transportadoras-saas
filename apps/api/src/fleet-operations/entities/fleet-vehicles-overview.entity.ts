@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { VehicleFuelType, VehicleStatus, VehicleType } from '@prisma/client';
+import { VehicleFuelType, VehicleOwnershipType, VehicleStatus, VehicleType } from '@prisma/client';
 import { FleetVehicleRankingEntryEntity } from './fleet-vehicle-ranking-entry.entity';
 
 // Dashboard novo (iteracao de redesign visual) -- composicao da frota.
@@ -18,6 +18,15 @@ export class FleetVehicleTypeBreakdownEntity {
 export class FleetVehicleStatusBreakdownEntity {
   @ApiProperty({ enum: VehicleStatus })
   status!: VehicleStatus;
+
+  @ApiProperty()
+  count!: number;
+}
+
+// Fase 62 -- distribuicao OWN/AGGREGATED/THIRD_PARTY.
+export class FleetVehicleOwnershipBreakdownEntity {
+  @ApiProperty({ enum: VehicleOwnershipType })
+  ownershipType!: VehicleOwnershipType;
 
   @ApiProperty()
   count!: number;
@@ -66,6 +75,9 @@ export class FleetVehiclesOverviewEntity {
   @ApiProperty({ description: 'Veiculos com status INACTIVE.' })
   inactiveCount!: number;
 
+  @ApiProperty({ description: 'Veiculos com status SUSPENDED (Fase 62).' })
+  suspendedCount!: number;
+
   @ApiProperty({ description: 'Veiculos com status MAINTENANCE.' })
   maintenanceCount!: number;
 
@@ -83,6 +95,9 @@ export class FleetVehiclesOverviewEntity {
 
   @ApiProperty({ type: [FleetVehicleStatusBreakdownEntity] })
   byStatus!: FleetVehicleStatusBreakdownEntity[];
+
+  @ApiProperty({ type: [FleetVehicleOwnershipBreakdownEntity] })
+  byOwnershipType!: FleetVehicleOwnershipBreakdownEntity[];
 
   @ApiProperty({ type: [FleetVehicleFuelTypeBreakdownEntity] })
   byFuelType!: FleetVehicleFuelTypeBreakdownEntity[];

@@ -20,8 +20,17 @@ import { BarRankingChart } from '../../../../../features/fleet-operations/bar-ra
 import { RankingCard } from '../../../../../features/fleet-operations/ranking-card';
 import { listFleets } from '../../../../../lib/api/fleet.api';
 import { getFleetOperationsVehicles } from '../../../../../lib/api/fleet-operations.api';
-import { VEHICLE_FUEL_TYPE_LABELS, VEHICLE_STATUS_LABELS, VEHICLE_TYPE_LABELS } from '../../../../../lib/labels';
-import type { FleetVehicleFleetBreakdownEntity, FleetVehicleStatusBreakdownEntity } from '../../../../../types/entities';
+import {
+  VEHICLE_FUEL_TYPE_LABELS,
+  VEHICLE_OWNERSHIP_TYPE_LABELS,
+  VEHICLE_STATUS_LABELS,
+  VEHICLE_TYPE_LABELS,
+} from '../../../../../lib/labels';
+import type {
+  FleetVehicleFleetBreakdownEntity,
+  FleetVehicleOwnershipBreakdownEntity,
+  FleetVehicleStatusBreakdownEntity,
+} from '../../../../../types/entities';
 import type { VehicleStatus, VehicleType } from '../../../../../types/enums';
 import { formatNumber } from '../../../../../utils/format';
 
@@ -45,6 +54,14 @@ export default function FleetVehiclesOverviewPage(): JSX.Element {
   const statusColumns = useMemo<ColumnDef<FleetVehicleStatusBreakdownEntity, unknown>[]>(
     () => [
       { header: 'Status', accessorFn: (row) => VEHICLE_STATUS_LABELS[row.status] },
+      { header: 'Veículos', accessorFn: (row) => formatNumber(row.count) },
+    ],
+    [],
+  );
+
+  const ownershipColumns = useMemo<ColumnDef<FleetVehicleOwnershipBreakdownEntity, unknown>[]>(
+    () => [
+      { header: 'Propriedade', accessorFn: (row) => VEHICLE_OWNERSHIP_TYPE_LABELS[row.ownershipType] },
       { header: 'Veículos', accessorFn: (row) => formatNumber(row.count) },
     ],
     [],
@@ -169,6 +186,13 @@ export default function FleetVehiclesOverviewPage(): JSX.Element {
             <Card>
               <CardHeader title="Por frota" description='fleetId nulo aparece como "Sem frota".' />
               <DataTable columns={fleetColumns} data={query.data.byFleet} emptyTitle="Nenhum veículo no filtro selecionado." />
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader title="Por propriedade" description="Distribuição própria/agregada/terceiro (Fase 62)." />
+              <DataTable columns={ownershipColumns} data={query.data.byOwnershipType} emptyTitle="Nenhum veículo no filtro selecionado." />
             </Card>
           </div>
 

@@ -33,7 +33,17 @@ export type FleetAlertType =
   // fleet-operations-metrics.service.ts, computeTiresOverview).
   | 'TIRE_NEAR_REPLACEMENT'
   // Tempo parado e receita perdida (ver computeDowntimeCost).
-  | 'DOWNTIME_COST_OUTLIER';
+  | 'DOWNTIME_COST_OUTLIER'
+  // Fase 62 -- visao operacional do veiculo (GET /vehicles/:id/overview,
+  // VehicleOverviewService). Reaproveita esta MESMA classe/tipo -- nunca um
+  // sistema de alertas paralelo.
+  | 'VEHICLE_SUSPENDED'
+  | 'VEHICLE_INACTIVE'
+  | 'VEHICLE_DOCUMENT_EXPIRED'
+  | 'VEHICLE_DOCUMENT_EXPIRING_SOON'
+  | 'VEHICLE_DRIVER_UNAVAILABLE'
+  | 'VEHICLE_TRIP_DATA_INCONSISTENCY'
+  | 'VEHICLE_OPEN_MAINTENANCE';
 
 export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
 
@@ -56,6 +66,13 @@ export const FLEET_ALERT_TYPES: FleetAlertType[] = [
   'CRITICAL_COMPONENT',
   'TIRE_NEAR_REPLACEMENT',
   'DOWNTIME_COST_OUTLIER',
+  'VEHICLE_SUSPENDED',
+  'VEHICLE_INACTIVE',
+  'VEHICLE_DOCUMENT_EXPIRED',
+  'VEHICLE_DOCUMENT_EXPIRING_SOON',
+  'VEHICLE_DRIVER_UNAVAILABLE',
+  'VEHICLE_TRIP_DATA_INCONSISTENCY',
+  'VEHICLE_OPEN_MAINTENANCE',
 ];
 
 export class FleetAlertEntity {

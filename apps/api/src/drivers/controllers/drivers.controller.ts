@@ -26,6 +26,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { CRITICAL_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { DRIVER_READ_ROLES, DRIVER_WRITE_ROLES } from '../constants/driver-roles.constants';
+import { AssignDriverVehicleDto } from '../dto/assign-driver-vehicle.dto';
 import { CreateDriverDocumentDto } from '../dto/create-driver-document.dto';
 import { CreateDriverDto } from '../dto/create-driver.dto';
 import { FindDriversQueryDto } from '../dto/find-drivers-query.dto';
@@ -33,6 +34,8 @@ import { LinkDriverUserDto } from '../dto/link-driver-user.dto';
 import { UpdateDriverStatusDto } from '../dto/update-driver-status.dto';
 import { UpdateDriverDto } from '../dto/update-driver.dto';
 import { DriverDocumentEntity } from '../entities/driver-document.entity';
+import { DriverSummaryEntity } from '../entities/driver-summary.entity';
+import { DriverVehicleAssignmentEntity } from '../entities/driver-vehicle-assignment.entity';
 import { DriverEntity } from '../entities/driver.entity';
 import { PaginatedDriversEntity } from '../entities/paginated-drivers.entity';
 import { DriverDocumentsService } from '../services/driver-documents.service';
@@ -59,6 +62,16 @@ export class DriversController {
   @ApiOkResponse({ type: PaginatedDriversEntity })
   findAll(@Query() query: FindDriversQueryDto): Promise<PaginatedDriversEntity> {
     return this.driversService.findAll(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('summary')
+  @Roles(...DRIVER_READ_ROLES)
+  @ApiOperation({
+    summary: 'Indicadores do cadastro de motoristas (por classificacao OWN/AGGREGATED/THIRD_PARTY e por status).',
+  })
+  @ApiOkResponse({ type: DriverSummaryEntity })
+  getSummary(): Promise<DriverSummaryEntity> {
+    return this.driversService.getSummary(this.tenantContext.requireTenantId());
   }
 
   @Get(':id')
@@ -109,7 +122,7 @@ export class DriversController {
 
   @Patch(':id/status')
   @Roles(...DRIVER_WRITE_ROLES)
-  @ApiOperation({ summary: 'Ativa ou desativa um motorista.' })
+  @ApiOperation({ summary: 'Ativa, suspende ou desativa um motorista (ACTIVE/SUSPENDED/INACTIVE).' })
   @ApiOkResponse({ type: DriverEntity })
   @ApiNotFoundResponse({ description: 'Motorista nao encontrado nesta empresa.' })
   updateStatus(
@@ -173,6 +186,52 @@ export class DriversController {
   @ApiConflictResponse({ description: 'Este motorista nao possui usuario vinculado.' })
   unlinkUser(@Param('id', ParseUUIDPipe) id: string): Promise<DriverEntity> {
     return this.driversService.unlinkUser(
+      this.tenantContext.requireTenantId(),
+      id,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/vehicle-assignments')
+  @Roles(...DRIVER_READ_ROLES)
+  @ApiOperation({ summary: 'Historico de veiculos vinculados ao motorista (atual + anteriores, mais recente primeiro).' })
+  @ApiOkResponse({ type: DriverVehicleAssignmentEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Motorista nao encontrado nesta empresa.' })
+  getVehicleAssignments(@Param('id', ParseUUIDPipe) id: string): Promise<DriverVehicleAssignmentEntity[]> {
+    return this.driversService.getVehicleAssignments(this.tenantContext.requireTenantId(), id);
+  }
+
+  @Post(':id/vehicle-assignments')
+  @Roles(...DRIVER_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Vincula um veiculo ao motorista. Fecha o vinculo atual (se existir) e abre um novo, preservando o ' +
+      'historico -- nunca apaga a atribuicao anterior.',
+  })
+  @ApiCreatedResponse({ type: DriverVehicleAssignmentEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Motorista ou veiculo nao encontrados nesta empresa.' })
+  assignVehicle(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignDriverVehicleDto,
+  ): Promise<DriverVehicleAssignmentEntity[]> {
+    return this.driversService.assignVehicle(
+      this.tenantContext.requireTenantId(),
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post(':id/vehicle-assignments/end')
+  @Roles(...DRIVER_WRITE_ROLES)
+  @ApiOperation({ summary: 'Encerra o vinculo atual do motorista com o veiculo, sem abrir um novo.' })
+  @ApiOkResponse({ type: DriverVehicleAssignmentEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Motorista nao encontrado nesta empresa.' })
+  @ApiConflictResponse({ description: 'Este motorista nao possui veiculo vinculado atualmente.' })
+  endVehicleAssignment(@Param('id', ParseUUIDPipe) id: string): Promise<DriverVehicleAssignmentEntity[]> {
+    return this.driversService.endVehicleAssignment(
       this.tenantContext.requireTenantId(),
       id,
       { userId: this.tenantContext.requireUserId() },

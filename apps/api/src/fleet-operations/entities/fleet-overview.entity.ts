@@ -10,6 +10,9 @@ export class FleetOverviewEntity {
   @ApiProperty({ description: 'Veiculos com status INACTIVE.' })
   inactiveVehicles!: number;
 
+  @ApiProperty({ description: 'Veiculos com status SUSPENDED (Fase 62).' })
+  suspendedVehicles!: number;
+
   @ApiProperty({ description: 'Veiculos com status MAINTENANCE.' })
   maintenanceVehicles!: number;
 

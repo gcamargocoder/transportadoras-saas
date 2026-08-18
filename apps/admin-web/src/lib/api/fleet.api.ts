@@ -6,17 +6,24 @@ import type {
   TagProviderEntity,
   TrailerEntity,
   TripCompositionEntity,
+  VehicleDocumentEntity,
+  VehicleDriverAssignmentEntity,
   VehicleEntity,
+  VehicleOverviewEntity,
+  VehicleSummaryEntity,
   VehicleTagEntity,
 } from '../../types/entities';
 import type {
+  DocumentType,
   FleetType,
   MaintenanceComponent,
   TrailerType,
+  VehicleAvailability,
   VehicleFuelType,
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
+  VehicleOwnershipType,
   VehicleStatus,
   VehicleType,
 } from '../../types/enums';
@@ -29,6 +36,9 @@ export interface FindVehiclesQuery extends PaginationParams {
   type?: VehicleType | undefined;
   category?: string | undefined;
   status?: VehicleStatus | undefined;
+  ownershipType?: VehicleOwnershipType | undefined;
+  currentDriverId?: string | undefined;
+  availability?: VehicleAvailability | undefined;
   plate?: string | undefined;
   brand?: string | undefined;
   model?: string | undefined;
@@ -48,6 +58,7 @@ export interface CreateVehiclePayload {
   color?: string | undefined;
   type: VehicleType;
   category?: string | undefined;
+  ownershipType?: VehicleOwnershipType | undefined;
   fuelType?: VehicleFuelType | undefined;
   tankCapacityLiters?: number | undefined;
   averageConsumptionKmL?: number | undefined;
@@ -65,8 +76,16 @@ export function listVehicles(query: FindVehiclesQuery, signal?: AbortSignal) {
   return api.get<Paginated<VehicleEntity>>('/vehicles', query, signal);
 }
 
+export function getVehicleSummary(signal?: AbortSignal) {
+  return api.get<VehicleSummaryEntity>('/vehicles/summary', undefined, signal);
+}
+
 export function getVehicle(id: string) {
   return api.get<VehicleEntity>(`/vehicles/${id}`);
+}
+
+export function getVehicleOverview(id: string, signal?: AbortSignal) {
+  return api.get<VehicleOverviewEntity>(`/vehicles/${id}/overview`, undefined, signal);
 }
 
 export function createVehicle(payload: CreateVehiclePayload) {
@@ -79,6 +98,25 @@ export function updateVehicle(id: string, payload: UpdateVehiclePayload) {
 
 export function updateVehicleStatus(id: string, status: VehicleStatus) {
   return api.patch<VehicleEntity>(`/vehicles/${id}/status`, { status });
+}
+
+export function getVehicleDriverAssignments(id: string) {
+  return api.get<VehicleDriverAssignmentEntity[]>(`/vehicles/${id}/driver-assignments`);
+}
+
+export interface CreateVehicleDocumentPayload {
+  type: DocumentType;
+  number?: string | undefined;
+  issuedAt?: string | undefined;
+  expiresAt?: string | undefined;
+}
+
+export function getVehicleDocuments(id: string) {
+  return api.get<VehicleDocumentEntity[]>(`/vehicles/${id}/documents`);
+}
+
+export function createVehicleDocument(id: string, payload: CreateVehicleDocumentPayload) {
+  return api.post<VehicleDocumentEntity>(`/vehicles/${id}/documents`, payload);
 }
 
 export function deleteVehicle(id: string) {

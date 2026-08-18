@@ -1,7 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { DriverType } from '@prisma/client';
 import {
+  IsBoolean,
   IsDateString,
   IsEmail,
+  IsEnum,
   IsOptional,
   IsString,
   Length,
@@ -99,4 +102,18 @@ export class CreateDriverDto {
   @IsOptional()
   @IsDateString({}, { message: 'admissionDate deve ser uma data valida (ISO 8601).' })
   admissionDate?: string;
+
+  @ApiPropertyOptional({
+    enum: DriverType,
+    default: DriverType.OWN,
+    description: 'Classificacao operacional: OWN (proprio), AGGREGATED (agregado) ou THIRD_PARTY (terceiro).',
+  })
+  @IsOptional()
+  @IsEnum(DriverType, { message: 'type invalido.' })
+  type?: DriverType;
+
+  @ApiPropertyOptional({ default: true, description: 'Disponibilidade operacional (nunca inferida automaticamente).' })
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
 }

@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { DriverStatus, DriverType } from '@prisma/client';
 
 export class DriverEntity {
   @ApiProperty({ format: 'uuid' })
@@ -64,6 +65,21 @@ export class DriverEntity {
 
   @ApiProperty()
   isActive!: boolean;
+
+  @ApiProperty({ enum: DriverType })
+  type!: DriverType;
+
+  @ApiProperty({ enum: DriverStatus })
+  status!: DriverStatus;
+
+  @ApiProperty()
+  isAvailable!: boolean;
+
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Veiculo atualmente vinculado (assignment sem endedAt).' })
+  currentVehicleId!: string | null;
+
+  @ApiProperty({ nullable: true })
+  currentVehiclePlate!: string | null;
 
   @ApiProperty()
   createdAt!: Date;

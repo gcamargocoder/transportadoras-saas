@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { FleetOperationsModule } from '../fleet-operations/fleet-operations.module';
 import { FuelSuppliesModule } from '../fuel-supplies/fuel-supplies.module';
 import { FleetsController } from './controllers/fleets.controller';
 import { MaintenancesController } from './controllers/maintenances.controller';
@@ -11,11 +12,16 @@ import { MaintenancesService } from './services/maintenances.service';
 import { TagProvidersService } from './services/tag-providers.service';
 import { TrailersService } from './services/trailers.service';
 import { TripCompositionsService } from './services/trip-compositions.service';
+import { VehicleDocumentsService } from './services/vehicle-documents.service';
+import { VehicleOverviewService } from './services/vehicle-overview.service';
 import { VehicleTagsService } from './services/vehicle-tags.service';
 import { VehiclesService } from './services/vehicles.service';
 
+// Fase 62 -- importa FleetOperationsModule para VehicleOverviewService
+// reaproveitar FleetOperationsMetricsService.getFinancialDashboard (nunca
+// recalcula receita/despesa/custo em paralelo).
 @Module({
-  imports: [FuelSuppliesModule],
+  imports: [FuelSuppliesModule, FleetOperationsModule],
   controllers: [
     FleetsController,
     VehiclesController,
@@ -32,6 +38,8 @@ import { VehiclesService } from './services/vehicles.service';
     TagProvidersService,
     TripCompositionsService,
     MaintenancesService,
+    VehicleDocumentsService,
+    VehicleOverviewService,
   ],
 })
 export class FleetModule {}

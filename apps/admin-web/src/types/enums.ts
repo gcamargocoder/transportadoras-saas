@@ -29,9 +29,12 @@ export const VehicleType = {
 } as const;
 export type VehicleType = (typeof VehicleType)[keyof typeof VehicleType];
 
+// Fase 62 -- SUSPENDED adicionado (impedimento temporario de operar,
+// distinto de MAINTENANCE/INACTIVE).
 export const VehicleStatus = {
   ACTIVE: 'ACTIVE',
   INACTIVE: 'INACTIVE',
+  SUSPENDED: 'SUSPENDED',
   MAINTENANCE: 'MAINTENANCE',
   SOLD: 'SOLD',
 } as const;
@@ -617,3 +620,49 @@ export const TripBillingStatus = {
   CANCELLED: 'CANCELLED',
 } as const;
 export type TripBillingStatus = (typeof TripBillingStatus)[keyof typeof TripBillingStatus];
+
+// Fase 61 -- Motoristas, Agregados e Terceiros.
+export const DriverType = {
+  OWN: 'OWN',
+  AGGREGATED: 'AGGREGATED',
+  THIRD_PARTY: 'THIRD_PARTY',
+} as const;
+export type DriverType = (typeof DriverType)[keyof typeof DriverType];
+
+export const DriverStatus = {
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+  SUSPENDED: 'SUSPENDED',
+} as const;
+export type DriverStatus = (typeof DriverStatus)[keyof typeof DriverStatus];
+
+// Fase 62 -- Gestao Avancada de Veiculos e Frota.
+export const VehicleOwnershipType = {
+  OWN: 'OWN',
+  AGGREGATED: 'AGGREGATED',
+  THIRD_PARTY: 'THIRD_PARTY',
+} as const;
+export type VehicleOwnershipType = (typeof VehicleOwnershipType)[keyof typeof VehicleOwnershipType];
+
+// Derivado (nunca persistido) -- ver VehicleEntity.availability no backend.
+export const VehicleAvailability = {
+  AVAILABLE: 'AVAILABLE',
+  ON_TRIP: 'ON_TRIP',
+  UNAVAILABLE: 'UNAVAILABLE',
+} as const;
+export type VehicleAvailability = (typeof VehicleAvailability)[keyof typeof VehicleAvailability];
+
+export const DocumentExpiryStatus = {
+  VALID: 'VALID',
+  EXPIRING_SOON: 'EXPIRING_SOON',
+  EXPIRED: 'EXPIRED',
+  NO_EXPIRY: 'NO_EXPIRY',
+} as const;
+export type DocumentExpiryStatus = (typeof DocumentExpiryStatus)[keyof typeof DocumentExpiryStatus];
+
+export const FleetAlertSeverity = {
+  INFO: 'INFO',
+  ATTENTION: 'ATTENTION',
+  CRITICAL: 'CRITICAL',
+} as const;
+export type FleetAlertSeverity = (typeof FleetAlertSeverity)[keyof typeof FleetAlertSeverity];

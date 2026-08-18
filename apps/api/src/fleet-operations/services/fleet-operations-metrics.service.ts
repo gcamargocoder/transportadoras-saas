@@ -14,6 +14,7 @@ import {
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
+  VehicleOwnershipType,
   VehicleStatus,
   VehicleType,
 } from '@prisma/client';
@@ -108,6 +109,7 @@ import {
   FleetVehicleAverageMetricEntity,
   FleetVehicleFleetBreakdownEntity,
   FleetVehicleFuelTypeBreakdownEntity,
+  FleetVehicleOwnershipBreakdownEntity,
   FleetVehicleStatusBreakdownEntity,
   FleetVehicleTypeBreakdownEntity,
   FleetVehiclesOverviewEntity,
@@ -287,6 +289,7 @@ export class FleetOperationsMetricsService {
     entity.totalVehicles = statusCounts.reduce((sum, row) => sum + row._count, 0);
     entity.activeVehicles = activeVehicles;
     entity.inactiveVehicles = countByStatus.get(VehicleStatus.INACTIVE) ?? 0;
+    entity.suspendedVehicles = countByStatus.get(VehicleStatus.SUSPENDED) ?? 0;
     entity.maintenanceVehicles = countByStatus.get(VehicleStatus.MAINTENANCE) ?? 0;
     entity.soldVehicles = countByStatus.get(VehicleStatus.SOLD) ?? 0;
     entity.activeTrips = activeTrips;
@@ -2296,7 +2299,17 @@ export class FleetOperationsMetricsService {
     const [vehicles, vehiclesOnTrip] = await Promise.all([
       this.prisma.vehicle.findMany({
         where: vehicleWhere,
-        select: { id: true, plate: true, type: true, status: true, fuelType: true, fleetId: true, manufactureYear: true, odometerKm: true },
+        select: {
+          id: true,
+          plate: true,
+          type: true,
+          status: true,
+          ownershipType: true,
+          fuelType: true,
+          fleetId: true,
+          manufactureYear: true,
+          odometerKm: true,
+        },
       }),
       this.countVehiclesOnTrip(vehicleWhere),
     ]);
@@ -2309,6 +2322,7 @@ export class FleetOperationsMetricsService {
 
     const countByStatus = new Map<VehicleStatus, number>();
     const countByType = new Map<VehicleType, number>();
+    const countByOwnershipType = new Map<VehicleOwnershipType, number>();
     const countByFuelType = new Map<VehicleFuelType | null, number>();
     const countByFleet = new Map<string | null, number>();
     let ageSum = 0;
@@ -2322,6 +2336,7 @@ export class FleetOperationsMetricsService {
     for (const v of vehicles) {
       countByStatus.set(v.status, (countByStatus.get(v.status) ?? 0) + 1);
       countByType.set(v.type, (countByType.get(v.type) ?? 0) + 1);
+      countByOwnershipType.set(v.ownershipType, (countByOwnershipType.get(v.ownershipType) ?? 0) + 1);
       countByFuelType.set(v.fuelType, (countByFuelType.get(v.fuelType) ?? 0) + 1);
       countByFleet.set(v.fleetId, (countByFleet.get(v.fleetId) ?? 0) + 1);
 
@@ -2342,6 +2357,7 @@ export class FleetOperationsMetricsService {
     entity.totalVehicles = vehicles.length;
     entity.activeCount = countByStatus.get(VehicleStatus.ACTIVE) ?? 0;
     entity.inactiveCount = countByStatus.get(VehicleStatus.INACTIVE) ?? 0;
+    entity.suspendedCount = countByStatus.get(VehicleStatus.SUSPENDED) ?? 0;
     entity.maintenanceCount = countByStatus.get(VehicleStatus.MAINTENANCE) ?? 0;
     entity.soldCount = countByStatus.get(VehicleStatus.SOLD) ?? 0;
     entity.vehiclesOnTrip = vehiclesOnTrip;
@@ -2356,6 +2372,12 @@ export class FleetOperationsMetricsService {
     entity.byStatus = [...countByStatus.entries()].map(([status, count]) => {
       const row = new FleetVehicleStatusBreakdownEntity();
       row.status = status;
+      row.count = count;
+      return row;
+    });
+    entity.byOwnershipType = [...countByOwnershipType.entries()].map(([ownershipType, count]) => {
+      const row = new FleetVehicleOwnershipBreakdownEntity();
+      row.ownershipType = ownershipType;
       row.count = count;
       return row;
     });

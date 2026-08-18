@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { VehicleFuelType, VehicleStatus, VehicleType } from '@prisma/client';
+import { VehicleFuelType, VehicleOwnershipType, VehicleStatus, VehicleType } from '@prisma/client';
+
+export const VEHICLE_AVAILABILITY_VALUES = ['AVAILABLE', 'ON_TRIP', 'UNAVAILABLE'] as const;
+export type VehicleAvailabilityValue = (typeof VEHICLE_AVAILABILITY_VALUES)[number];
 
 export class VehicleEntity {
   @ApiProperty({ format: 'uuid' })
@@ -70,6 +73,27 @@ export class VehicleEntity {
 
   @ApiProperty({ enum: VehicleStatus })
   status!: VehicleStatus;
+
+  @ApiProperty({ enum: VehicleOwnershipType })
+  ownershipType!: VehicleOwnershipType;
+
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description: 'Motorista atualmente vinculado (DriverVehicleAssignment sem endedAt).',
+  })
+  currentDriverId!: string | null;
+
+  @ApiProperty({ nullable: true })
+  currentDriverName!: string | null;
+
+  @ApiProperty({
+    enum: VEHICLE_AVAILABILITY_VALUES,
+    description:
+      'Derivado (nunca persistido): AVAILABLE (ACTIVE e sem viagem em andamento), ON_TRIP (ACTIVE em ' +
+      'viagem) ou UNAVAILABLE (INACTIVE/SUSPENDED/MAINTENANCE/SOLD).',
+  })
+  availability!: VehicleAvailabilityValue;
 
   @ApiProperty()
   createdAt!: Date;

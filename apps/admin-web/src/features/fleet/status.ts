@@ -5,6 +5,7 @@ type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'brand';
 export const VEHICLE_STATUS_TONE: Record<VehicleStatus, Tone> = {
   ACTIVE: 'success',
   INACTIVE: 'neutral',
+  SUSPENDED: 'warning',
   MAINTENANCE: 'warning',
   SOLD: 'danger',
 };

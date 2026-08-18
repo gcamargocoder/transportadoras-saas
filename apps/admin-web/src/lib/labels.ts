@@ -18,6 +18,8 @@ import {
   FiscalIssueCode,
   TripBillingStatus,
   TripDocumentComplianceStatus,
+  DriverStatus,
+  DriverType,
   FleetType,
   FreightRuleStatus,
   FreightTableStatus,
@@ -54,6 +56,10 @@ import {
   VehicleMaintenanceType,
   VehicleStatus,
   VehicleType,
+  VehicleOwnershipType,
+  VehicleAvailability,
+  DocumentExpiryStatus,
+  FleetAlertSeverity,
 } from '../types/enums';
 import type { DowntimeCategory, FiscalDocumentOrigin } from '../types/entities';
 
@@ -177,8 +183,54 @@ export const TOLL_STATUS_LABELS: Record<TollTransactionStatus, string> = {
 export const VEHICLE_STATUS_LABELS: Record<VehicleStatus, string> = {
   ACTIVE: 'Ativo',
   INACTIVE: 'Inativo',
+  SUSPENDED: 'Suspenso',
   MAINTENANCE: 'Em manutenção',
   SOLD: 'Vendido',
+};
+
+// Fase 62 -- Gestao Avancada de Veiculos e Frota.
+export const VEHICLE_OWNERSHIP_TYPE_LABELS: Record<VehicleOwnershipType, string> = {
+  OWN: 'Próprio',
+  AGGREGATED: 'Agregado',
+  THIRD_PARTY: 'Terceiro',
+};
+
+export const VEHICLE_OWNERSHIP_TYPE_TONE: Record<VehicleOwnershipType, 'success' | 'warning' | 'danger' | 'info' | 'neutral' | 'brand'> = {
+  OWN: 'brand',
+  AGGREGATED: 'info',
+  THIRD_PARTY: 'neutral',
+};
+
+export const VEHICLE_AVAILABILITY_LABELS: Record<VehicleAvailability, string> = {
+  AVAILABLE: 'Disponível',
+  ON_TRIP: 'Em viagem',
+  UNAVAILABLE: 'Indisponível',
+};
+
+export const VEHICLE_AVAILABILITY_TONE: Record<VehicleAvailability, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  AVAILABLE: 'success',
+  ON_TRIP: 'info',
+  UNAVAILABLE: 'neutral',
+};
+
+export const DOCUMENT_EXPIRY_STATUS_LABELS: Record<DocumentExpiryStatus, string> = {
+  VALID: 'Válido',
+  EXPIRING_SOON: 'Vencendo em breve',
+  EXPIRED: 'Vencido',
+  NO_EXPIRY: 'Sem vencimento',
+};
+
+export const DOCUMENT_EXPIRY_STATUS_TONE: Record<DocumentExpiryStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  VALID: 'success',
+  EXPIRING_SOON: 'warning',
+  EXPIRED: 'danger',
+  NO_EXPIRY: 'neutral',
+};
+
+export const FLEET_ALERT_SEVERITY_TONE: Record<FleetAlertSeverity, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  INFO: 'info',
+  ATTENTION: 'warning',
+  CRITICAL: 'danger',
 };
 
 export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
@@ -603,4 +655,29 @@ export const TRIP_BILLING_STATUS_TONE: Record<TripBillingStatus, 'success' | 'wa
   INVOICED: 'success',
   PAID: 'success',
   CANCELLED: 'danger',
+};
+
+// Fase 61 -- Motoristas, Agregados e Terceiros.
+export const DRIVER_TYPE_LABELS: Record<DriverType, string> = {
+  OWN: 'Próprio',
+  AGGREGATED: 'Agregado',
+  THIRD_PARTY: 'Terceiro',
+};
+
+export const DRIVER_TYPE_TONE: Record<DriverType, 'success' | 'warning' | 'danger' | 'info' | 'neutral' | 'brand'> = {
+  OWN: 'brand',
+  AGGREGATED: 'info',
+  THIRD_PARTY: 'neutral',
+};
+
+export const DRIVER_STATUS_LABELS: Record<DriverStatus, string> = {
+  ACTIVE: 'Ativo',
+  INACTIVE: 'Inativo',
+  SUSPENDED: 'Suspenso',
+};
+
+export const DRIVER_STATUS_TONE: Record<DriverStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  ACTIVE: 'success',
+  INACTIVE: 'neutral',
+  SUSPENDED: 'warning',
 };

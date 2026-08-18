@@ -31,6 +31,7 @@ import { VehicleFuelHistoryEntity } from '../../fuel-supplies/entities/vehicle-f
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../constants/fleet-roles.constants';
+import { CreateVehicleDocumentDto } from '../dto/create-vehicle-document.dto';
 import { CreateVehicleTagDto } from '../dto/create-vehicle-tag.dto';
 import { CreateVehicleDto } from '../dto/create-vehicle.dto';
 import { FindVehiclesQueryDto } from '../dto/find-vehicles-query.dto';
@@ -40,9 +41,15 @@ import { UpdateVehicleTagDto } from '../dto/update-vehicle-tag.dto';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto';
 import { PaginatedMaintenancesEntity } from '../entities/paginated-maintenances.entity';
 import { PaginatedVehiclesEntity } from '../entities/paginated-vehicles.entity';
+import { VehicleDocumentEntity } from '../entities/vehicle-document.entity';
+import { VehicleDriverAssignmentEntity } from '../entities/vehicle-driver-assignment.entity';
+import { VehicleOverviewEntity } from '../entities/vehicle-overview.entity';
+import { VehicleSummaryEntity } from '../entities/vehicle-summary.entity';
 import { VehicleTagEntity } from '../entities/vehicle-tag.entity';
 import { VehicleEntity } from '../entities/vehicle.entity';
 import { MaintenancesService } from '../services/maintenances.service';
+import { VehicleDocumentsService } from '../services/vehicle-documents.service';
+import { VehicleOverviewService } from '../services/vehicle-overview.service';
 import { VehicleTagsService } from '../services/vehicle-tags.service';
 import { VehiclesService } from '../services/vehicles.service';
 
@@ -55,6 +62,8 @@ export class VehiclesController {
     private readonly vehicleTagsService: VehicleTagsService,
     private readonly maintenancesService: MaintenancesService,
     private readonly fuelSuppliesService: FuelSuppliesService,
+    private readonly vehicleDocumentsService: VehicleDocumentsService,
+    private readonly vehicleOverviewService: VehicleOverviewService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -62,11 +71,21 @@ export class VehiclesController {
   @Roles(...FLEET_READ_ROLES)
   @ApiOperation({
     summary:
-      'Lista veiculos da empresa (busca, filtro por placa/marca/modelo/tipo/categoria/status/ano/frota, paginacao, ordenacao).',
+      'Lista veiculos da empresa (busca, filtro por placa/marca/modelo/tipo/categoria/status/propriedade/motorista/disponibilidade/ano/frota, paginacao, ordenacao).',
   })
   @ApiOkResponse({ type: PaginatedVehiclesEntity })
   findAll(@Query() query: FindVehiclesQueryDto): Promise<PaginatedVehiclesEntity> {
     return this.vehiclesService.findAll(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('summary')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({
+    summary: 'Indicadores do cadastro de veiculos (por status, disponibilidade e propriedade OWN/AGGREGATED/THIRD_PARTY).',
+  })
+  @ApiOkResponse({ type: VehicleSummaryEntity })
+  getSummary(): Promise<VehicleSummaryEntity> {
+    return this.vehiclesService.getSummary(this.tenantContext.requireTenantId());
   }
 
   @Get(':id')
@@ -76,6 +95,19 @@ export class VehiclesController {
   @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
   findOne(@Param('id', ParseUUIDPipe) id: string): Promise<VehicleEntity> {
     return this.vehiclesService.findOne(this.tenantContext.requireTenantId(), id);
+  }
+
+  @Get(':id/overview')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Visao operacional consolidada do veiculo: status, disponibilidade, motorista atual, viagem atual, ' +
+      'indicadores, documentos, alertas, historico de motoristas, viagens recentes e auditoria.',
+  })
+  @ApiOkResponse({ type: VehicleOverviewEntity })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  getOverview(@Param('id', ParseUUIDPipe) id: string): Promise<VehicleOverviewEntity> {
+    return this.vehicleOverviewService.getOverview(this.tenantContext.requireTenantId(), id);
   }
 
   @Post()
@@ -293,5 +325,41 @@ export class VehiclesController {
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
+  }
+
+  @Get(':id/driver-assignments')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({ summary: 'Historico de motoristas vinculados ao veiculo (atual + anteriores, mais recente primeiro).' })
+  @ApiOkResponse({ type: VehicleDriverAssignmentEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  getDriverAssignments(@Param('id', ParseUUIDPipe) id: string): Promise<VehicleDriverAssignmentEntity[]> {
+    return this.vehiclesService.getDriverAssignments(this.tenantContext.requireTenantId(), id);
+  }
+
+  @Post(':id/documents')
+  @Roles(...FLEET_WRITE_ROLES)
+  @ApiOperation({ summary: 'Cadastra um documento do veiculo (CRLV, ANTT, seguro, licenciamento, outros).' })
+  @ApiCreatedResponse({ type: VehicleDocumentEntity })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  createDocument(
+    @Param('id', ParseUUIDPipe) vehicleId: string,
+    @Body() dto: CreateVehicleDocumentDto,
+  ): Promise<VehicleDocumentEntity> {
+    return this.vehicleDocumentsService.create(
+      this.tenantContext.requireTenantId(),
+      vehicleId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/documents')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({ summary: 'Lista os documentos cadastrados de um veiculo.' })
+  @ApiOkResponse({ type: VehicleDocumentEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Veiculo nao encontrado nesta empresa.' })
+  findDocuments(@Param('id', ParseUUIDPipe) vehicleId: string): Promise<VehicleDocumentEntity[]> {
+    return this.vehicleDocumentsService.findAll(this.tenantContext.requireTenantId(), vehicleId);
   }
 }

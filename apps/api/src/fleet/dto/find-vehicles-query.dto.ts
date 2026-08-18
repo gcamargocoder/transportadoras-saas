@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { VehicleStatus, VehicleType } from '@prisma/client';
+import { VehicleOwnershipType, VehicleStatus, VehicleType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsEnum,
@@ -51,6 +51,26 @@ export class FindVehiclesQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(VehicleStatus)
   status?: VehicleStatus;
+
+  @ApiPropertyOptional({ enum: VehicleOwnershipType, description: 'Filtra por classificacao de propriedade.' })
+  @IsOptional()
+  @IsEnum(VehicleOwnershipType)
+  ownershipType?: VehicleOwnershipType;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'Filtra por motorista atualmente vinculado.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'currentDriverId deve ser um UUID valido.' })
+  currentDriverId?: string;
+
+  @ApiPropertyOptional({
+    enum: ['AVAILABLE', 'ON_TRIP', 'UNAVAILABLE'],
+    description:
+      'Filtra por disponibilidade derivada: AVAILABLE (ACTIVE e sem viagem em andamento), ON_TRIP ' +
+      '(ACTIVE em viagem) ou UNAVAILABLE (demais status).',
+  })
+  @IsOptional()
+  @IsIn(['AVAILABLE', 'ON_TRIP', 'UNAVAILABLE'])
+  availability?: 'AVAILABLE' | 'ON_TRIP' | 'UNAVAILABLE';
 
   @ApiPropertyOptional({ description: 'Filtra por placa (parcial, com ou sem formatacao).' })
   @IsOptional()

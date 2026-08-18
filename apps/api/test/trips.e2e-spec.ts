@@ -484,7 +484,7 @@ describe('Trips (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/v1/drivers/${prereqs.driverId}/status`)
         .set('Authorization', auth)
-        .send({ isActive: false })
+        .send({ status: 'INACTIVE' })
         .expect(200);
 
       await request(app.getHttpServer())
