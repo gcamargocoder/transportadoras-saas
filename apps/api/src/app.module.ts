@@ -17,6 +17,8 @@ import { DriverTripsModule } from './driver-trips/driver-trips.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
 import { FleetOperationsModule } from './fleet-operations/fleet-operations.module';
+import { FinanceModule } from './finance/finance.module';
+import { FinanceReconciliationModule } from './finance-reconciliation/finance-reconciliation.module';
 import { FiscalModule } from './fiscal/fiscal.module';
 import { FreightModule } from './freight/freight.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
@@ -24,7 +26,9 @@ import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PayablesModule } from './payables/payables.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ReceivablesModule } from './receivables/receivables.module';
 import { RoutingModule } from './routing/routing.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { TollImportModule } from './toll-import/toll-import.module';
@@ -90,6 +94,10 @@ import { UsersModule } from './users/users.module';
     FiscalModule,
     FreightModule,
     BillingOperationalModule,
+    ReceivablesModule,
+    PayablesModule,
+    FinanceModule,
+    FinanceReconciliationModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

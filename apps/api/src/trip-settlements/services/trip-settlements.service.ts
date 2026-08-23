@@ -1,13 +1,16 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { ExpenseStatus, Prisma, SettlementStatus } from '@prisma/client';
+import { ExpenseStatus, Prisma, SettlementStatus, TripBillingStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { resolveTripFreightBestAmount } from '../../freight/utils/trip-freight-amount.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CloseTripSettlementDto } from '../dto/close-trip-settlement.dto';
 import { TripFinancialDashboardEntity } from '../entities/trip-financial-dashboard.entity';
+import { TripFinancialResultEntity } from '../entities/trip-financial-result.entity';
 import { TripSettlementEntity } from '../entities/trip-settlement.entity';
 import {
   toTripSettlementEntity,
@@ -217,6 +220,77 @@ export class TripSettlementsService {
     entity.totalCost = totalCost;
     entity.grossResult = grossResult;
     entity.finalResult = finalResult;
+    return entity;
+  }
+
+  // GET /trips/:id/financial-result -- Fase 71: "resultado financeiro real"
+  // da viagem. fuelCost/tollCost/expenseCost/totalCost reaproveitam
+  // INTEGRALMENTE getFinancialDashboard acima (nenhum custo recalculado de
+  // forma diferente); contractedRevenue reaproveita a mesma prioridade de
+  // TripFreight ja usada no faturamento operacional (Fase 59/60);
+  // invoicedRevenue/receivedRevenue leem TripBilling (Fase 60) direto (sem
+  // depender do modulo de billing-operational, so leitura). Numero fixo de
+  // queries (nunca por item): findTripOrThrow + getFinancialDashboard (6) +
+  // freight + billing + metrics em paralelo.
+  async getFinancialResult(tenantId: string, tripId: string): Promise<TripFinancialResultEntity> {
+    await this.findTripOrThrow(tenantId, tripId);
+
+    const [dashboard, freight, billing, metrics] = await Promise.all([
+      this.getFinancialDashboard(tenantId, tripId),
+      this.prisma.tripFreight.findFirst({
+        where: { tenantId, tripId },
+        select: { contractedAmount: true, finalAmount: true, estimatedAmount: true },
+      }),
+      this.prisma.tripBilling.findFirst({
+        where: { tenantId, tripId },
+        select: { invoicedAmount: true, status: true },
+      }),
+      this.prisma.tripMetrics.findFirst({ where: { tenantId, tripId }, select: { actualDistanceKm: true } }),
+    ]);
+
+    const contractedRevenue = resolveTripFreightBestAmount({
+      contractedAmount: toNumberOrNull(freight?.contractedAmount ?? null),
+      finalAmount: toNumberOrNull(freight?.finalAmount ?? null),
+      estimatedAmount: toNumberOrNull(freight?.estimatedAmount ?? null),
+    });
+
+    const invoicedRevenue = toNumberOrNull(billing?.invoicedAmount ?? null) ?? 0;
+    const receivedRevenue = billing?.status === TripBillingStatus.PAID ? invoicedRevenue : 0;
+
+    const fuelCost = dashboard.fuelCost;
+    const tollCost = dashboard.tollCost;
+    const expenseCost = dashboard.totalExpenses;
+    const totalCost = dashboard.totalCost;
+
+    const operatingResult = contractedRevenue !== null ? contractedRevenue - totalCost : null;
+    const invoicedResult = invoicedRevenue - totalCost;
+    const receivedResult = receivedRevenue - totalCost;
+
+    const distanceKm = toNumberOrNull(metrics?.actualDistanceKm ?? null);
+    const hasDistance = distanceKm !== null && distanceKm > 0;
+
+    const entity = new TripFinancialResultEntity();
+    entity.tripId = tripId;
+    entity.contractedRevenue = contractedRevenue;
+    entity.invoicedRevenue = invoicedRevenue;
+    entity.receivedRevenue = receivedRevenue;
+    entity.fuelCost = fuelCost;
+    entity.tollCost = tollCost;
+    entity.expenseCost = expenseCost;
+    entity.totalCost = totalCost;
+    entity.operatingResult = operatingResult;
+    entity.invoicedResult = invoicedResult;
+    entity.receivedResult = receivedResult;
+    entity.profitMarginPercent =
+      contractedRevenue !== null && contractedRevenue > 0 && operatingResult !== null
+        ? (operatingResult / contractedRevenue) * 100
+        : null;
+    entity.invoicedMarginPercent = invoicedRevenue > 0 ? (invoicedResult / invoicedRevenue) * 100 : null;
+    entity.receivedMarginPercent = receivedRevenue > 0 ? (receivedResult / receivedRevenue) * 100 : null;
+    entity.distanceKm = distanceKm;
+    entity.revenuePerKm = hasDistance && contractedRevenue !== null ? contractedRevenue / distanceKm : null;
+    entity.costPerKm = hasDistance ? totalCost / distanceKm : null;
+    entity.profitPerKm = hasDistance && operatingResult !== null ? operatingResult / distanceKm : null;
     return entity;
   }
 

@@ -710,6 +710,12 @@ model Tenant {
   /// Fase 60 -- faturamento operacional.
   tripBillings             TripBilling[]
   tripBillingEntries       TripBillingEntry[]
+  /// Fase 72 -- contas a receber (titulos gerados a partir do faturamento).
+  receivables              Receivable[]
+  receivablePayments       ReceivablePayment[]
+  /// Fase 73 -- contas a pagar (titulos gerados a partir das despesas).
+  payables                 Payable[]
+  payablePayments          PayablePayment[]
   /// Fase 61 -- motoristas, agregados e terceiros.
   driverVehicleAssignments DriverVehicleAssignment[]
 
@@ -940,6 +946,12 @@ model UserAccount {
   tripBillingsCancelled           TripBilling[]             @relation("TripBillingCanceller")
   tripBillingEntriesCreated       TripBillingEntry[]        @relation("TripBillingEntryCreator")
   driverVehicleAssignmentsCreated DriverVehicleAssignment[] @relation("DriverVehicleAssignmentCreator")
+  receivablesCreated              Receivable[]              @relation("ReceivableCreator")
+  receivablesCancelled            Receivable[]              @relation("ReceivableCanceller")
+  receivablePaymentsCreated       ReceivablePayment[]       @relation("ReceivablePaymentCreator")
+  payablesCreated                 Payable[]                 @relation("PayableCreator")
+  payablesCancelled               Payable[]                 @relation("PayableCanceller")
+  payablePaymentsCreated          PayablePayment[]          @relation("PayablePaymentCreator")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -1822,6 +1834,8 @@ model Customer {
   /// Fase 59 -- gestao de fretes, contratos e tabelas de frete.
   contracts       Contract[]
   freightTables   FreightTable[]
+  /// Fase 72 -- contas a receber originadas do faturamento das viagens.
+  receivables     Receivable[]
 
   @@index([tenantId])
   @@map("customers")
@@ -2011,6 +2025,13 @@ model Trip {
   /// Fase 60 -- faturamento operacional (situacao/valor faturavel/faturado)
   /// desta viagem. 1:1 opcional.
   billing             TripBilling?
+  /// Fase 72 -- contas a receber geradas a partir do faturamento desta
+  /// viagem. Na pratica no maximo 1 (billing.id e @unique em Receivable),
+  /// mas declarada como lista por nao haver constraint de unicidade
+  /// direta em tripId aqui (a idempotencia real e por billingId).
+  receivables         Receivable[]
+  /// Fase 73 -- contas a pagar geradas a partir das despesas desta viagem.
+  payables            Payable[]
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -2955,6 +2976,9 @@ model TripExpense {
   approver   UserAccount? @relation("TripExpenseApprover", fields: [approvedBy], references: [id], onDelete: SetNull)
   creator    UserAccount  @relation("TripExpenseCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   updater    UserAccount? @relation("TripExpenseUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  /// Fase 73 -- conta a pagar gerada a partir desta despesa (1:1 opcional,
+  /// Payable.expenseId e @unique).
+  payable    Payable?
 
   @@index([tenantId])
   @@index([tenantId, tripId])
@@ -3851,12 +3875,15 @@ model TripBilling {
   createdAt      DateTime          @default(now()) @map("created_at")
   updatedAt      DateTime          @updatedAt @map("updated_at")
 
-  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip      Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  entries   TripBillingEntry[]
-  creator   UserAccount        @relation("TripBillingCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  updater   UserAccount?       @relation("TripBillingUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
-  canceller UserAccount?       @relation("TripBillingCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip       Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  entries    TripBillingEntry[]
+  creator    UserAccount        @relation("TripBillingCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    UserAccount?       @relation("TripBillingUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  canceller  UserAccount?       @relation("TripBillingCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  /// Fase 72 -- titulo de conta a receber gerado a partir deste
+  /// faturamento (1:1 opcional, Receivable.billingId e @unique).
+  receivable Receivable?
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -3886,6 +3913,224 @@ model TripBillingEntry {
   @@index([tenantId])
   @@index([tenantId, tripBillingId])
   @@map("trip_billing_entries")
+}
+
+// ============================================================================
+// CONTAS A RECEBER (Fase 72) — visao de cobranca/acompanhamento sobre o
+// faturamento ja existente (Fase 60). NAO e um segundo sistema financeiro:
+// Receivable e um titulo gerado A PARTIR de um TripBilling (1:1, billingId
+// @unique garante idempotencia -- nunca 2 titulos para o mesmo
+// faturamento), com um campo que TripBilling nao tem (dueDate) e um
+// historico de recebimentos reais e imutavel (ReceivablePayment), distinto
+// de TripBilling.receivedAmount (que por limitacao da Fase 60 sempre
+// espelha invoicedAmount, ja documentado em docs/receivables.md).
+// ============================================================================
+
+/// Estado ESCRITO do titulo -- atualizado transacionalmente a cada
+/// pagamento/cancelamento (mesmo espirito de TripBillingStatus). NUNCA
+/// contem OVERDUE: vencimento depende da passagem do tempo, entao e
+/// sempre calculado ao vivo (status escrito OPEN/PARTIALLY_RECEIVED +
+/// dueDate no passado = OVERDUE na entidade/listagem), nunca armazenado
+/// (evitaria exigir um job para nao ficar desatualizado).
+enum ReceivableStatus {
+  OPEN
+  PARTIALLY_RECEIVED
+  PAID
+  CANCELLED
+
+  @@map("receivable_status")
+}
+
+enum ReceivablePaymentMethod {
+  PIX
+  BANK_TRANSFER
+  BOLETO
+  CASH
+  CHECK
+  CARD
+  OTHER
+
+  @@map("receivable_payment_method")
+}
+
+/// Titulo de conta a receber -- SNAPSHOT gerado a partir de um TripBilling
+/// (POST /receivables/from-billing/:billingId). originalAmount e congelado
+/// no momento da geracao (= TripBilling.invoicedAmount naquele instante):
+/// alterar o faturamento depois NUNCA muda um titulo ja criado (mesmo
+/// principio ja usado em TripFreight/TripSettlement, Fase 59/17).
+/// receivedAmount e MATERIALIZADO (soma de ReceivablePayment.amount,
+/// atualizado na MESMA transacao de cada pagamento -- nunca uma segunda
+/// escrita) pelo mesmo motivo que TripBilling.invoicedAmount e
+/// materializado a partir de TripBillingEntry: permite filtrar/paginar por
+/// saldo/status sem exigir um SUM por linha a cada listagem. status NAO e
+/// uma coluna persistida -- e sempre derivado (cancelledAt/receivedAmount/
+/// originalAmount/dueDate) porque OVERDUE depende da passagem do tempo
+/// (uma coluna estatica ficaria desatualizada sem um job).
+model Receivable {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  /// Copiado de Trip.customerId no momento da geracao -- nulo quando a
+  /// viagem nao tinha cliente vinculado (mesmo estado ja possivel em
+  /// TripRevenue.customerId).
+  customerId     String?   @map("customer_id") @db.Uuid
+  tripId         String    @map("trip_id") @db.Uuid
+  /// @unique -- garante a idempotencia exigida (secao 19): nunca 2 titulos
+  /// para o mesmo faturamento, reforcado por constraint de banco (nunca so
+  /// em memoria).
+  billingId      String    @unique @map("billing_id") @db.Uuid
+  description    String
+  originalAmount Decimal   @map("original_amount") @db.Decimal(12, 2)
+  /// Materializado -- ver comentario do model acima. Nunca editado direto,
+  /// sempre incrementado dentro da transacao que cria um ReceivablePayment.
+  receivedAmount Decimal   @default(0) @map("received_amount") @db.Decimal(12, 2)
+  issueDate      DateTime  @map("issue_date")
+  dueDate        DateTime  @map("due_date")
+  /// Ver comentario do enum ReceivableStatus -- nunca OVERDUE aqui.
+  status         ReceivableStatus @default(OPEN)
+  /// Cancelamento (secao 10) -- preserva historico de pagamentos ja
+  /// registrados, apenas bloqueia novos.
+  cancelledAt    DateTime? @map("cancelled_at")
+  cancelledBy    String?   @map("cancelled_by") @db.Uuid
+  createdBy      String    @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer  Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  trip      Trip                @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  billing   TripBilling         @relation(fields: [billingId], references: [id], onDelete: Cascade)
+  creator   UserAccount         @relation("ReceivableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  canceller UserAccount?        @relation("ReceivableCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  payments  ReceivablePayment[]
+
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, status])
+  @@map("receivables")
+}
+
+/// Recebimento IMUTAVEL -- ledger append-only, mesmo espirito de
+/// SubscriptionPayment (Fase 50) e TripBillingEntry (Fase 60): nenhum
+/// endpoint de update/delete. Cada linha e um recebimento real (parcial ou
+/// total); a soma de todas as linhas de um Receivable e SEMPRE igual a
+/// Receivable.receivedAmount (mantido consistente na mesma transacao).
+model ReceivablePayment {
+  id            String                  @id @default(uuid()) @db.Uuid
+  tenantId      String                  @map("tenant_id") @db.Uuid
+  receivableId  String                  @map("receivable_id") @db.Uuid
+  amount        Decimal                 @db.Decimal(12, 2)
+  paymentDate   DateTime                @map("payment_date")
+  paymentMethod ReceivablePaymentMethod @map("payment_method")
+  reference     String?
+  notes         String?                 @db.Text
+  createdBy     String                  @map("created_by") @db.Uuid
+  createdAt     DateTime                @default(now()) @map("created_at")
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receivable Receivable   @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  creator    UserAccount  @relation("ReceivablePaymentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, receivableId])
+  @@map("receivable_payments")
+}
+
+// ============================================================================
+// CONTAS A PAGAR (Fase 73) — espelho de "CONTAS A RECEBER" (Fase 72) para o
+// lado da despesa. Payable e um titulo gerado A PARTIR de uma TripExpense
+// (1:1, expenseId @unique garante idempotencia -- nunca 2 titulos para a
+// mesma despesa), nunca um segundo ledger de despesas: TripExpense
+// continua sendo a UNICA fonte de verdade do custo operacional; Payable
+// so adiciona o que TripExpense nao tem (dueDate + historico de pagamento
+// real via PayablePayment). category/paymentMethod REAPROVEITAM os enums
+// ja existentes (ExpenseCategory/ExpensePaymentMethod) -- nenhum enum
+// paralelo. O projeto nao possui um model Supplier: supplierName e um
+// snapshot de texto livre (TripExpense.supplier), nunca uma relacao
+// inventada (ver docs/payables.md).
+// ============================================================================
+
+/// Mesmo espirito de ReceivableStatus (Fase 72): nunca contem OVERDUE
+/// (calculado ao vivo a partir de dueDate -- ver payable-status.util.ts).
+enum PayableStatus {
+  OPEN
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+
+  @@map("payable_status")
+}
+
+/// Titulo de conta a pagar -- SNAPSHOT gerado a partir de uma TripExpense
+/// (POST /payables/from-expense/:expenseId). originalAmount/category/
+/// supplierName sao congelados no momento da geracao: alterar a despesa
+/// depois NUNCA muda um titulo ja criado. paidAmount e MATERIALIZADO (soma
+/// de PayablePayment.amount, atualizado na mesma transacao de cada
+/// pagamento), mesmo motivo de Receivable.receivedAmount (Fase 72).
+model Payable {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  tripId         String        @map("trip_id") @db.Uuid
+  /// @unique -- idempotencia (secao 22): nunca 2 titulos para a mesma despesa.
+  expenseId      String        @unique @map("expense_id") @db.Uuid
+  /// Snapshot de TripExpense.supplier (texto livre) -- o projeto nao possui
+  /// um model Supplier estruturado, entao nunca inventamos uma relacao.
+  supplierName   String?       @map("supplier_name")
+  /// Snapshot de TripExpense.category -- reaproveita o enum ja existente
+  /// (nunca um enum paralelo, secao 13).
+  category       ExpenseCategory
+  description    String
+  originalAmount Decimal       @map("original_amount") @db.Decimal(12, 2)
+  /// Materializado -- ver comentario do model acima.
+  paidAmount     Decimal       @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  issueDate      DateTime      @map("issue_date")
+  dueDate        DateTime      @map("due_date")
+  status         PayableStatus @default(OPEN)
+  cancelledAt    DateTime?     @map("cancelled_at")
+  cancelledBy    String?       @map("cancelled_by") @db.Uuid
+  createdBy      String        @map("created_by") @db.Uuid
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip      Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  expense   TripExpense      @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  creator   UserAccount      @relation("PayableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  canceller UserAccount?     @relation("PayableCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  payments  PayablePayment[]
+
+  @@index([tenantId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, status])
+  @@index([tenantId, category])
+  @@map("payables")
+}
+
+/// Pagamento IMUTAVEL -- ledger append-only, mesmo espirito de
+/// ReceivablePayment (Fase 72) e SubscriptionPayment (Fase 50): nenhum
+/// endpoint de update/delete. paymentMethod reaproveita ExpensePaymentMethod
+/// (ja usado em TripExpense) -- nenhum enum paralelo.
+model PayablePayment {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @map("tenant_id") @db.Uuid
+  payableId     String                @map("payable_id") @db.Uuid
+  amount        Decimal               @db.Decimal(12, 2)
+  paymentDate   DateTime              @map("payment_date")
+  paymentMethod ExpensePaymentMethod  @map("payment_method")
+  reference     String?
+  notes         String?               @db.Text
+  createdBy     String                @map("created_by") @db.Uuid
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payable Payable     @relation(fields: [payableId], references: [id], onDelete: Cascade)
+  creator UserAccount @relation("PayablePaymentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, payableId])
+  @@map("payable_payments")
 }
 
 // ============================================================================

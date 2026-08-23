@@ -1,6 +1,7 @@
 // Tipos espelhando 1:1 as *Entity do backend (apps/api/src/**/entities).
 // Datas chegam como string ISO 8601 (serializacao JSON), nunca Date.
 // Nao inventar campos: qualquer campo aqui precisa existir na entity real.
+import type { PaginationMeta } from './api';
 import type {
   AlertSeverity,
   AlertType,
@@ -31,7 +32,10 @@ import type {
   ImportRowIssueType,
   LocationType,
   MaintenanceComponent,
+  PayableEffectiveStatus,
   PaymentType,
+  ReceivableEffectiveStatus,
+  ReceivablePaymentMethod,
   RevenueCategory,
   RouteTollEstimateSource,
   RouteVersionReason,
@@ -1094,6 +1098,29 @@ export interface TripFinancialDashboardEntity {
   totalCost: number;
   grossResult: number;
   finalResult: number;
+}
+
+// GET /trips/:id/financial-result (Fase 71) -- resultado financeiro real da
+// viagem: receita contratada/faturada/recebida, custos e metricas por km.
+export interface TripFinancialResultEntity {
+  tripId: string;
+  contractedRevenue: number | null;
+  invoicedRevenue: number;
+  receivedRevenue: number;
+  fuelCost: number;
+  tollCost: number;
+  expenseCost: number;
+  totalCost: number;
+  operatingResult: number | null;
+  invoicedResult: number;
+  receivedResult: number;
+  profitMarginPercent: number | null;
+  invoicedMarginPercent: number | null;
+  receivedMarginPercent: number | null;
+  distanceKm: number | null;
+  revenuePerKm: number | null;
+  costPerKm: number | null;
+  profitPerKm: number | null;
 }
 
 export interface FuelStationEntity {
@@ -2801,4 +2828,251 @@ export interface NotificationEntity {
 export interface UnreadNotificationCountEntity {
   total: number;
   critical: number;
+}
+
+// Fase 72 -- Contas a Receber. Gerado a partir de um TripBilling
+// existente (Fase 60) -- nunca um sistema financeiro paralelo. status e
+// sempre o EFETIVO (pode ser 'OVERDUE', que nunca e persistido no
+// backend -- ver docs/receivables.md).
+export interface ReceivablePaymentEntity {
+  id: string;
+  receivableId: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: ReceivablePaymentMethod;
+  reference: string | null;
+  notes: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+}
+
+export interface ReceivableEntity {
+  id: string;
+  customerId: string | null;
+  customerName: string | null;
+  tripId: string;
+  tripLabel: string | null;
+  billingId: string;
+  description: string;
+  originalAmount: number;
+  receivedAmount: number;
+  balance: number;
+  issueDate: string;
+  dueDate: string;
+  status: ReceivableEffectiveStatus;
+  cancelledAt: string | null;
+  cancelledBy: string | null;
+  cancellerName: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  payments?: ReceivablePaymentEntity[];
+}
+
+export interface ReceivablesDashboardSummaryEntity {
+  totalInvoiced: number;
+  totalReceived: number;
+  totalOpen: number;
+  totalOverdue: number;
+  totalUpcoming: number;
+  openCount: number;
+  overdueCount: number;
+  paidCount: number;
+  cancelledCount: number;
+}
+
+export interface ReceivablesAgingBucketEntity {
+  label: string;
+  amount: number;
+  count: number;
+}
+
+export interface ReceivablesByCustomerEntity {
+  customerId: string | null;
+  customerName: string;
+  totalInvoiced: number;
+  totalReceived: number;
+  balance: number;
+  overdueAmount: number;
+}
+
+export interface ReceivablesDashboardEntity {
+  summary: ReceivablesDashboardSummaryEntity;
+  aging: ReceivablesAgingBucketEntity[];
+  byCustomer: ReceivablesByCustomerEntity[];
+}
+
+// Fase 73 -- Contas a Pagar. Gerado a partir de uma TripExpense existente
+// (Fase 16/51) -- nunca um sistema de despesas paralelo. status e sempre
+// o EFETIVO (pode ser 'OVERDUE', nunca persistido -- ver docs/payables.md).
+export interface PayablePaymentEntity {
+  id: string;
+  payableId: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: ExpensePaymentMethod;
+  reference: string | null;
+  notes: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+}
+
+export interface PayableEntity {
+  id: string;
+  tripId: string;
+  tripLabel: string | null;
+  expenseId: string;
+  supplierName: string | null;
+  category: ExpenseCategory;
+  description: string;
+  originalAmount: number;
+  paidAmount: number;
+  balance: number;
+  issueDate: string;
+  dueDate: string;
+  status: PayableEffectiveStatus;
+  cancelledAt: string | null;
+  cancelledBy: string | null;
+  cancellerName: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  payments?: PayablePaymentEntity[];
+}
+
+export interface PayablesDashboardSummaryEntity {
+  totalPayable: number;
+  totalPaid: number;
+  totalOpen: number;
+  totalOverdue: number;
+  totalUpcoming: number;
+  openCount: number;
+  overdueCount: number;
+  paidCount: number;
+  cancelledCount: number;
+}
+
+export interface PayablesAgingBucketEntity {
+  label: string;
+  amount: number;
+  count: number;
+}
+
+export interface PayablesByCategoryEntity {
+  category: ExpenseCategory;
+  totalPayable: number;
+  totalPaid: number;
+  balance: number;
+}
+
+export interface PayablesDashboardEntity {
+  summary: PayablesDashboardSummaryEntity;
+  aging: PayablesAgingBucketEntity[];
+  byCategory: PayablesByCategoryEntity[];
+}
+
+// Fase 74 -- Fluxo de Caixa consolidado. PROJECAO sobre Receivable/
+// ReceivablePayment/Payable/PayablePayment ja existentes -- nunca um
+// saldo bancario real (sem conta bancaria/conciliacao no projeto, ver
+// docs/cash-flow.md).
+export interface CashFlowSummaryEntity {
+  totalReceived: number;
+  totalPaid: number;
+  totalReceivableOpen: number;
+  totalPayableOpen: number;
+  totalReceivableOverdue: number;
+  totalPayableOverdue: number;
+  projectedNetBalance: number;
+  receivedCount: number;
+  paidCount: number;
+}
+
+export interface CashFlowMonthlyPointEntity {
+  period: string;
+  received: number;
+  paid: number;
+  net: number;
+  receivableDue: number;
+  payableDue: number;
+  receivableOverdue: number;
+  payableOverdue: number;
+}
+
+export interface CashFlowEntity {
+  summary: CashFlowSummaryEntity;
+  monthly: CashFlowMonthlyPointEntity[];
+  topReceivableCustomers: ReceivablesByCustomerEntity[];
+  topPayableCategories: PayablesByCategoryEntity[];
+}
+
+// Fase 75 -- Conciliacao Financeira. Nao sao enums Prisma (nunca
+// persistidos, ver docs/finance-reconciliation.md) -- unions locais, mesmo
+// espirito de ReceivableEffectiveStatus/PayableEffectiveStatus.
+export type ReconciliationIssueType =
+  | 'RECEIVABLE_WITHOUT_BILLING'
+  | 'BILLING_WITHOUT_RECEIVABLE'
+  | 'RECEIVABLE_BALANCE_INCONSISTENT'
+  | 'RECEIVABLE_PAYMENT_EXCEEDS_INVOICED'
+  | 'PAYABLE_WITHOUT_APPROVED_EXPENSE'
+  | 'PAYABLE_BALANCE_INCONSISTENT'
+  | 'PAYABLE_PAYMENT_EXCEEDS_EXPENSE'
+  | 'DUPLICATE_RECEIVABLE'
+  | 'DUPLICATE_PAYABLE'
+  | 'TRIP_EXPENSE_WITHOUT_PAYABLE'
+  | 'TRIP_BILLING_WITHOUT_RECEIVABLE';
+
+export type ReconciliationSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+export type ReconciliationEntityType = 'Receivable' | 'Payable' | 'TripBilling' | 'TripExpense';
+
+export interface FinanceReconciliationIssueEntity {
+  type: ReconciliationIssueType;
+  severity: ReconciliationSeverity;
+  entityType: ReconciliationEntityType;
+  entityId: string;
+  tripId: string | null;
+  tripLabel: string | null;
+  customerId: string | null;
+  amount: number | null;
+  expectedAmount: number | null;
+  actualAmount: number | null;
+  description: string;
+  detectedAt: string;
+}
+
+export interface FinanceReconciliationSummaryEntity {
+  totalIssues: number;
+  criticalCount: number;
+  warningCount: number;
+  infoCount: number;
+  totalReceivableIssues: number;
+  totalPayableIssues: number;
+  totalBillingIssues: number;
+  totalExpenseIssues: number;
+}
+
+export interface ReconciliationByTypeEntity {
+  type: ReconciliationIssueType;
+  severity: ReconciliationSeverity;
+  count: number;
+}
+
+export interface ReconciliationBySeverityEntity {
+  severity: ReconciliationSeverity;
+  count: number;
+}
+
+export interface PaginatedFinanceReconciliationIssuesEntity {
+  items: FinanceReconciliationIssueEntity[];
+  meta: PaginationMeta;
+}
+
+export interface FinanceReconciliationEntity {
+  summary: FinanceReconciliationSummaryEntity;
+  byType: ReconciliationByTypeEntity[];
+  bySeverity: ReconciliationBySeverityEntity[];
+  issues: PaginatedFinanceReconciliationIssuesEntity;
 }

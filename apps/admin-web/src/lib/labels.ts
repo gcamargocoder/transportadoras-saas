@@ -27,7 +27,10 @@ import {
   ImportJobStatus,
   LocationType,
   MaintenanceComponent,
+  PayableStatus,
   PaymentType,
+  ReceivablePaymentMethod,
+  ReceivableStatus,
   RevenueCategory,
   RouteTollEstimateSource,
   SettlementStatus,
@@ -67,7 +70,13 @@ import {
   DocumentExpiryStatus,
   FleetAlertSeverity,
 } from '../types/enums';
-import type { DowntimeCategory, FiscalDocumentOrigin } from '../types/entities';
+import type {
+  DowntimeCategory,
+  FiscalDocumentOrigin,
+  ReconciliationEntityType,
+  ReconciliationIssueType,
+  ReconciliationSeverity,
+} from '../types/entities';
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   SUPER_ADMIN: 'Super admin',
@@ -484,6 +493,7 @@ export const TENANT_MODULE_LABELS: Record<TenantModule, string> = {
   STOPS: 'Paradas',
   DASHBOARDS: 'Dashboards',
   REPORTS: 'Relatórios',
+  FREIGHT: 'Fretes e faturamento',
 };
 
 // Fase 50 -- Gestao Manual de Assinaturas e Cobranca.
@@ -757,4 +767,86 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   // Fase 70.
   DELIVERY_PROOF_PENDING: 'Comprovante de entrega aguardando revisão',
   DELIVERY_PROOF_PROBLEM: 'Comprovante de entrega com problema',
+};
+
+// Fase 72 -- Contas a Receber. Inclui OVERDUE (nunca persistido no
+// backend, sempre calculado ao vivo -- ver receivable-status.util.ts).
+export const RECEIVABLE_STATUS_LABELS: Record<ReceivableStatus | 'OVERDUE', string> = {
+  OPEN: 'Em aberto',
+  PARTIALLY_RECEIVED: 'Recebido parcialmente',
+  PAID: 'Recebido',
+  OVERDUE: 'Vencido',
+  CANCELLED: 'Cancelado',
+};
+
+export const RECEIVABLE_STATUS_TONE: Record<ReceivableStatus | 'OVERDUE', 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  OPEN: 'info',
+  PARTIALLY_RECEIVED: 'warning',
+  PAID: 'success',
+  OVERDUE: 'danger',
+  CANCELLED: 'neutral',
+};
+
+export const RECEIVABLE_PAYMENT_METHOD_LABELS: Record<ReceivablePaymentMethod, string> = {
+  PIX: 'PIX',
+  BANK_TRANSFER: 'Transferência bancária',
+  BOLETO: 'Boleto',
+  CASH: 'Dinheiro',
+  CHECK: 'Cheque',
+  CARD: 'Cartão',
+  OTHER: 'Outro',
+};
+
+// Fase 73 -- Contas a Pagar. Inclui OVERDUE (nunca persistido no backend).
+// paymentMethod/category reaproveitam EXPENSE_PAYMENT_METHOD_LABELS/
+// EXPENSE_CATEGORY_LABELS ja existentes -- nenhum label paralelo.
+export const PAYABLE_STATUS_LABELS: Record<PayableStatus | 'OVERDUE', string> = {
+  OPEN: 'Em aberto',
+  PARTIALLY_PAID: 'Pago parcialmente',
+  PAID: 'Pago',
+  OVERDUE: 'Vencido',
+  CANCELLED: 'Cancelado',
+};
+
+export const PAYABLE_STATUS_TONE: Record<PayableStatus | 'OVERDUE', 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  OPEN: 'info',
+  PARTIALLY_PAID: 'warning',
+  PAID: 'success',
+  OVERDUE: 'danger',
+  CANCELLED: 'neutral',
+};
+
+// Fase 75 -- Conciliacao Financeira. type/severity nao sao enums Prisma
+// (nunca persistidos, ver ../types/entities.ts) -- importados a parte.
+export const RECONCILIATION_ISSUE_TYPE_LABELS: Record<ReconciliationIssueType, string> = {
+  RECEIVABLE_WITHOUT_BILLING: 'Título ativo com faturamento cancelado',
+  BILLING_WITHOUT_RECEIVABLE: 'Faturamento concluído sem conta a receber',
+  RECEIVABLE_BALANCE_INCONSISTENT: 'Saldo de recebível inconsistente',
+  RECEIVABLE_PAYMENT_EXCEEDS_INVOICED: 'Recebido acima do faturado',
+  PAYABLE_WITHOUT_APPROVED_EXPENSE: 'Título ativo com despesa não aprovada',
+  PAYABLE_BALANCE_INCONSISTENT: 'Saldo de conta a pagar inconsistente',
+  PAYABLE_PAYMENT_EXCEEDS_EXPENSE: 'Pago acima da despesa',
+  DUPLICATE_RECEIVABLE: 'Conta a receber duplicada',
+  DUPLICATE_PAYABLE: 'Conta a pagar duplicada',
+  TRIP_EXPENSE_WITHOUT_PAYABLE: 'Despesa aprovada sem conta a pagar',
+  TRIP_BILLING_WITHOUT_RECEIVABLE: 'Faturamento em andamento sem conta a receber',
+};
+
+export const RECONCILIATION_SEVERITY_LABELS: Record<ReconciliationSeverity, string> = {
+  INFO: 'Informativo',
+  WARNING: 'Atenção',
+  CRITICAL: 'Crítico',
+};
+
+export const RECONCILIATION_SEVERITY_TONE: Record<ReconciliationSeverity, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  INFO: 'info',
+  WARNING: 'warning',
+  CRITICAL: 'danger',
+};
+
+export const RECONCILIATION_ENTITY_TYPE_LABELS: Record<ReconciliationEntityType, string> = {
+  Receivable: 'Conta a receber',
+  Payable: 'Conta a pagar',
+  TripBilling: 'Faturamento',
+  TripExpense: 'Despesa',
 };

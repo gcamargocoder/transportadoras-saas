@@ -482,6 +482,9 @@ export const TenantModule = {
   STOPS: 'STOPS',
   DASHBOARDS: 'DASHBOARDS',
   REPORTS: 'REPORTS',
+  // Fase 59 -- faltava neste espelho (o nav-config nunca precisou gatear
+  // nenhum item por este modulo ate a Fase 72).
+  FREIGHT: 'FREIGHT',
 } as const;
 export type TenantModule = (typeof TenantModule)[keyof typeof TenantModule];
 
@@ -740,4 +743,44 @@ export const NotificationType = {
   DELIVERY_PROOF_PENDING: 'DELIVERY_PROOF_PENDING',
   DELIVERY_PROOF_PROBLEM: 'DELIVERY_PROOF_PROBLEM',
 } as const;
+
+// Fase 72 -- Contas a Receber. Status ESCRITO (nunca contem OVERDUE --
+// calculado ao vivo, ver ReceivableEffectiveStatus abaixo).
+export const ReceivableStatus = {
+  OPEN: 'OPEN',
+  PARTIALLY_RECEIVED: 'PARTIALLY_RECEIVED',
+  PAID: 'PAID',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type ReceivableStatus = (typeof ReceivableStatus)[keyof typeof ReceivableStatus];
+
+// Status EFETIVO retornado pela API (o que a UI sempre exibe/filtra) --
+// inclui OVERDUE, que nunca existe como valor persistido no backend.
+export type ReceivableEffectiveStatus = ReceivableStatus | 'OVERDUE';
+
+export const ReceivablePaymentMethod = {
+  PIX: 'PIX',
+  BANK_TRANSFER: 'BANK_TRANSFER',
+  BOLETO: 'BOLETO',
+  CASH: 'CASH',
+  CHECK: 'CHECK',
+  CARD: 'CARD',
+  OTHER: 'OTHER',
+} as const;
+export type ReceivablePaymentMethod = (typeof ReceivablePaymentMethod)[keyof typeof ReceivablePaymentMethod];
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType];
+
+// Fase 73 -- Contas a Pagar. Status ESCRITO (nunca contem OVERDUE --
+// calculado ao vivo, ver PayableEffectiveStatus abaixo). paymentMethod e
+// category reaproveitam ExpensePaymentMethod/ExpenseCategory ja
+// existentes -- nenhum enum paralelo.
+export const PayableStatus = {
+  OPEN: 'OPEN',
+  PARTIALLY_PAID: 'PARTIALLY_PAID',
+  PAID: 'PAID',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type PayableStatus = (typeof PayableStatus)[keyof typeof PayableStatus];
+
+// Status EFETIVO retornado pela API -- inclui OVERDUE, nunca persistido.
+export type PayableEffectiveStatus = PayableStatus | 'OVERDUE';

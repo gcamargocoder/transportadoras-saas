@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ban, CheckCircle2, Receipt, Split } from 'lucide-react';
+import { ArrowRight, Ban, CheckCircle2, Receipt, Split } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -16,6 +16,7 @@ import { Input } from '../../../components/ui/input';
 import { Modal } from '../../../components/ui/modal';
 import { StatCard } from '../../../components/ui/stat-card';
 import { useToast } from '../../../components/ui/toast';
+import { useAuth } from '../../../hooks/use-auth';
 import { toFriendlyMessage } from '../../../lib/api/errors';
 import {
   cancelTripBilling,
@@ -23,8 +24,12 @@ import {
   invoiceTripBilling,
   updateTripBilling,
 } from '../../../lib/api/billing-operational.api';
-import { TRIP_BILLING_STATUS_LABELS, TRIP_BILLING_STATUS_TONE } from '../../../lib/labels';
-import { formatCurrency, formatDateTime } from '../../../utils/format';
+import { listReceivables } from '../../../lib/api/receivables.api';
+import { RECEIVABLE_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
+import { GenerateReceivableModal } from '../../receivables/generate-receivable-modal';
+import { ReceivableDetailModal } from '../../receivables/receivable-detail-modal';
+import { TRIP_BILLING_STATUS_LABELS, TRIP_BILLING_STATUS_TONE, RECEIVABLE_STATUS_LABELS, RECEIVABLE_STATUS_TONE } from '../../../lib/labels';
+import { formatCurrency, formatDate, formatDateTime } from '../../../utils/format';
 
 const partialSchema = z.object({
   amount: z.coerce.number().positive('Informe um valor maior que zero.'),
@@ -93,14 +98,24 @@ function PartialInvoiceModal({
 }
 
 export function BillingSection({ tripId }: { tripId: string }): JSX.Element {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
   const [partialOpen, setPartialOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [generateReceivableOpen, setGenerateReceivableOpen] = useState(false);
+  const [receivableDetailOpen, setReceivableDetailOpen] = useState(false);
 
   const billingQuery = useQuery({
     queryKey: ['billing', 'trip', tripId],
     queryFn: () => getTripBilling(tripId),
+  });
+
+  // Fase 72 -- vinculo Faturamento -> Conta a receber (no maximo 1 por
+  // viagem, ver Receivable.billingId @unique no schema).
+  const receivableQuery = useQuery({
+    queryKey: ['receivables', 'list', { tripId }],
+    queryFn: () => listReceivables({ tripId, pageSize: 1 }),
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['billing', 'trip', tripId] });
@@ -192,7 +207,52 @@ export function BillingSection({ tripId }: { tripId: string }): JSX.Element {
         </div>
       )}
 
+      {/* Fase 72 -- vinculo Faturamento -> Conta a receber -> Recebimentos. */}
+      <div className="border-t border-border px-5 py-4">
+        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+          Conta a receber <ArrowRight size={12} />
+        </p>
+        {receivableQuery.isLoading && <p className="text-sm text-ink-subtle">Carregando…</p>}
+        {receivableQuery.data && receivableQuery.data.items.length === 0 && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-ink-subtle">Nenhuma conta a receber gerada para esta viagem ainda.</p>
+            {hasRole(user?.role, RECEIVABLE_WRITE_ROLES) && billing.invoicedAmount > 0 && (
+              <Button size="sm" variant="outline" onClick={() => setGenerateReceivableOpen(true)}>
+                Gerar conta a receber
+              </Button>
+            )}
+          </div>
+        )}
+        {receivableQuery.data && receivableQuery.data.items.length > 0 && (
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-ink">
+                {formatCurrency(receivableQuery.data.items[0]!.receivedAmount)} recebido de{' '}
+                {formatCurrency(receivableQuery.data.items[0]!.originalAmount)} · vence em{' '}
+                {formatDate(receivableQuery.data.items[0]!.dueDate)}
+              </span>
+              <Badge tone={RECEIVABLE_STATUS_TONE[receivableQuery.data.items[0]!.status]}>
+                {RECEIVABLE_STATUS_LABELS[receivableQuery.data.items[0]!.status]}
+              </Badge>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setReceivableDetailOpen(true)}>
+              Ver detalhes
+            </Button>
+          </div>
+        )}
+      </div>
+
       <PartialInvoiceModal open={partialOpen} onClose={() => setPartialOpen(false)} tripId={tripId} balance={billing.balance ?? 0} />
+      <GenerateReceivableModal
+        open={generateReceivableOpen}
+        onClose={() => setGenerateReceivableOpen(false)}
+        billingId={billing.id ?? ''}
+      />
+      <ReceivableDetailModal
+        open={receivableDetailOpen}
+        onClose={() => setReceivableDetailOpen(false)}
+        receivableId={receivableQuery.data?.items[0]?.id ?? null}
+      />
       <ConfirmDialog
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}

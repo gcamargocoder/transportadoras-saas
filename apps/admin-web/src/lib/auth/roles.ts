@@ -74,6 +74,21 @@ export const FREIGHT_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
 export const BILLING_READ_ROLES = OPERATIONAL_READ_ROLES;
 export const BILLING_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
 
+// Fase 72 -- mesmo grupo operacional do modulo de Faturamento.
+export const RECEIVABLE_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const RECEIVABLE_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
+// Fase 73 -- mesmo grupo operacional do modulo de Contas a Receber.
+export const PAYABLE_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const PAYABLE_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
+// Fase 74 -- fluxo de caixa consolidado, somente leitura, mesmo grupo dos
+// modulos financeiros (Contas a Receber/Pagar).
+export const FINANCE_READ_ROLES = OPERATIONAL_READ_ROLES;
+
+// Fase 75 -- conciliacao financeira, somente leitura, mesmo grupo.
+export const RECONCILIATION_READ_ROLES = OPERATIONAL_READ_ROLES;
+
 export const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.ADMIN];
 export const SUPER_ADMIN_ONLY: UserRole[] = [UserRole.SUPER_ADMIN];
 

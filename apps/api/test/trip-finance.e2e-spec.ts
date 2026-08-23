@@ -711,6 +711,225 @@ describe('Trip Finance II -- Revenues, Advances, Settlement (e2e)', () => {
     });
   });
 
+  describe('GET /trips/:id/financial-result (Fase 71)', () => {
+    async function setupFreightTableWithRule(auth: string, customerId: string, baseAmount: number) {
+      const tableRes = await request(app.getHttpServer())
+        .post('/api/v1/freight/tables')
+        .set('Authorization', auth)
+        .send({
+          customerId,
+          name: `Tabela ${randomUUID().slice(0, 8)}`,
+          code: `TAB-${randomUUID().slice(0, 8)}`,
+          effectiveFrom: '2026-01-01T00:00:00.000Z',
+        })
+        .expect(201);
+      const tableId = tableRes.body.data.id as string;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/freight/tables/${tableId}`)
+        .set('Authorization', auth)
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/v1/freight/rules')
+        .set('Authorization', auth)
+        .send({ freightTableId: tableId, baseAmount })
+        .expect(201);
+    }
+
+    it('consolida receita contratada/faturada/recebida, custos (combustivel/pedagio/despesas), resultado, margem e metricas por km', async () => {
+      const { tenantId } = await createTenantAndLoginAsAdmin('FinResult');
+      // POST /toll-plazas exige SUPER_ADMIN (mesmo padrao do teste "Dashboard51" acima).
+      const admin = await prisma.userAccount.findFirstOrThrow({ where: { tenantId, role: 'ADMIN' } });
+      await prisma.userAccount.update({ where: { id: admin.id }, data: { role: 'SUPER_ADMIN' } });
+      const reloginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: admin.email, password: 'SenhaForte123!' })
+        .expect(200);
+      const auth = `Bearer ${reloginRes.body.data.accessToken as string}`;
+      const { tripId, vehicleId } = await setupTrip(auth);
+
+      // Receita contratada (Fase 59): tabela de frete -> estimatedAmount = 4000,
+      // contractedAmount/finalAmount nunca setados -> prioridade cai no estimado.
+      const customerRes = await request(app.getHttpServer())
+        .post('/api/v1/customers')
+        .set('Authorization', auth)
+        .send({ name: 'Cliente Fase 71' })
+        .expect(201);
+      const customerId = customerRes.body.data.id as string;
+      await setupFreightTableWithRule(auth, customerId, 4000);
+      await request(app.getHttpServer())
+        .post(`/api/v1/freight/trips/${tripId}/apply`)
+        .set('Authorization', auth)
+        .send({ customerId })
+        .expect(201);
+
+      // Faturamento parcial (Fase 60): invoicedRevenue = 2500, ainda nao PAID.
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', auth)
+        .send({ amount: 2500 })
+        .expect(201);
+
+      // Custos: despesa aprovada (expenseCost) + combustivel real (fuelCost) + pedagio real (tollCost).
+      await createApprovedExpense(auth, tripId, 300);
+      const fuelStationId = await createFuelStation(auth);
+      await request(app.getHttpServer())
+        .post('/api/v1/fuel-supplies')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          fuelStationId,
+          fuelType: 'DIESEL_S10',
+          liters: 100,
+          pricePerLiter: 5,
+          odometerKm: 100200,
+          supplyDate: '2026-09-01T12:00:00.000Z',
+        })
+        .expect(201);
+      await createVehicleTag(auth, vehicleId);
+      const tollPlazaId = await createTollPlaza(auth);
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({ tripId, tollPlazaId, axleCount: 6, chargedAmount: 60, chargedAt: '2026-09-01T10:30:00.000Z' })
+        .expect(201);
+
+      // Distancia real: odometro inicial gravado diretamente (equivalente ao
+      // "start" do Driver App, fora do escopo deste teste) + encerramento com
+      // odometro final -- mesmo fluxo ja validado em trip-operational-consolidation.e2e-spec.ts.
+      await prisma.trip.update({ where: { id: tripId }, data: { initialOdometerKm: 100000 } });
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'COMPLETED', finalOdometerKm: 100500 })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-result`)
+        .set('Authorization', auth)
+        .expect(200);
+      const r = res.body.data;
+
+      expect(r.contractedRevenue).toBe(4000);
+      expect(r.invoicedRevenue).toBe(2500);
+      expect(r.receivedRevenue).toBe(0); // ainda nao marcado PAID
+      expect(r.fuelCost).toBe(500); // 100L * 5
+      expect(r.tollCost).toBe(60);
+      expect(r.expenseCost).toBe(300);
+      expect(r.totalCost).toBe(860); // 500 + 60 + 300 -- nunca duplicado
+      expect(r.operatingResult).toBe(3140); // 4000 - 860
+      expect(r.invoicedResult).toBe(1640); // 2500 - 860
+      expect(r.receivedResult).toBe(-860); // 0 - 860
+      expect(r.profitMarginPercent).toBeCloseTo((3140 / 4000) * 100, 5);
+      expect(r.invoicedMarginPercent).toBeCloseTo((1640 / 2500) * 100, 5);
+      expect(r.receivedMarginPercent).toBeNull(); // receivedRevenue = 0
+      expect(r.distanceKm).toBe(500);
+      expect(r.revenuePerKm).toBeCloseTo(4000 / 500, 5);
+      expect(r.costPerKm).toBeCloseTo(860 / 500, 5);
+      expect(r.profitPerKm).toBeCloseTo(3140 / 500, 5);
+
+      // Confirmar recebimento (status PAID) -- receivedRevenue passa a
+      // refletir o valor faturado; demais campos inalterados.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/operational-billing/trips/${tripId}`)
+        .set('Authorization', auth)
+        .send({ status: 'PAID' })
+        .expect(200);
+
+      const paidRes = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-result`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(paidRes.body.data.receivedRevenue).toBe(2500);
+      expect(paidRes.body.data.receivedResult).toBe(1640); // 2500 - 860
+      expect(paidRes.body.data.receivedMarginPercent).toBeCloseTo((1640 / 2500) * 100, 5);
+    });
+
+    it('sem receita contratada e sem distancia real -- nunca inventa valor, nunca divide por zero', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('FinResultEmpty');
+      const auth = `Bearer ${adminAccessToken}`;
+      const { tripId } = await setupTrip(auth);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-result`)
+        .set('Authorization', auth)
+        .expect(200);
+      const r = res.body.data;
+
+      expect(r.contractedRevenue).toBeNull();
+      expect(r.invoicedRevenue).toBe(0);
+      expect(r.receivedRevenue).toBe(0);
+      expect(r.fuelCost).toBe(0);
+      expect(r.tollCost).toBe(0);
+      expect(r.expenseCost).toBe(0);
+      expect(r.totalCost).toBe(0);
+      expect(r.operatingResult).toBeNull(); // contractedRevenue indisponivel
+      expect(r.invoicedResult).toBe(0);
+      expect(r.receivedResult).toBe(0);
+      expect(r.profitMarginPercent).toBeNull();
+      expect(r.invoicedMarginPercent).toBeNull(); // invoicedRevenue = 0
+      expect(r.receivedMarginPercent).toBeNull();
+      expect(r.distanceKm).toBeNull();
+      expect(r.revenuePerKm).toBeNull();
+      expect(r.costPerKm).toBeNull();
+      expect(r.profitPerKm).toBeNull();
+    });
+
+    it('nunca soma o pedagio em duplicidade -- despesa TOLL_EXTRA e pedagio real ficam em baldes distintos', async () => {
+      const { tenantId } = await createTenantAndLoginAsAdmin('FinResultTollDup');
+      const admin = await prisma.userAccount.findFirstOrThrow({ where: { tenantId, role: 'ADMIN' } });
+      await prisma.userAccount.update({ where: { id: admin.id }, data: { role: 'SUPER_ADMIN' } });
+      const reloginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: admin.email, password: 'SenhaForte123!' })
+        .expect(200);
+      const auth = `Bearer ${reloginRes.body.data.accessToken as string}`;
+      const { tripId, vehicleId } = await setupTrip(auth);
+
+      // Despesa manual categoria TOLL_EXTRA (distinta do pedagio real via tag).
+      const expenseRes = await request(app.getHttpServer())
+        .post('/api/v1/trip-expenses')
+        .set('Authorization', auth)
+        .send({
+          tripId,
+          category: 'TOLL_EXTRA',
+          description: 'Pedagio nao coberto pela tag',
+          expenseDate: '2026-09-02T10:00:00.000Z',
+          amount: 40,
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trip-expenses/${expenseRes.body.data.id}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'APPROVED' })
+        .expect(200);
+
+      // Pedagio real (TollTransaction), fonte de verdade separada.
+      await createVehicleTag(auth, vehicleId);
+      const tollPlazaId = await createTollPlaza(auth);
+      await request(app.getHttpServer())
+        .post('/api/v1/toll-transactions')
+        .set('Authorization', auth)
+        .send({ tripId, tollPlazaId, axleCount: 6, chargedAmount: 60, chargedAt: '2026-09-01T10:30:00.000Z' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-result`)
+        .set('Authorization', auth)
+        .expect(200);
+      const r = res.body.data;
+
+      expect(r.expenseCost).toBe(40); // TripExpense TOLL_EXTRA, uma unica vez
+      expect(r.tollCost).toBe(60); // TollTransaction, uma unica vez
+      expect(r.totalCost).toBe(100); // 40 + 60 -- nunca 40 + 60 + 60
+    });
+  });
+
   describe('isolamento multi-tenant', () => {
     it('nunca permite acesso cruzado entre tenants (receita, adiantamento e fechamento)', async () => {
       const tenantA = await createTenantAndLoginAsAdmin('IsolA');
@@ -736,6 +955,10 @@ describe('Trip Finance II -- Revenues, Advances, Settlement (e2e)', () => {
         .expect(404);
       await request(app.getHttpServer())
         .get(`/api/v1/trips/${tripId}/financial-dashboard`)
+        .set('Authorization', authB)
+        .expect(404);
+      await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/financial-result`)
         .set('Authorization', authB)
         .expect(404);
     });

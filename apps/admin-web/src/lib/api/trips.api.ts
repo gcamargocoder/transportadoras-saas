@@ -8,6 +8,7 @@ import type {
   TollReconciliationEntity,
   TripEntity,
   TripFinancialDashboardEntity,
+  TripFinancialResultEntity,
   TripFinancialSummaryEntity,
   TripMetricsEntity,
   TripOccurrenceEntity,
@@ -185,6 +186,12 @@ export function reopenTripSettlement(id: string, notes?: string) {
 
 export function getTripFinancialDashboard(id: string) {
   return api.get<TripFinancialDashboardEntity>(`/trips/${id}/financial-dashboard`);
+}
+
+// GET /trips/:id/financial-result (Fase 71) -- resultado financeiro real:
+// receita contratada/faturada/recebida, custos e metricas por km.
+export function getTripFinancialResult(id: string) {
+  return api.get<TripFinancialResultEntity>(`/trips/${id}/financial-result`);
 }
 
 // Conciliacao de pedagio (Fase 23) -- compara as pracas esperadas pela rota

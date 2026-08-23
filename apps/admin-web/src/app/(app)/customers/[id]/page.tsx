@@ -16,10 +16,17 @@ import { FreightTableFormModal } from '../../../../features/freight/freight-tabl
 import { TRIP_STATUS_TONE } from '../../../../features/trips/status';
 import { getBillingDashboard, listTripBillings } from '../../../../lib/api/billing-operational.api';
 import { listContracts, listFreightTables, getFreightDashboard } from '../../../../lib/api/freight.api';
+import { getReceivablesDashboard, listReceivables } from '../../../../lib/api/receivables.api';
 import { getCustomer, listTrips } from '../../../../lib/api/trips.api';
 import { FREIGHT_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { useAuth } from '../../../../hooks/use-auth';
-import { TRIP_BILLING_STATUS_LABELS, TRIP_BILLING_STATUS_TONE, TRIP_STATUS_LABELS } from '../../../../lib/labels';
+import {
+  RECEIVABLE_STATUS_LABELS,
+  RECEIVABLE_STATUS_TONE,
+  TRIP_BILLING_STATUS_LABELS,
+  TRIP_BILLING_STATUS_TONE,
+  TRIP_STATUS_LABELS,
+} from '../../../../lib/labels';
 import { formatCurrency, formatDate } from '../../../../utils/format';
 
 const RECENT_BILLINGS_LIMIT = 5;
@@ -66,6 +73,16 @@ export default function CustomerDetailPage(): JSX.Element {
   const recentBillingsQuery = useQuery({
     queryKey: ['billing', 'list', { customerId, pageSize: RECENT_BILLINGS_LIMIT }],
     queryFn: () => listTripBillings({ customerId, pageSize: RECENT_BILLINGS_LIMIT }),
+  });
+
+  const receivablesDashboardQuery = useQuery({
+    queryKey: ['receivables', 'dashboard', { customerId }],
+    queryFn: () => getReceivablesDashboard({ customerId }),
+  });
+
+  const openReceivablesQuery = useQuery({
+    queryKey: ['receivables', 'list', { customerId, status: undefined, pageSize: RECENT_BILLINGS_LIMIT }],
+    queryFn: () => listReceivables({ customerId, pageSize: RECENT_BILLINGS_LIMIT }),
   });
 
   if (customerQuery.isLoading) return <LoadingState label="Carregando cliente" />;
@@ -144,6 +161,53 @@ export default function CustomerDetailPage(): JSX.Element {
                   <span className="flex shrink-0 items-center gap-2">
                     <span className="font-medium">{formatCurrency(b.invoicedAmount)}</span>
                     <Badge tone={TRIP_BILLING_STATUS_TONE[b.status]}>{TRIP_BILLING_STATUS_LABELS[b.status]}</Badge>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+            Contas a receber — títulos gerados a partir do faturamento (Fase 72)
+          </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Faturado"
+              value={receivablesDashboardQuery.data ? formatCurrency(receivablesDashboardQuery.data.summary.totalInvoiced) : '—'}
+            />
+            <StatCard
+              label="Recebido"
+              value={receivablesDashboardQuery.data ? formatCurrency(receivablesDashboardQuery.data.summary.totalReceived) : '—'}
+              tone="success"
+            />
+            <StatCard
+              label="Saldo em aberto"
+              value={receivablesDashboardQuery.data ? formatCurrency(receivablesDashboardQuery.data.summary.totalOpen) : '—'}
+              tone="info"
+            />
+            <StatCard
+              label="Vencido"
+              value={receivablesDashboardQuery.data ? formatCurrency(receivablesDashboardQuery.data.summary.totalOverdue) : '—'}
+              tone="danger"
+            />
+          </div>
+          <Card className="mt-4">
+            <CardHeader title="Títulos" description="Mais recentes deste cliente." />
+            <ul className="divide-y divide-border">
+              {openReceivablesQuery.data?.items.length === 0 && (
+                <li className="px-5 py-4 text-sm text-ink-subtle">Nenhuma conta a receber gerada para este cliente ainda.</li>
+              )}
+              {openReceivablesQuery.data?.items.map((r) => (
+                <li key={r.id} className="flex items-center justify-between px-5 py-2.5 text-sm">
+                  <a href={`/trips/${r.tripId}`} className="min-w-0 truncate text-brand-700 hover:underline">
+                    {r.tripLabel ?? r.tripId}
+                  </a>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="text-ink-subtle">vence {formatDate(r.dueDate)}</span>
+                    <span className="font-medium">{formatCurrency(r.balance)}</span>
+                    <Badge tone={RECEIVABLE_STATUS_TONE[r.status]}>{RECEIVABLE_STATUS_LABELS[r.status]}</Badge>
                   </span>
                 </li>
               ))}

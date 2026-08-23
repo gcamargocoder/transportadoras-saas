@@ -35,6 +35,7 @@ import {
 } from '../../trip-settlements/constants/trip-settlement-roles.constants';
 import { CloseTripSettlementDto } from '../../trip-settlements/dto/close-trip-settlement.dto';
 import { TripFinancialDashboardEntity } from '../../trip-settlements/entities/trip-financial-dashboard.entity';
+import { TripFinancialResultEntity } from '../../trip-settlements/entities/trip-financial-result.entity';
 import { TripSettlementEntity } from '../../trip-settlements/entities/trip-settlement.entity';
 import { TripSettlementsService } from '../../trip-settlements/services/trip-settlements.service';
 import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
@@ -577,6 +578,30 @@ export class TripsController {
     @Param('id', ParseUUIDPipe) tripId: string,
   ): Promise<TripFinancialDashboardEntity> {
     return this.tripSettlementsService.getFinancialDashboard(
+      this.tenantContext.requireTenantId(),
+      tripId,
+    );
+  }
+
+  // ==========================================================================
+  // RESULTADO FINANCEIRO (Fase 71) -- consolida receita contratada/faturada/
+  // recebida, custos (combustivel/pedagio/despesas), resultado, margem e
+  // metricas por km. Reaproveita integralmente financial-dashboard acima
+  // para os custos (nenhum motor financeiro paralelo).
+  // ==========================================================================
+  @Get(':id/financial-result')
+  @Roles(...TRIP_SETTLEMENT_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Resultado financeiro real da viagem: receita contratada/faturada/recebida, custos ' +
+      '(combustivel/pedagio/despesas), resultado operacional, margem e metricas por km.',
+  })
+  @ApiOkResponse({ type: TripFinancialResultEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findFinancialResult(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<TripFinancialResultEntity> {
+    return this.tripSettlementsService.getFinancialResult(
       this.tenantContext.requireTenantId(),
       tripId,
     );
