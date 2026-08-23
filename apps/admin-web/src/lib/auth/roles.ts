@@ -89,6 +89,14 @@ export const FINANCE_READ_ROLES = OPERATIONAL_READ_ROLES;
 // Fase 75 -- conciliacao financeira, somente leitura, mesmo grupo.
 export const RECONCILIATION_READ_ROLES = OPERATIONAL_READ_ROLES;
 
+// Fase 76 -- fechamento financeiro/controle de periodo, mesmo grupo
+// operacional dos demais modulos financeiros.
+export const FINANCIAL_PERIOD_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const FINANCIAL_PERIOD_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
+// Fase 77 -- auditoria financeira, somente leitura, mesmo grupo.
+export const FINANCE_AUDIT_READ_ROLES = OPERATIONAL_READ_ROLES;
+
 export const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.ADMIN];
 export const SUPER_ADMIN_ONLY: UserRole[] = [UserRole.SUPER_ADMIN];
 

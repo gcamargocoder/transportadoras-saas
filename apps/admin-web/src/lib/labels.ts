@@ -12,6 +12,7 @@ import {
   ExpenseCategory,
   ExpensePaymentMethod,
   ExpenseStatus,
+  FinancialPeriodStatus,
   FiscalDocumentSource,
   FiscalDocumentStatus,
   FiscalDocumentType,
@@ -849,4 +850,53 @@ export const RECONCILIATION_ENTITY_TYPE_LABELS: Record<ReconciliationEntityType,
   Payable: 'Conta a pagar',
   TripBilling: 'Faturamento',
   TripExpense: 'Despesa',
+};
+
+// Fase 76 -- Fechamento Financeiro/Periodos.
+export const FINANCIAL_PERIOD_STATUS_LABELS: Record<FinancialPeriodStatus, string> = {
+  OPEN: 'Aberto',
+  CLOSED: 'Fechado',
+};
+
+export const FINANCIAL_PERIOD_STATUS_TONE: Record<FinancialPeriodStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  OPEN: 'info',
+  CLOSED: 'neutral',
+};
+
+// Fase 77 -- Auditoria Financeira. entityName/action sao strings livres em
+// AuditLog (nunca enums Prisma) -- os labels cobrem exatamente os valores
+// ja gravados por ReceivablesService/PayablesService/FinancialPeriodsService
+// (Fases 72/73/76), reaproveitados aqui, nunca renomeados.
+export const FINANCE_AUDIT_ENTITY_NAME_LABELS: Record<string, string> = {
+  Receivable: 'Conta a receber',
+  ReceivablePayment: 'Recebimento',
+  Payable: 'Conta a pagar',
+  PayablePayment: 'Pagamento',
+  FinancialPeriod: 'Período financeiro',
+};
+
+export const FINANCE_AUDIT_ACTION_LABELS: Record<string, string> = {
+  'receivable.created': 'Conta a receber criada',
+  'receivable.payment_created': 'Recebimento registrado',
+  'receivable.cancelled': 'Conta a receber cancelada',
+  'payable.created': 'Conta a pagar criada',
+  'payable.payment_created': 'Pagamento registrado',
+  'payable.cancelled': 'Conta a pagar cancelada',
+  'financial_period.created': 'Período aberto',
+  'financial_period.closed': 'Período fechado',
+};
+
+export const MONTH_LABELS: Record<number, string> = {
+  1: 'Janeiro',
+  2: 'Fevereiro',
+  3: 'Março',
+  4: 'Abril',
+  5: 'Maio',
+  6: 'Junho',
+  7: 'Julho',
+  8: 'Agosto',
+  9: 'Setembro',
+  10: 'Outubro',
+  11: 'Novembro',
+  12: 'Dezembro',
 };

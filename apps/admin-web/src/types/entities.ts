@@ -23,6 +23,7 @@ import type {
   FiscalDocumentStatus,
   FiscalDocumentType,
   FiscalIssueCode,
+  FinancialPeriodStatus,
   FleetType,
   FreightRuleStatus,
   FreightTableStatus,
@@ -3075,4 +3076,37 @@ export interface FinanceReconciliationEntity {
   byType: ReconciliationByTypeEntity[];
   bySeverity: ReconciliationBySeverityEntity[];
   issues: PaginatedFinanceReconciliationIssuesEntity;
+}
+
+// Fase 76 -- Fechamento Financeiro/Periodos. Camada de CONTROLE sobre os
+// ledgers ja existentes (Receivable/Payable) -- nunca um ledger novo.
+export interface FinancialPeriodSummaryEntity {
+  totalReceived: number;
+  totalPaid: number;
+  receivableOpen: number;
+  payableOpen: number;
+  criticalReconciliationIssues: number;
+}
+
+export interface FinancialPeriodEntity {
+  id: string;
+  year: number;
+  month: number;
+  status: FinancialPeriodStatus;
+  openedAt: string;
+  closedAt: string | null;
+  openedBy: string;
+  openerName: string | null;
+  closedBy: string | null;
+  closerName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Presente apenas no detalhe (GET /finance/periods/:id). */
+  summary?: FinancialPeriodSummaryEntity;
+  /**
+   * Presente apenas no detalhe (GET /finance/periods/:id). Historico de
+   * auditoria do PROPRIO periodo (financial_period.created/closed) --
+   * Fase 77, unico vinculo estruturalmente seguro com AuditLog.
+   */
+  auditHistory?: AuditLogEntity[];
 }

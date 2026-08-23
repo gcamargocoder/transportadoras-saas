@@ -46,14 +46,51 @@ export class AuditService {
   // Leitura do historico de auditoria de uma entidade especifica (ex:
   // "GET /vehicles/:id/history"). Reutilizavel por qualquer modulo que
   // queira expor esse mesmo tipo de rota no futuro -- nao fica preso ao
-  // modulo de frota.
+  // modulo de frota. Implementado por cima de search() (Fase 77) -- nenhuma
+  // duplicacao de query.
   async findByEntity(
     tenantId: string,
     entityName: string,
     entityId: string,
     pagination: { page: number; pageSize: number },
   ): Promise<{ items: AuditLog[]; total: number }> {
-    const where: Prisma.AuditLogWhereInput = { tenantId, entityName, entityId };
+    return this.search(tenantId, { entityNames: [entityName], entityId }, pagination);
+  }
+
+  // Leitura genErica, com filtros opcionais -- unico ponto de consulta
+  // paginada em AuditLog (Fase 77, ex: GET /finance/audit). tenantId e
+  // SEMPRE obrigatorio e sempre aplicado no where (nunca vaza entre
+  // tenants, mesmo que entityId pertenca a outro tenant -- nesse caso a
+  // combinacao tenantId+entityId simplesmente nao bate com nenhuma linha).
+  // Paginado no banco (skip/take), nunca carrega tudo para filtrar em
+  // memoria.
+  async search(
+    tenantId: string,
+    filters: {
+      entityNames?: string[];
+      entityId?: string;
+      action?: string;
+      userId?: string;
+      from?: Date;
+      to?: Date;
+    },
+    pagination: { page: number; pageSize: number },
+  ): Promise<{ items: AuditLog[]; total: number }> {
+    const where: Prisma.AuditLogWhereInput = {
+      tenantId,
+      ...(filters.entityNames ? { entityName: { in: filters.entityNames } } : {}),
+      ...(filters.entityId ? { entityId: filters.entityId } : {}),
+      ...(filters.action ? { action: filters.action } : {}),
+      ...(filters.userId ? { userId: filters.userId } : {}),
+      ...(filters.from || filters.to
+        ? {
+            createdAt: {
+              ...(filters.from ? { gte: filters.from } : {}),
+              ...(filters.to ? { lte: filters.to } : {}),
+            },
+          }
+        : {}),
+    };
     const [items, total] = await Promise.all([
       this.prisma.auditLog.findMany({
         where,

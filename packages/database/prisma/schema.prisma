@@ -718,6 +718,8 @@ model Tenant {
   payablePayments          PayablePayment[]
   /// Fase 61 -- motoristas, agregados e terceiros.
   driverVehicleAssignments DriverVehicleAssignment[]
+  /// Fase 76 -- controle de periodo financeiro (fechamento/competencia).
+  financialPeriods         FinancialPeriod[]
 
   @@map("tenants")
 }
@@ -952,6 +954,8 @@ model UserAccount {
   payablesCreated                 Payable[]                 @relation("PayableCreator")
   payablesCancelled               Payable[]                 @relation("PayableCanceller")
   payablePaymentsCreated          PayablePayment[]          @relation("PayablePaymentCreator")
+  financialPeriodsOpened          FinancialPeriod[]         @relation("FinancialPeriodOpener")
+  financialPeriodsClosed          FinancialPeriod[]         @relation("FinancialPeriodCloser")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -4131,6 +4135,49 @@ model PayablePayment {
   @@index([tenantId])
   @@index([tenantId, payableId])
   @@map("payable_payments")
+}
+
+// ============================================================================
+// FECHAMENTO FINANCEIRO / PERIODOS (Fase 76) — camada de CONTROLE sobre os
+// ledgers ja existentes (Receivable/Payable e seus pagamentos). NAO e um
+// ledger novo: nenhum valor financeiro e duplicado ou armazenado aqui, so o
+// estado (OPEN/CLOSED) de uma janela mensal por tenant. Fechar um periodo
+// nunca apaga/altera dados historicos, apenas passa a bloquear novas
+// mutacoes cuja data de competencia caia dentro dele (ver
+// FinancialPeriodGuard e docs/financial-periods.md).
+// ============================================================================
+
+enum FinancialPeriodStatus {
+  OPEN
+  CLOSED
+
+  @@map("financial_period_status")
+}
+
+/// Periodo financeiro mensal de um tenant (year/month, ex: 2026-08).
+/// @@unique([tenantId, year, month]) garante no maximo um periodo por mes
+/// por tenant. CLOSED nunca volta para OPEN nesta fase (secao 21 do pedido
+/// -- reabertura fica para fase futura).
+model FinancialPeriod {
+  id        String                @id @default(uuid()) @db.Uuid
+  tenantId  String                @map("tenant_id") @db.Uuid
+  year      Int
+  month     Int
+  status    FinancialPeriodStatus @default(OPEN)
+  openedAt  DateTime              @default(now()) @map("opened_at")
+  closedAt  DateTime?             @map("closed_at")
+  openedBy  String                @map("opened_by") @db.Uuid
+  closedBy  String?               @map("closed_by") @db.Uuid
+  createdAt DateTime              @default(now()) @map("created_at")
+  updatedAt DateTime              @updatedAt @map("updated_at")
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  opener UserAccount @relation("FinancialPeriodOpener", fields: [openedBy], references: [id], onDelete: Restrict)
+  closer UserAccount? @relation("FinancialPeriodCloser", fields: [closedBy], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, year, month])
+  @@index([tenantId, status])
+  @@map("financial_periods")
 }
 
 // ============================================================================

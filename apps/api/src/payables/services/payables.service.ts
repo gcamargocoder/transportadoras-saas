@@ -6,6 +6,7 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { FinancialPeriodGuardService } from '../../financial-periods/services/financial-period-guard.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FindPayablesQueryDto } from '../dto/find-payables-query.dto';
 import { GeneratePayableDto } from '../dto/generate-payable.dto';
@@ -33,6 +34,7 @@ export class PayablesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly periodGuard: FinancialPeriodGuardService,
   ) {}
 
   // POST /payables/from-expense/:expenseId -- secao 7: 1 titulo por
@@ -66,6 +68,11 @@ export class PayablesService {
     if (existing) {
       throw new ConflictException('Ja existe uma conta a pagar gerada para esta despesa.');
     }
+
+    // Fase 76, secao 9/10 -- competencia do titulo = issueDate (snapshot de
+    // TripExpense.expenseDate, secao 10 do pedido). Bloqueia ANTES de criar
+    // se o periodo daquele mes ja estiver fechado.
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, expense.expenseDate);
 
     const originalAmount = toNumberOrNull(expense.amount) ?? 0;
     const status = computeWrittenStatus(originalAmount, 0, null);
@@ -188,6 +195,11 @@ export class PayablesService {
       );
     }
 
+    // Fase 76, secao 9/10 -- competencia do pagamento = paymentDate (data
+    // informada pelo usuario, secao 10 do pedido).
+    const paymentDate = new Date(dto.paymentDate);
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, paymentDate);
+
     const newPaidAmount = paidAmount + dto.amount;
     const newStatus = computeWrittenStatus(originalAmount, newPaidAmount, null);
 
@@ -197,7 +209,7 @@ export class PayablesService {
           tenantId,
           payableId: id,
           amount: dto.amount,
-          paymentDate: new Date(dto.paymentDate),
+          paymentDate,
           paymentMethod: dto.paymentMethod,
           createdBy: actor.userId,
           ...(dto.reference ? { reference: dto.reference } : {}),
@@ -220,6 +232,7 @@ export class PayablesService {
       newValue: toJsonSafe({
         payableId: id,
         amount: dto.amount,
+        paymentDate,
         paymentMethod: dto.paymentMethod,
         newPaidAmount,
         newStatus,
@@ -238,6 +251,10 @@ export class PayablesService {
     if (payable.cancelledAt) {
       throw new ConflictException('Este titulo ja esta cancelado.');
     }
+
+    // Fase 76, secao 9/10 -- cancelamento protegido pela competencia do
+    // PROPRIO titulo (issueDate), nunca pela data do cancelamento.
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, payable.issueDate);
 
     const cancelledAt = new Date();
     await this.prisma.payable.update({

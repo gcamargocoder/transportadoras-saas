@@ -6,6 +6,7 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { FinancialPeriodGuardService } from '../../financial-periods/services/financial-period-guard.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FindReceivablesQueryDto } from '../dto/find-receivables-query.dto';
 import { GenerateReceivableDto } from '../dto/generate-receivable.dto';
@@ -35,6 +36,7 @@ export class ReceivablesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly periodGuard: FinancialPeriodGuardService,
   ) {}
 
   // POST /receivables/from-billing/:billingId -- secao 6: 1 titulo por
@@ -79,6 +81,12 @@ export class ReceivablesService {
       throw new ConflictException('Ja existe uma conta a receber gerada para este faturamento.');
     }
 
+    // Fase 76, secao 9/10 -- competencia do titulo = issueDate (data de
+    // emissao, sempre "hoje" nesta criacao -- secao 10 do pedido). Bloqueia
+    // ANTES de criar se o periodo do mes corrente ja estiver fechado.
+    const issueDate = new Date();
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, issueDate);
+
     const status = computeWrittenStatus(invoicedAmount, 0, null);
     const created = await this.prisma.receivable.create({
       data: {
@@ -89,7 +97,7 @@ export class ReceivablesService {
         description: dto.description?.trim() || `Faturamento da viagem ${billing.trip.origin.name} → ${billing.trip.destination.name}`,
         originalAmount: invoicedAmount,
         receivedAmount: 0,
-        issueDate: new Date(),
+        issueDate,
         dueDate: new Date(dto.dueDate),
         status,
         createdBy: actor.userId,
@@ -199,6 +207,11 @@ export class ReceivablesService {
       );
     }
 
+    // Fase 76, secao 9/10 -- competencia do recebimento = paymentDate (data
+    // informada pelo usuario, secao 10 do pedido).
+    const paymentDate = new Date(dto.paymentDate);
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, paymentDate);
+
     const newReceivedAmount = receivedAmount + dto.amount;
     const newStatus = computeWrittenStatus(originalAmount, newReceivedAmount, null);
 
@@ -208,7 +221,7 @@ export class ReceivablesService {
           tenantId,
           receivableId: id,
           amount: dto.amount,
-          paymentDate: new Date(dto.paymentDate),
+          paymentDate,
           paymentMethod: dto.paymentMethod,
           createdBy: actor.userId,
           ...(dto.reference ? { reference: dto.reference } : {}),
@@ -231,6 +244,7 @@ export class ReceivablesService {
       newValue: toJsonSafe({
         receivableId: id,
         amount: dto.amount,
+        paymentDate,
         paymentMethod: dto.paymentMethod,
         newReceivedAmount,
         newStatus,
@@ -249,6 +263,10 @@ export class ReceivablesService {
     if (receivable.cancelledAt) {
       throw new ConflictException('Este titulo ja esta cancelado.');
     }
+
+    // Fase 76, secao 9/10 -- cancelamento protegido pela competencia do
+    // PROPRIO titulo (issueDate), nunca pela data do cancelamento.
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, receivable.issueDate);
 
     const cancelledAt = new Date();
     await this.prisma.receivable.update({

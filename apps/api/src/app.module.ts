@@ -19,6 +19,8 @@ import { FleetModule } from './fleet/fleet.module';
 import { FleetOperationsModule } from './fleet-operations/fleet-operations.module';
 import { FinanceModule } from './finance/finance.module';
 import { FinanceReconciliationModule } from './finance-reconciliation/finance-reconciliation.module';
+import { FinanceAuditModule } from './finance-audit/finance-audit.module';
+import { FinancialPeriodsModule } from './financial-periods/financial-periods.module';
 import { FiscalModule } from './fiscal/fiscal.module';
 import { FreightModule } from './freight/freight.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
@@ -98,6 +100,8 @@ import { UsersModule } from './users/users.module';
     PayablesModule,
     FinanceModule,
     FinanceReconciliationModule,
+    FinancialPeriodsModule,
+    FinanceAuditModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

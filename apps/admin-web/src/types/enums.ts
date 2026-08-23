@@ -758,6 +758,14 @@ export type ReceivableStatus = (typeof ReceivableStatus)[keyof typeof Receivable
 // inclui OVERDUE, que nunca existe como valor persistido no backend.
 export type ReceivableEffectiveStatus = ReceivableStatus | 'OVERDUE';
 
+// Fase 76 -- Fechamento Financeiro/Periodos. CLOSED nunca volta para OPEN
+// nesta fase (sem reabertura, ver docs/financial-periods.md).
+export const FinancialPeriodStatus = {
+  OPEN: 'OPEN',
+  CLOSED: 'CLOSED',
+} as const;
+export type FinancialPeriodStatus = (typeof FinancialPeriodStatus)[keyof typeof FinancialPeriodStatus];
+
 export const ReceivablePaymentMethod = {
   PIX: 'PIX',
   BANK_TRANSFER: 'BANK_TRANSFER',
