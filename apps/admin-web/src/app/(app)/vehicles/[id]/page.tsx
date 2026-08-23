@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { AlertTriangle, Ban, CheckCircle2, Pencil, PowerOff } from 'lucide-react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../../components/ui/badge';
 import { Button } from '../../../../components/ui/button';
@@ -40,6 +40,7 @@ import {
   FLEET_ALERT_SEVERITY_TONE,
   MAINTENANCE_STATUS_LABELS,
   MAINTENANCE_TYPE_LABELS,
+  TIRE_STATUS_LABELS,
   TRIP_STATUS_LABELS,
   VEHICLE_AVAILABILITY_LABELS,
   VEHICLE_AVAILABILITY_TONE,
@@ -49,17 +50,19 @@ import {
   VEHICLE_STATUS_LABELS,
   VEHICLE_TYPE_LABELS,
 } from '../../../../lib/labels';
-import type { FuelSupplyEntity, MaintenanceEntity, VehicleTagEntity } from '../../../../types/entities';
+import { TIRE_STATUS_TONE } from '../../../../features/tires/status';
+import type { FuelSupplyEntity, MaintenanceEntity, VehicleTagEntity, VehicleTireSummaryEntity } from '../../../../types/entities';
 import type { VehicleStatus } from '../../../../types/enums';
 import { formatCurrency, formatDate, formatDateTime, formatNumber, formatPercent } from '../../../../utils/format';
 
 const RECENT_TRIPS_LIMIT = 10;
 
-type TabValue = 'overview' | 'driver' | 'trips' | 'documents' | 'costs' | 'history';
+type TabValue = 'overview' | 'driver' | 'trips' | 'tires' | 'documents' | 'costs' | 'history';
 
 export default function VehicleDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
   const vehicleId = params.id;
+  const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -83,7 +86,7 @@ export default function VehicleDetailPage(): JSX.Element {
 
   const fuelHistoryQuery = useQuery({
     queryKey: ['vehicles', vehicleId, 'fuel-history'],
-    queryFn: () => getVehicleFuelHistory(vehicleId, { pageSize: 50 }),
+    queryFn: () => getVehicleFuelHistory(vehicleId, 50),
     enabled: tab === 'costs',
   });
 
@@ -133,6 +136,25 @@ export default function VehicleDetailPage(): JSX.Element {
             {MAINTENANCE_STATUS_LABELS[row.original.status]}
           </Badge>
         ),
+      },
+    ],
+    [],
+  );
+
+  const tireColumns = useMemo<ColumnDef<VehicleTireSummaryEntity, unknown>[]>(
+    () => [
+      { header: 'Posição', accessorFn: (row) => row.position ?? '-' },
+      { header: 'Identificação', accessorFn: (row) => row.fireNumber },
+      { header: 'Fabricante/Modelo', accessorFn: (row) => `${row.manufacturer} ${row.model}` },
+      {
+        header: 'Sulco atual',
+        cell: ({ row }) =>
+          row.original.currentTreadDepthMm !== null ? `${formatNumber(row.original.currentTreadDepthMm, 1)} mm` : '-',
+      },
+      { header: 'Instalado desde', cell: ({ row }) => (row.original.installedAt ? formatDate(row.original.installedAt) : '-') },
+      {
+        header: 'Status',
+        cell: ({ row }) => <Badge tone={TIRE_STATUS_TONE[row.original.status]}>{TIRE_STATUS_LABELS[row.original.status]}</Badge>,
       },
     ],
     [],
@@ -247,6 +269,7 @@ export default function VehicleDetailPage(): JSX.Element {
           { value: 'overview', label: 'Visão geral' },
           { value: 'driver', label: 'Motorista' },
           { value: 'trips', label: 'Viagens' },
+          { value: 'tires', label: 'Pneus' },
           { value: 'documents', label: 'Documentos' },
           { value: 'costs', label: 'Custos' },
           { value: 'history', label: 'Histórico' },
@@ -384,6 +407,22 @@ export default function VehicleDetailPage(): JSX.Element {
           </div>
         )}
 
+        {tab === 'tires' && (
+          <div>
+            <DataTable
+              columns={tireColumns}
+              data={overview.tires}
+              getRowId={(t) => t.tireId}
+              emptyTitle="Nenhum pneu montado neste veículo"
+              onRowClick={(t) => router.push(`/tires/${t.tireId}`)}
+            />
+            <p className="border-t border-border px-5 py-3 text-xs text-ink-subtle">
+              Para instalar, retirar, transferir, recapar ou descartar um pneu, acesse o detalhe do pneu (clique na
+              linha) — as ações completas de manutenção de pneus ficam concentradas lá para não duplicar fluxos.
+            </p>
+          </div>
+        )}
+
         {tab === 'documents' && (
           <div className="flex flex-col gap-6 p-5">
             <div>
@@ -465,7 +504,30 @@ export default function VehicleDetailPage(): JSX.Element {
               />
             </div>
             <div className="border-t border-border">
-              <CardHeader title="Abastecimentos" className="px-5" />
+              <CardHeader
+                title="Abastecimentos"
+                description="Totais e consumo médio consideram o histórico completo do veículo, não só os itens listados."
+                className="px-5"
+              />
+              {fuelHistoryQuery.data && (
+                <div className="grid grid-cols-2 gap-4 px-5 pb-4 sm:grid-cols-4">
+                  <StatCard label="Litros abastecidos" value={`${formatNumber(fuelHistoryQuery.data.totalLiters, 1)} L`} />
+                  <StatCard label="Custo com combustível" value={formatCurrency(fuelHistoryQuery.data.totalAmount)} />
+                  <StatCard
+                    label="Consumo médio"
+                    value={
+                      fuelHistoryQuery.data.averageConsumptionKmL !== null
+                        ? `${formatNumber(fuelHistoryQuery.data.averageConsumptionKmL, 1)} km/L`
+                        : '—'
+                    }
+                  />
+                  <StatCard
+                    label="Hodômetro"
+                    value={fuelHistoryQuery.data.hasOdometerRegression ? 'Inconsistência detectada' : 'Sem inconsistências'}
+                    tone={fuelHistoryQuery.data.hasOdometerRegression ? 'danger' : 'success'}
+                  />
+                </div>
+              )}
               <DataTable
                 columns={fuelColumns}
                 data={fuelHistoryQuery.data?.items ?? []}

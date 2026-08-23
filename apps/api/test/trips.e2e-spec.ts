@@ -608,7 +608,12 @@ describe('Trips (e2e)', () => {
   });
 
   describe('GET /trips/:id/timeline', () => {
-    it('registra eventos com quem, quando, IP e user-agent', async () => {
+    // Fase 67 -- timeline evoluida de "so AuditLog" para uma projecao
+    // unificada (ver test/trip-timeline.e2e-spec.ts para a cobertura
+    // completa de agregacao/filtros/paginacao/N+1). Este bloco cobre so o
+    // caso basico (eventos de auditoria da propria viagem, origin=AUDIT) --
+    // preservado aqui por ja existir desde a Fase 28.
+    it('registra eventos de auditoria da viagem (origin=AUDIT) com rotulo legivel', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('Timeline');
       const auth = `Bearer ${adminAccessToken}`;
       const prereqs = await setupTripPrerequisites(auth);
@@ -630,8 +635,9 @@ describe('Trips (e2e)', () => {
         .set('Authorization', auth)
         .expect(200);
 
-      const actions = timelineRes.body.data.items.map((i: { action: string }) => i.action);
-      expect(actions).toEqual(
+      const auditItems = timelineRes.body.data.items.filter((i: { origin: string }) => i.origin === 'AUDIT');
+      const types = auditItems.map((i: { type: string }) => i.type);
+      expect(types).toEqual(
         expect.arrayContaining([
           'trip.created',
           'trip.driver_linked',
@@ -639,10 +645,9 @@ describe('Trips (e2e)', () => {
           'trip.started',
         ]),
       );
-      const first = timelineRes.body.data.items[0];
-      expect(first.userId).toBeTruthy();
-      expect(first.ipAddress).toBeTruthy();
-      expect(first.createdAt).toBeTruthy();
+      const startedItem = auditItems.find((i: { type: string }) => i.type === 'trip.started');
+      expect(startedItem.label).toBe('Viagem iniciada');
+      expect(startedItem.occurredAt).toBeTruthy();
     });
 
     it('timeline de viagem inexistente retorna 404', async () => {

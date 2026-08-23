@@ -1,6 +1,48 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { TireLocationType, TireStatus } from '@prisma/client';
 
+// Fase 64 -- indicadores de vida util (secao 10 do pedido), calculados
+// somente em GET /tires/:id (nunca em GET /tires -- evitaria N+1 real numa
+// listagem paginada, ja que exige agregacoes extras de recapagens/
+// inspecoes/movimentacoes por pneu). costPerKm segue o MESMO padrao ja
+// estabelecido em FleetMaintenanceCostPerKmEntity/FleetFuelCostPerKmEntity:
+// available/reason nunca mascarados com um valor calculado sobre dado
+// ausente.
+export class TireCostPerKmEntity {
+  @ApiProperty({ nullable: true })
+  value!: number | null;
+
+  @ApiProperty()
+  available!: boolean;
+
+  @ApiProperty({ nullable: true, description: 'INSUFFICIENT_ODOMETER_READINGS quando available=false.' })
+  reason!: string | null;
+}
+
+export class TireLifecycleEntity {
+  @ApiProperty({ description: 'purchasePrice + soma de TireRetread.cost.' })
+  totalCost!: number;
+
+  @ApiProperty({ description: 'Quantidade de recapagens + inspecoes registradas.' })
+  interventionsCount!: number;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Dias desde a movimentacao mais recente que instalou o pneu (locationType atual != STOCK). ' +
+      'Null quando o pneu esta em estoque ou nunca foi movimentado.',
+  })
+  daysInstalled!: number | null;
+
+  @ApiProperty({
+    type: TireCostPerKmEntity,
+    description:
+      'Baseado na maior e menor leitura de odometerKm ja registradas nas movimentacoes deste pneu ' +
+      '(nunca uma distancia estimada) -- disponivel somente com 2+ leituras distintas.',
+  })
+  costPerKm!: TireCostPerKmEntity;
+}
+
 export class TireEntity {
   @ApiProperty({ format: 'uuid' })
   id!: string;
@@ -79,4 +121,11 @@ export class TireEntity {
 
   @ApiProperty()
   updatedAt!: Date;
+
+  @ApiProperty({
+    type: TireLifecycleEntity,
+    nullable: true,
+    description: 'Fase 64 -- populado apenas em GET /tires/:id, null em listagens (GET /tires).',
+  })
+  lifecycle!: TireLifecycleEntity | null;
 }

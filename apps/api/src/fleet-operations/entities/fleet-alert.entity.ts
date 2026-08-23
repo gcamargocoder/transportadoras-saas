@@ -43,7 +43,31 @@ export type FleetAlertType =
   | 'VEHICLE_DOCUMENT_EXPIRING_SOON'
   | 'VEHICLE_DRIVER_UNAVAILABLE'
   | 'VEHICLE_TRIP_DATA_INCONSISTENCY'
-  | 'VEHICLE_OPEN_MAINTENANCE';
+  | 'VEHICLE_OPEN_MAINTENANCE'
+  // Fase 63 -- manutencao (GET /vehicles/:id/overview, VehicleOverviewService)
+  // quebra o alerta agregado VEHICLE_OPEN_MAINTENANCE em granularidade por
+  // situacao real da manutencao (nunca substitui o agregado, so complementa).
+  | 'VEHICLE_MAINTENANCE_IN_PROGRESS'
+  | 'VEHICLE_MAINTENANCE_SCHEDULED'
+  | 'VEHICLE_MAINTENANCE_OVERDUE'
+  | 'VEHICLE_UNAVAILABLE_MAINTENANCE'
+  // Fase 64 -- pneu(s) do veiculo proximo(s) da troca (mesmo limiar de
+  // NEAR_REPLACEMENT_THRESHOLD_MM ja usado em TIRE_NEAR_REPLACEMENT/
+  // GET /tires/dashboard, so que no escopo de UM veiculo).
+  | 'VEHICLE_TIRE_NEAR_REPLACEMENT'
+  // Fase 65 -- hodometro regressivo entre abastecimentos deste veiculo
+  // (mesma deteccao de ODOMETER_REGRESSION, no escopo de UM veiculo).
+  | 'VEHICLE_FUEL_ODOMETER_REGRESSION'
+  // Fase 68 -- TripOccurrence (Fase 67) com severity=CRITICAL e status=OPEN
+  // (resolvedAt/cancelledAt nulos). TRIP_OCCURRENCE_CRITICAL aparece no
+  // dashboard consolidado (GET /fleet-operations/dashboard, computeAlerts);
+  // VEHICLE_OCCURRENCE_CRITICAL e o equivalente no escopo de UM veiculo
+  // (GET /vehicles/:id/overview, VehicleOverviewService), mesmo par
+  // fleet-wide/per-vehicle ja usado para manutencao/pneu/hodometro acima.
+  // Deixa de ser alerta assim que resolvedAt OU cancelledAt e preenchido --
+  // nunca uma maquina de estados nova, so reflete o status ja derivado.
+  | 'TRIP_OCCURRENCE_CRITICAL'
+  | 'VEHICLE_OCCURRENCE_CRITICAL';
 
 export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
 
@@ -73,6 +97,14 @@ export const FLEET_ALERT_TYPES: FleetAlertType[] = [
   'VEHICLE_DRIVER_UNAVAILABLE',
   'VEHICLE_TRIP_DATA_INCONSISTENCY',
   'VEHICLE_OPEN_MAINTENANCE',
+  'VEHICLE_MAINTENANCE_IN_PROGRESS',
+  'VEHICLE_MAINTENANCE_SCHEDULED',
+  'VEHICLE_MAINTENANCE_OVERDUE',
+  'VEHICLE_UNAVAILABLE_MAINTENANCE',
+  'VEHICLE_TIRE_NEAR_REPLACEMENT',
+  'VEHICLE_FUEL_ODOMETER_REGRESSION',
+  'TRIP_OCCURRENCE_CRITICAL',
+  'VEHICLE_OCCURRENCE_CRITICAL',
 ];
 
 export class FleetAlertEntity {

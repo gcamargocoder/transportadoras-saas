@@ -109,6 +109,12 @@ export class FleetMaintenanceDashboardEntity {
   @ApiProperty({ description: 'OPEN + IN_PROGRESS + WAITING_PARTS.' })
   openCount!: number;
 
+  @ApiProperty({ description: 'Fase 63 -- apenas status IN_PROGRESS (subconjunto de openCount).' })
+  inProgressCount!: number;
+
+  @ApiProperty({ description: 'Fase 63 -- veiculos distintos com pelo menos uma manutencao IN_PROGRESS agora.' })
+  vehiclesInMaintenanceCount!: number;
+
   @ApiProperty({ description: 'Fase 45 -- apenas status COMPLETED (ate a Fase 44, este campo somava COMPLETED + CANCELLED).' })
   completedCount!: number;
 

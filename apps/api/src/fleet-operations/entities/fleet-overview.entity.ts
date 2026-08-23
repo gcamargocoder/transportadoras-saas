@@ -38,4 +38,19 @@ export class FleetOverviewEntity {
 
   @ApiProperty({ description: 'Alertas (Alert) nao reconhecidos (acknowledgedAt nulo).' })
   openAlerts!: number;
+
+  // Fase 68 -- TripOccurrence (Fase 67). status sempre derivado de
+  // resolvedAt/cancelledAt, nunca uma coluna propria -- ver
+  // GET /fleet-operations/occurrences para o dashboard completo.
+  @ApiProperty({ description: 'Ocorrencias com status OPEN.' })
+  openOccurrences!: number;
+
+  @ApiProperty({ description: 'Ocorrencias com status OPEN e severity CRITICAL.' })
+  criticalOpenOccurrences!: number;
+
+  @ApiProperty({ description: 'Ocorrencias com status RESOLVED.' })
+  resolvedOccurrences!: number;
+
+  @ApiProperty({ description: 'Ocorrencias com status CANCELLED.' })
+  cancelledOccurrences!: number;
 }

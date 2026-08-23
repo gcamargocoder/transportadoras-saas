@@ -1,7 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-// Valores executados (actual*) ficam sempre null nesta fase -- serao
-// preenchidos por fases futuras (rastreamento/telemetria/pedagio).
+// Valores executados (actual*) sao calculados automaticamente por
+// TripsService.updateActualTripMetrics quando a viagem e concluida (Fase 66)
+// -- nunca aceitos do cliente. actualDistanceKm fica null quando
+// finalOdometerKm nao foi informado no encerramento ou Trip.initialOdometerKm
+// nunca foi gravado (so o app do motorista grava, na largada).
 export class TripMetricsEntity {
   @ApiProperty({ format: 'uuid' })
   id!: string;

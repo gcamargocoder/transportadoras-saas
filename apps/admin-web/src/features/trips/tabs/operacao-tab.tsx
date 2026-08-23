@@ -6,15 +6,39 @@ import { useMemo } from 'react';
 import { Badge } from '../../../components/ui/badge';
 import { Card } from '../../../components/ui/card';
 import { DataTable } from '../../../components/ui/data-table';
+import { listChecklistExecutions } from '../../../lib/api/checklist.api';
+import { listFuelSupplies } from '../../../lib/api/fuel.api';
 import { listAxleEvents, listTripLocations, listTripStops } from '../../../lib/api/trip-operations.api';
 import {
   AXLE_EVENT_SOURCE_LABELS,
+  FUEL_TYPE_LABELS,
   SYNC_STATUS_LABELS,
   TRIP_STOP_TYPE_LABELS,
 } from '../../../lib/labels';
-import type { AxleEventEntity, TripStopEntity } from '../../../types/entities';
-import { formatDateTime, formatNumber } from '../../../utils/format';
+import type { AxleEventEntity, ChecklistExecutionEntity, FuelSupplyEntity, TripStopEntity } from '../../../types/entities';
+import type { ChecklistExecutionStatus } from '../../../types/enums';
+import { formatCurrency, formatDateTime, formatNumber } from '../../../utils/format';
 import { SYNC_STATUS_TONE, TRIP_STOP_TYPE_TONE } from '../operation-status';
+
+// Fase 66 -- FuelSupply.tripId e ChecklistExecution.tripId ja existiam
+// (Fases 25/38), so nunca tinham visibilidade na tela da viagem -- somente
+// leitura aqui, reaproveitando os endpoints administrativos ja existentes
+// (?tripId=), sem sub-recurso novo em TripsController.
+const CHECKLIST_STATUS_LABELS: Record<ChecklistExecutionStatus, string> = {
+  DRAFT: 'Rascunho',
+  IN_PROGRESS: 'Em andamento',
+  COMPLETED: 'Concluído',
+  FAILED: 'Reprovado',
+  CANCELLED: 'Cancelado',
+};
+
+const CHECKLIST_STATUS_TONE: Record<ChecklistExecutionStatus, 'neutral' | 'info' | 'success' | 'danger' | 'warning'> = {
+  DRAFT: 'neutral',
+  IN_PROGRESS: 'info',
+  COMPLETED: 'success',
+  FAILED: 'danger',
+  CANCELLED: 'warning',
+};
 
 // Fase 25 -- visibilidade administrativa (somente leitura) do que o app do
 // motorista registrou: ultima posicao, paradas e excecoes de eixo. Sem
@@ -32,6 +56,14 @@ export function OperacaoTab({ tripId }: { tripId: string }): JSX.Element {
   const axleEventsQuery = useQuery({
     queryKey: ['trip-axle-events', tripId],
     queryFn: () => listAxleEvents(tripId),
+  });
+  const fuelSuppliesQuery = useQuery({
+    queryKey: ['trip-fuel-supplies', tripId],
+    queryFn: () => listFuelSupplies({ tripId, pageSize: 50 }),
+  });
+  const checklistsQuery = useQuery({
+    queryKey: ['trip-checklists', tripId],
+    queryFn: () => listChecklistExecutions({ tripId, pageSize: 50 }),
   });
 
   const lastLocation = locationsQuery.data?.[0] ?? null;
@@ -97,6 +129,45 @@ export function OperacaoTab({ tripId }: { tripId: string }): JSX.Element {
     [],
   );
 
+  const fuelColumns = useMemo<ColumnDef<FuelSupplyEntity, unknown>[]>(
+    () => [
+      { header: 'Data', cell: ({ row }) => formatDateTime(row.original.supplyDate) },
+      { header: 'Posto', accessorFn: (row) => row.fuelStationName ?? '-' },
+      { header: 'Combustível', accessorFn: (row) => FUEL_TYPE_LABELS[row.fuelType] },
+      { header: 'Litros', cell: ({ row }) => `${formatNumber(row.original.liters, 1)} L` },
+      { header: 'Valor', cell: ({ row }) => formatCurrency(row.original.totalAmount) },
+      { header: 'Odômetro', cell: ({ row }) => `${formatNumber(row.original.odometerKm)} km` },
+    ],
+    [],
+  );
+
+  const checklistColumns = useMemo<ColumnDef<ChecklistExecutionEntity, unknown>[]>(
+    () => [
+      { header: 'Início', cell: ({ row }) => formatDateTime(row.original.startedAt) },
+      {
+        header: 'Conclusão',
+        cell: ({ row }) => (row.original.completedAt ? formatDateTime(row.original.completedAt) : '-'),
+      },
+      {
+        header: 'Status',
+        cell: ({ row }) => (
+          <Badge tone={CHECKLIST_STATUS_TONE[row.original.status]}>
+            {CHECKLIST_STATUS_LABELS[row.original.status]}
+          </Badge>
+        ),
+      },
+      {
+        header: 'Não conformidade crítica',
+        cell: ({ row }) => (
+          <Badge tone={row.original.hasCriticalNonConformity ? 'danger' : 'success'}>
+            {row.original.hasCriticalNonConformity ? 'Sim' : 'Não'}
+          </Badge>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="flex flex-col gap-4 p-4">
       <Card className="p-4">
@@ -136,6 +207,32 @@ export function OperacaoTab({ tripId }: { tripId: string }): JSX.Element {
           onRetry={() => axleEventsQuery.refetch()}
           getRowId={(e) => e.id}
           emptyTitle="Nenhuma exceção de eixo registrada nesta viagem"
+        />
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-ink">Abastecimentos</h3>
+        <DataTable
+          columns={fuelColumns}
+          data={fuelSuppliesQuery.data?.items ?? []}
+          isLoading={fuelSuppliesQuery.isLoading}
+          isError={fuelSuppliesQuery.isError}
+          onRetry={() => fuelSuppliesQuery.refetch()}
+          getRowId={(s) => s.id}
+          emptyTitle="Nenhum abastecimento registrado nesta viagem"
+        />
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-ink">Checklists</h3>
+        <DataTable
+          columns={checklistColumns}
+          data={checklistsQuery.data?.items ?? []}
+          isLoading={checklistsQuery.isLoading}
+          isError={checklistsQuery.isError}
+          onRetry={() => checklistsQuery.refetch()}
+          getRowId={(c) => c.id}
+          emptyTitle="Nenhum checklist registrado nesta viagem"
         />
       </div>
     </div>

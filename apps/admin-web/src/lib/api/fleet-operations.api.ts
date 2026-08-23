@@ -5,6 +5,7 @@ import type {
   FleetFinancialDashboardEntity,
   FleetFuelAnalyticsEntity,
   FleetMaintenanceDashboardEntity,
+  FleetOccurrencesDashboardEntity,
   FleetOperationalIndicatorsEntity,
   FleetOperationsDashboardEntity,
   FleetDowntimeCostEntity,
@@ -18,6 +19,9 @@ import type {
   RevenueCategory,
   TireStatus,
   TrailerType,
+  TripOccurrenceSeverity,
+  TripOccurrenceStatus,
+  TripOccurrenceType,
   TripStopStatus,
   TripStopType,
   VehicleStatus,
@@ -113,4 +117,21 @@ export function getFleetOperationsCompositions(query: FleetOperationsQuery = {},
 // categoria/status).
 export function getFleetOperationsFinancial(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
   return api.get<FleetFinancialDashboardEntity>('/fleet-operations/financial', query, signal);
+}
+
+// Fase 68 -- dashboard de ocorrencias (TripOccurrence, Fase 67). DTO proprio
+// (nao reaproveita FleetOperationsQuery -- from/to/type/status la ja tem
+// outro significado, ver find-fleet-occurrences-query.dto.ts no backend).
+export interface FleetOccurrencesQuery extends QueryableParams {
+  from?: string | undefined;
+  to?: string | undefined;
+  vehicleId?: string | undefined;
+  driverId?: string | undefined;
+  type?: TripOccurrenceType | undefined;
+  severity?: TripOccurrenceSeverity | undefined;
+  status?: TripOccurrenceStatus | undefined;
+}
+
+export function getFleetOperationsOccurrences(query: FleetOccurrencesQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetOccurrencesDashboardEntity>('/fleet-operations/occurrences', query, signal);
 }

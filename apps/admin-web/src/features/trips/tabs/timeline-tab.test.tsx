@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuditLogEntity } from '../../../types/entities';
+import type { TripTimelineEventEntity } from '../../../types/entities';
 import { TimelineTab } from './timeline-tab';
 
 const getTripTimelineMock = vi.fn();
@@ -19,39 +19,40 @@ function renderTab() {
   return render(<TimelineTab tripId="trip-1" />, { wrapper: Wrapper });
 }
 
-const EVENTS: AuditLogEntity[] = [
+const EVENTS: TripTimelineEventEntity[] = [
   {
     id: 'log-1',
-    tenantId: 'tenant-1',
-    userId: 'user-1',
-    action: 'trip.started',
-    entityName: 'Trip',
-    entityId: 'trip-1',
-    previousValue: { status: 'PLANNED' },
-    newValue: { status: 'IN_PROGRESS' },
-    ipAddress: null,
-    userAgent: null,
-    createdAt: '2026-09-01T08:00:00.000Z',
+    origin: 'AUDIT',
+    type: 'trip.started',
+    label: 'Viagem iniciada',
+    description: null,
+    severity: null,
+    occurredAt: '2026-09-01T08:00:00.000Z',
   },
   {
-    id: 'log-2',
-    tenantId: 'tenant-1',
-    userId: 'user-1',
-    action: 'trip.paused',
-    entityName: 'Trip',
-    entityId: 'trip-1',
-    previousValue: { status: 'IN_PROGRESS' },
-    newValue: { status: 'PAUSED' },
-    ipAddress: null,
-    userAgent: null,
-    createdAt: '2026-09-01T10:00:00.000Z',
+    id: 'stop-1',
+    origin: 'STOP',
+    type: 'REST',
+    label: 'Parada operacional',
+    description: 'Posto Ipiranga km 120',
+    severity: null,
+    occurredAt: '2026-09-01T09:00:00.000Z',
+  },
+  {
+    id: 'occ-1',
+    origin: 'OCCURRENCE',
+    type: 'BREAKDOWN',
+    label: 'Ocorrência: BREAKDOWN',
+    description: 'Pane no motor (Em aberto)',
+    severity: 'CRITICAL',
+    occurredAt: '2026-09-01T10:00:00.000Z',
   },
 ];
 
-// Regressao (Fase 28): getTripTimeline batia em /trips/:id/timeline (que
-// devolve AuditLog paginado, {items, meta}) mas o componente antigo esperava
-// um array bruto de RouteEventEntity (endpoint DIFERENTE) -- quebrava a aba
-// em runtime assim que houvesse qualquer evento.
+// Fase 67 -- a timeline evoluiu de "so AuditLog" para uma projecao unica
+// agregando varias origens (STOP/FUEL/OCCURRENCE/AUDIT/...); o rotulo e a
+// severidade agora vem prontos do backend (TripTimelineService), o
+// componente so exibe.
 describe('TimelineTab', () => {
   beforeEach(() => {
     getTripTimelineMock.mockReset();
@@ -64,24 +65,17 @@ describe('TimelineTab', () => {
     expect(await screen.findByText(/Nenhum evento registrado/i)).toBeInTheDocument();
   });
 
-  it('renderiza os eventos do AuditLog com rotulo em pt-BR', async () => {
+  it('renderiza eventos de multiplas origens com rotulo e badges', async () => {
     getTripTimelineMock.mockResolvedValue({
       items: EVENTS,
-      meta: { total: 2, page: 1, pageSize: 100, totalPages: 1 },
+      meta: { total: EVENTS.length, page: 1, pageSize: 100, totalPages: 1 },
     });
     renderTab();
 
     expect(await screen.findByText('Viagem iniciada')).toBeInTheDocument();
-    expect(screen.getByText('Viagem pausada')).toBeInTheDocument();
-  });
-
-  it('usa a acao bruta como rotulo quando nao ha mapeamento conhecido', async () => {
-    getTripTimelineMock.mockResolvedValue({
-      items: [{ ...EVENTS[0]!, id: 'log-3', action: 'trip.something_new' }],
-      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
-    });
-    renderTab();
-
-    expect(await screen.findByText('trip.something_new')).toBeInTheDocument();
+    expect(screen.getByText('Parada operacional')).toBeInTheDocument();
+    expect(screen.getByText('Posto Ipiranga km 120')).toBeInTheDocument();
+    expect(screen.getByText('Ocorrência: BREAKDOWN')).toBeInTheDocument();
+    expect(screen.getByText('Crítica')).toBeInTheDocument();
   });
 });

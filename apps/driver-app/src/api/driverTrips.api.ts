@@ -2,10 +2,12 @@ import { apiRequest, apiUpload, UploadFilePart } from './http';
 import {
   AxleEvent,
   AxleEventSource,
+  CreateOccurrenceInput,
   DeliveryProof,
   DriverActiveTrip,
   DriverConfig,
   DriverRoute,
+  DriverShift,
   DriverTrip,
   FuelSupply,
   NearbyTollPlaza,
@@ -14,6 +16,7 @@ import {
   TrackingPointInput,
   TrackingPointsSyncResult,
   TripLoadStatus,
+  TripOccurrence,
   TripStop,
   TripStopType,
 } from './driverTrips.types';
@@ -193,6 +196,57 @@ export function submitDeliveryProof(
     capturedAt: input.capturedAt,
   };
   return apiUpload<DeliveryProof>(`/driver/trips/${tripId}/delivery-proof`, fields, file);
+}
+
+// ==========================================================================
+// OCORRENCIAS (Fase 67) -- idempotente por deviceEventId, mesmo padrao de
+// stop-open/fuel-supply/axle-event-open.
+// ==========================================================================
+
+export function createOccurrence(tripId: string, input: CreateOccurrenceInput): Promise<TripOccurrence> {
+  return apiRequest<TripOccurrence>(`/driver/trips/${tripId}/occurrences`, {
+    method: 'POST',
+    body: input,
+  });
+}
+
+export function getOccurrences(tripId: string): Promise<TripOccurrence[]> {
+  return apiRequest<TripOccurrence[]>(`/driver/trips/${tripId}/occurrences`);
+}
+
+// ==========================================================================
+// JORNADA (Fase 67) -- idempotente por ESTADO no backend (nunca por
+// deviceEventId, ver comentario em syncQueue.ts).
+// ==========================================================================
+
+export function getActiveShift(): Promise<DriverShift | null> {
+  return apiRequest<DriverShift | null>('/driver/shifts/active');
+}
+
+export function startShift(tripId?: string): Promise<DriverShift> {
+  return apiRequest<DriverShift>('/driver/shifts/start', {
+    method: 'POST',
+    body: tripId ? { tripId } : {},
+  });
+}
+
+export function endShift(shiftId: string): Promise<DriverShift> {
+  return apiRequest<DriverShift>(`/driver/shifts/${shiftId}/end`, { method: 'POST' });
+}
+
+export function cancelShift(shiftId: string): Promise<DriverShift> {
+  return apiRequest<DriverShift>(`/driver/shifts/${shiftId}/cancel`, { method: 'POST' });
+}
+
+export function startShiftBreak(shiftId: string, type?: TripStopType): Promise<DriverShift> {
+  return apiRequest<DriverShift>(`/driver/shifts/${shiftId}/breaks`, {
+    method: 'POST',
+    body: type ? { type } : {},
+  });
+}
+
+export function endShiftBreak(shiftId: string): Promise<DriverShift> {
+  return apiRequest<DriverShift>(`/driver/shifts/${shiftId}/breaks/end`, { method: 'POST' });
 }
 
 // Fase 26 -- roteirizacao geografica.

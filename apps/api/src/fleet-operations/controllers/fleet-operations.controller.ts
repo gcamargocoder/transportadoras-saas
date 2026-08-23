@@ -5,10 +5,12 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FLEET_OPERATIONS_READ_ROLES } from '../constants/fleet-operations-roles.constants';
+import { FindFleetOccurrencesQueryDto } from '../dto/find-fleet-occurrences-query.dto';
 import { FleetOperationsQueryDto } from '../dto/fleet-operations-query.dto';
 import { FleetCostsEntity } from '../entities/fleet-costs.entity';
 import { FleetFuelAnalyticsEntity } from '../entities/fleet-fuel-analytics.entity';
 import { FleetMaintenanceDashboardEntity } from '../entities/fleet-maintenance-dashboard.entity';
+import { FleetOccurrencesDashboardEntity } from '../entities/fleet-occurrences-dashboard.entity';
 import { FleetOperationalIndicatorsEntity } from '../entities/fleet-operational-indicators.entity';
 import { FleetOperationsDashboardEntity } from '../entities/fleet-operations-dashboard.entity';
 import { FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
@@ -17,6 +19,7 @@ import { FleetCompositionsOverviewEntity } from '../entities/fleet-compositions-
 import { FleetFinancialDashboardEntity } from '../entities/fleet-financial-dashboard.entity';
 import { FleetTiresOverviewEntity } from '../entities/fleet-tires-overview.entity';
 import { FleetVehiclesOverviewEntity } from '../entities/fleet-vehicles-overview.entity';
+import { FleetOccurrencesMetricsService } from '../services/fleet-occurrences-metrics.service';
 import { FleetOperationsMetricsService } from '../services/fleet-operations-metrics.service';
 
 // Fase 40 -- gestao operacional da frota. Todas as rotas sao leitura
@@ -29,6 +32,7 @@ import { FleetOperationsMetricsService } from '../services/fleet-operations-metr
 export class FleetOperationsController {
   constructor(
     private readonly metricsService: FleetOperationsMetricsService,
+    private readonly occurrencesMetricsService: FleetOccurrencesMetricsService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -165,5 +169,19 @@ export class FleetOperationsController {
   @ApiOkResponse({ type: FleetCompositionsOverviewEntity })
   getCompositionsOverview(@Query() query: FleetOperationsQueryDto): Promise<FleetCompositionsOverviewEntity> {
     return this.metricsService.getCompositionsOverview(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('occurrences')
+  @Roles(...FLEET_OPERATIONS_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 68 -- dashboard operacional de ocorrencias (TripOccurrence, Fase 67): total, abertas, ' +
+      'criticas abertas, resolvidas, canceladas, por tipo, por severidade, ranking por veiculo/' +
+      'motorista e evolucao mensal (ultimos 12 meses). Filtros: from/to/vehicleId/driverId/type/' +
+      'severity/status.',
+  })
+  @ApiOkResponse({ type: FleetOccurrencesDashboardEntity })
+  getOccurrencesDashboard(@Query() query: FindFleetOccurrencesQueryDto): Promise<FleetOccurrencesDashboardEntity> {
+    return this.occurrencesMetricsService.getDashboard(this.tenantContext.requireTenantId(), query);
   }
 }

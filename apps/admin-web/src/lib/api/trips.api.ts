@@ -1,7 +1,7 @@
 import type { Paginated, PaginationParams } from '../../types/api';
 import type {
-  AuditLogEntity,
   CustomerEntity,
+  DriverShiftEntity,
   LocationEntity,
   RouteEventEntity,
   RouteVersionEntity,
@@ -10,11 +10,20 @@ import type {
   TripFinancialDashboardEntity,
   TripFinancialSummaryEntity,
   TripMetricsEntity,
+  TripOccurrenceEntity,
   TripOperationsListEntity,
   TripSettlementEntity,
   TripSummaryEntity,
+  TripTimelineEventEntity,
 } from '../../types/entities';
-import type { LocationType, TripPriority, TripStatus } from '../../types/enums';
+import type {
+  LocationType,
+  TripOccurrenceSeverity,
+  TripOccurrenceType,
+  TripPriority,
+  TripStatus,
+  TripTimelineOrigin,
+} from '../../types/enums';
 import { api } from './http';
 
 export interface FindTripsQuery extends PaginationParams {
@@ -85,13 +94,55 @@ export function deleteTrip(id: string) {
   return api.delete<void>(`/trips/${id}`);
 }
 
-// /trips/:id/timeline devolve o historico de AuditLog da viagem (Fase 28) --
-// inicio, pausa, retomada, chegada, conclusao etc. Antes desta correcao, esta
-// funcao apontava o mesmo endpoint mas era tipada/consumida como se fosse
-// RouteEventEntity[] (usado por getTripRouteEvents, endpoint DIFERENTE) --
-// bug pre-existente que quebrava a aba "Linha do tempo" em runtime.
-export function getTripTimeline(id: string, params?: PaginationParams) {
-  return api.get<Paginated<AuditLogEntity>>(`/trips/${id}/timeline`, params);
+// /trips/:id/timeline (Fase 67) -- projecao unificada de eventos reais
+// (paradas, eventos de rota, abastecimentos, pedagios, eixos, checklists,
+// documentos fiscais/comprovante de entrega, despesas, receitas,
+// ocorrencias e auditoria). Antes da Fase 67 devolvia so AuditLog.
+export interface FindTripTimelineQuery extends PaginationParams {
+  origin?: TripTimelineOrigin | undefined;
+  type?: string | undefined;
+  from?: string | undefined;
+  to?: string | undefined;
+  order?: 'asc' | 'desc' | undefined;
+}
+
+export function getTripTimeline(id: string, params?: FindTripTimelineQuery) {
+  return api.get<Paginated<TripTimelineEventEntity>>(`/trips/${id}/timeline`, params);
+}
+
+// --- Ocorrencias (Fase 67) ---
+export interface CreateTripOccurrencePayload {
+  type: TripOccurrenceType;
+  severity?: TripOccurrenceSeverity | undefined;
+  description: string;
+  occurredAt: string;
+  driverId?: string | undefined;
+  vehicleId?: string | undefined;
+  latitude?: number | undefined;
+  longitude?: number | undefined;
+  locationLabel?: string | undefined;
+  attachmentId?: string | undefined;
+}
+
+export function getTripOccurrences(id: string) {
+  return api.get<TripOccurrenceEntity[]>(`/trips/${id}/occurrences`);
+}
+
+export function createTripOccurrence(id: string, payload: CreateTripOccurrencePayload) {
+  return api.post<TripOccurrenceEntity>(`/trips/${id}/occurrences`, payload);
+}
+
+export function resolveTripOccurrence(id: string, occurrenceId: string) {
+  return api.patch<TripOccurrenceEntity>(`/trips/${id}/occurrences/${occurrenceId}/resolve`);
+}
+
+export function cancelTripOccurrence(id: string, occurrenceId: string) {
+  return api.patch<TripOccurrenceEntity>(`/trips/${id}/occurrences/${occurrenceId}/cancel`);
+}
+
+// --- Jornada do motorista (Fase 67, leitura administrativa) ---
+export function getTripShifts(id: string) {
+  return api.get<DriverShiftEntity[]>(`/trips/${id}/shifts`);
 }
 
 export function getTripSummary(id: string) {

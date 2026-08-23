@@ -16,6 +16,7 @@ import {
   computeAverageConsumptionKmL,
   computeConsumptionTotals,
   computeTotalAmount,
+  detectOdometerRegression,
 } from '../../common/utils/fuel-consumption.util';
 import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
@@ -377,7 +378,7 @@ export class FuelSuppliesService {
       }),
       this.prisma.fuelSupply.findMany({
         where: { tenantId, vehicleId },
-        select: { id: true, odometerKm: true, liters: true },
+        select: { id: true, odometerKm: true, liters: true, supplyDate: true },
       }),
       this.prisma.fuelSupply.aggregate({
         where: { tenantId, vehicleId },
@@ -395,6 +396,14 @@ export class FuelSuppliesService {
     entity.averageConsumptionKmL = computeAverageConsumptionKmL(
       points.map((p) => ({ id: p.id, odometerKm: Number(p.odometerKm), liters: Number(p.liters) })),
     );
+    // Fase 65 -- mesma funcao pura ja usada pelos alertas de frota
+    // (ODOMETER_REGRESSION), so que no escopo deste UM veiculo -- nenhuma
+    // query adicional (reaproveita os mesmos `points`, so precisou de
+    // supplyDate a mais no select acima).
+    entity.hasOdometerRegression =
+      detectOdometerRegression(
+        points.map((p) => ({ id: p.id, odometerKm: Number(p.odometerKm), supplyDate: p.supplyDate })),
+      ).length > 0;
     return entity;
   }
 

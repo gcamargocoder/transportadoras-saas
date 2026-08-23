@@ -100,6 +100,40 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   return success.data;
 }
 
+// Fase 68 -- download/preview de arquivo binario (ex: comprovante de
+// entrega). Diferente de apiFetch: a resposta NAO e um envelope JSON
+// {data: ...}, e o proprio arquivo (StreamableFile no backend) -- por isso
+// nao reaproveita apiFetch, so o MESMO mecanismo de token/refresh. O
+// mimeType/fileName corretos ja vem da propria FiscalDocumentEntity (o
+// chamador ja tem esse dado antes de baixar o arquivo) -- nunca depende de
+// ler Content-Disposition/Content-Type da resposta (exigiria expor esses
+// headers no CORS, desnecessario quando o dado ja esta disponivel).
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const token = getAccessToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response = await fetch(buildUrl(path), { headers });
+  if (response.status === 401) {
+    const refreshed = await performRefresh();
+    if (refreshed) {
+      const retryHeaders: Record<string, string> = {};
+      const retryToken = getAccessToken();
+      if (retryToken) retryHeaders.Authorization = `Bearer ${retryToken}`;
+      response = await fetch(buildUrl(path), { headers: retryHeaders });
+    } else {
+      emitSessionExpired();
+    }
+  }
+
+  if (!response.ok) {
+    const json = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+    throw new ApiError(response.status, json?.error ?? 'Error', json?.message ?? 'Erro ao obter o arquivo.', path);
+  }
+
+  return response.blob();
+}
+
 export const api = {
   get: <T>(path: string, query?: Record<string, QueryValue>, signal?: AbortSignal) =>
     apiFetch<T>(path, { method: 'GET', query, signal }),

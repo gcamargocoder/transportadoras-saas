@@ -18,7 +18,8 @@ import { SearchInput } from '../../../components/ui/search-input';
 import { Select } from '../../../components/ui/select';
 import { useDebounce } from '../../../hooks/use-debounce';
 import { listDrivers } from '../../../lib/api/drivers.api';
-import { listTrips } from '../../../lib/api/trips.api';
+import { listVehicles } from '../../../lib/api/fleet.api';
+import { listCustomers, listLocations, listTrips } from '../../../lib/api/trips.api';
 import { hasRole } from '../../../lib/auth/roles';
 import { useAuth } from '../../../hooks/use-auth';
 import { TRIP_PRIORITY_LABELS, TRIP_STATUS_LABELS } from '../../../lib/labels';
@@ -38,6 +39,10 @@ export default function TripsPage(): JSX.Element {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<TripStatus | ''>('');
   const [driverId, setDriverId] = useState('');
+  const [vehicleId, setVehicleId] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [originLocationId, setOriginLocationId] = useState('');
+  const [destinationLocationId, setDestinationLocationId] = useState('');
   const [departureFrom, setDepartureFrom] = useState('');
   const [departureTo, setDepartureTo] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
@@ -47,7 +52,18 @@ export default function TripsPage(): JSX.Element {
   const query = useQuery({
     queryKey: [
       'trips',
-      { page, search: debouncedSearch, status, driverId, departureFrom, departureTo },
+      {
+        page,
+        search: debouncedSearch,
+        status,
+        driverId,
+        vehicleId,
+        customerId,
+        originLocationId,
+        destinationLocationId,
+        departureFrom,
+        departureTo,
+      },
     ],
     queryFn: ({ signal }) =>
       listTrips(
@@ -57,6 +73,10 @@ export default function TripsPage(): JSX.Element {
           search: debouncedSearch || undefined,
           status: status || undefined,
           driverId: driverId || undefined,
+          vehicleId: vehicleId || undefined,
+          customerId: customerId || undefined,
+          originLocationId: originLocationId || undefined,
+          destinationLocationId: destinationLocationId || undefined,
           departureFrom: departureFrom || undefined,
           departureTo: departureTo || undefined,
         },
@@ -99,7 +119,17 @@ export default function TripsPage(): JSX.Element {
     [],
   );
 
-  const hasActiveFilters = Boolean(search || status || driverId || departureFrom || departureTo);
+  const hasActiveFilters = Boolean(
+    search ||
+      status ||
+      driverId ||
+      vehicleId ||
+      customerId ||
+      originLocationId ||
+      destinationLocationId ||
+      departureFrom ||
+      departureTo,
+  );
 
   return (
     <div>
@@ -122,6 +152,10 @@ export default function TripsPage(): JSX.Element {
           setSearch('');
           setStatus('');
           setDriverId('');
+          setVehicleId('');
+          setCustomerId('');
+          setOriginLocationId('');
+          setDestinationLocationId('');
           setDepartureFrom('');
           setDepartureTo('');
           setPage(1);
@@ -167,6 +201,66 @@ export default function TripsPage(): JSX.Element {
               setPage(1);
             }}
             placeholder="Todos"
+          />
+        </FormField>
+        <FormField label="Veículo" htmlFor="trip-vehicle" className="w-full sm:w-48">
+          <EntitySelect
+            id="trip-vehicle"
+            queryKey={['vehicles', 'select']}
+            queryFn={() => listVehicles({ pageSize: 100 })}
+            getOptionValue={(v) => v.id}
+            getOptionLabel={(v) => v.plate}
+            value={vehicleId}
+            onChange={(v) => {
+              setVehicleId(v);
+              setPage(1);
+            }}
+            placeholder="Todos"
+          />
+        </FormField>
+        <FormField label="Cliente" htmlFor="trip-customer" className="w-full sm:w-48">
+          <EntitySelect
+            id="trip-customer"
+            queryKey={['customers', 'select']}
+            queryFn={() => listCustomers({ pageSize: 100 })}
+            getOptionValue={(c) => c.id}
+            getOptionLabel={(c) => c.name}
+            value={customerId}
+            onChange={(v) => {
+              setCustomerId(v);
+              setPage(1);
+            }}
+            placeholder="Todos"
+          />
+        </FormField>
+        <FormField label="Origem" htmlFor="trip-origin" className="w-full sm:w-48">
+          <EntitySelect
+            id="trip-origin"
+            queryKey={['locations', 'select']}
+            queryFn={() => listLocations({ pageSize: 100 })}
+            getOptionValue={(l) => l.id}
+            getOptionLabel={(l) => l.name}
+            value={originLocationId}
+            onChange={(v) => {
+              setOriginLocationId(v);
+              setPage(1);
+            }}
+            placeholder="Todas"
+          />
+        </FormField>
+        <FormField label="Destino" htmlFor="trip-destination" className="w-full sm:w-48">
+          <EntitySelect
+            id="trip-destination"
+            queryKey={['locations', 'select']}
+            queryFn={() => listLocations({ pageSize: 100 })}
+            getOptionValue={(l) => l.id}
+            getOptionLabel={(l) => l.name}
+            value={destinationLocationId}
+            onChange={(v) => {
+              setDestinationLocationId(v);
+              setPage(1);
+            }}
+            placeholder="Todas"
           />
         </FormField>
         <FormField label="Saída de" htmlFor="trip-from" className="w-full sm:w-40">

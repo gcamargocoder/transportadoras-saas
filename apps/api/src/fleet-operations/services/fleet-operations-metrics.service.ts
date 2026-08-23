@@ -8,6 +8,7 @@ import {
   RevenueCategory,
   TireStatus,
   TrailerType,
+  TripOccurrenceSeverity,
   TripStatus,
   TripStopType,
   VehicleFuelType,
@@ -100,6 +101,7 @@ import { FleetOverviewEntity } from '../entities/fleet-overview.entity';
 import { FleetStopDurationAlertEntity, FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
 import {
   FleetTireFleetBreakdownEntity,
+  FleetTirePositionBreakdownEntity,
   FleetTireStatusBreakdownEntity,
   FleetTireWearEntity,
   FleetTiresOverviewEntity,
@@ -136,6 +138,16 @@ import { computeMaintenanceCostPerKmTotals } from '../utils/maintenance-cost-per
 import { evaluateMaintenancePlan } from '../utils/maintenance-plan-status.util';
 
 const ACTIVE_TRIP_STATUSES: TripStatus[] = [TripStatus.IN_PROGRESS, TripStatus.PAUSED];
+// Fase 66 -- viagens ainda "em aberto" (mesmo criterio ja usado em
+// TripsService.NON_TERMINAL_STATUSES, reproduzido aqui para nao criar
+// dependencia cruzada entre modulos por causa de uma constante).
+const NON_TERMINAL_TRIP_STATUSES: TripStatus[] = [
+  TripStatus.PLANNED,
+  TripStatus.WAITING_DRIVER,
+  TripStatus.WAITING_DEPARTURE,
+  TripStatus.IN_PROGRESS,
+  TripStatus.PAUSED,
+];
 
 // OPEN/IN_PROGRESS/WAITING_PARTS = em aberto (mesma divisao ja usada em
 // DashboardService, Fase 19). Fase 45 -- completedCount/cancelledCount
@@ -272,7 +284,7 @@ export class FleetOperationsMetricsService {
   private async computeOverview(tenantId: string, filters: FleetOperationsFilters): Promise<FleetOverviewEntity> {
     const vehicleWhere = this.buildVehicleWhere(tenantId, filters);
 
-    const [statusCounts, vehiclesOnTrip, activeTrips, activeDrivers, openAlerts] = await Promise.all([
+    const [statusCounts, vehiclesOnTrip, activeTrips, activeDrivers, openAlerts, occurrenceCounts] = await Promise.all([
       this.prisma.vehicle.groupBy({ by: ['status'], where: vehicleWhere, _count: true }),
       this.countVehiclesOnTrip(vehicleWhere),
       this.prisma.trip.count({
@@ -280,6 +292,7 @@ export class FleetOperationsMetricsService {
       }),
       this.prisma.driver.count({ where: { tenantId, deletedAt: null, isActive: true } }),
       this.prisma.alert.count({ where: { tenantId, acknowledgedAt: null } }),
+      this.countOccurrencesByDerivedStatus(tenantId),
     ]);
 
     const countByStatus = new Map(statusCounts.map((row) => [row.status, row._count]));
@@ -297,6 +310,10 @@ export class FleetOperationsMetricsService {
     entity.vehiclesAvailable = Math.max(activeVehicles - vehiclesOnTrip, 0);
     entity.activeDrivers = activeDrivers;
     entity.openAlerts = openAlerts;
+    entity.openOccurrences = occurrenceCounts.open;
+    entity.criticalOpenOccurrences = occurrenceCounts.criticalOpen;
+    entity.resolvedOccurrences = occurrenceCounts.resolved;
+    entity.cancelledOccurrences = occurrenceCounts.cancelled;
     return entity;
   }
 
@@ -308,6 +325,24 @@ export class FleetOperationsMetricsService {
     return this.prisma.vehicle.count({
       where: { ...vehicleWhere, status: VehicleStatus.ACTIVE, tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } } },
     });
+  }
+
+  // Fase 68 -- 4 counts em paralelo (nunca 1 groupBy, porque status e
+  // sempre DERIVADO de resolvedAt/cancelledAt, nunca uma coluna propria --
+  // mesmo principio de TripOccurrence/TripStop). Sempre O(1): nunca cresce
+  // com o numero de ocorrencias.
+  private async countOccurrencesByDerivedStatus(
+    tenantId: string,
+  ): Promise<{ open: number; criticalOpen: number; resolved: number; cancelled: number }> {
+    const [open, criticalOpen, resolved, cancelled] = await Promise.all([
+      this.prisma.tripOccurrence.count({ where: { tenantId, resolvedAt: null, cancelledAt: null } }),
+      this.prisma.tripOccurrence.count({
+        where: { tenantId, resolvedAt: null, cancelledAt: null, severity: TripOccurrenceSeverity.CRITICAL },
+      }),
+      this.prisma.tripOccurrence.count({ where: { tenantId, resolvedAt: { not: null }, cancelledAt: null } }),
+      this.prisma.tripOccurrence.count({ where: { tenantId, cancelledAt: { not: null } } }),
+    ]);
+    return { open, criticalOpen, resolved, cancelled };
   }
 
   // ==========================================================================
@@ -837,6 +872,7 @@ export class FleetOperationsMetricsService {
       costPerKmRows,
       monthlyTrendRows,
       planStatus,
+      inProgressByVehicleRaw,
     ] = await Promise.all([
       this.prisma.vehicleMaintenance.groupBy({ by: ['status'], where: whereAnyStatus, _count: true }),
       this.prisma.vehicleMaintenance.count({
@@ -875,6 +911,14 @@ export class FleetOperationsMetricsService {
         select: { openedAt: true, totalCost: true },
       }),
       this.computeMaintenancePlanStatus(tenantId, filters),
+      // Fase 63 -- veiculos distintos atualmente em manutencao (status
+      // IN_PROGRESS), 1 query agregada e independente do numero de veiculos
+      // (nunca 1 por veiculo).
+      this.prisma.vehicleMaintenance.groupBy({
+        by: ['vehicleId'],
+        where: { ...where, status: VehicleMaintenanceStatus.IN_PROGRESS },
+        _count: true,
+      }),
     ]);
 
     const countByStatus = new Map(statusGroups.map((row) => [row.status, row._count]));
@@ -882,6 +926,8 @@ export class FleetOperationsMetricsService {
       .filter(([status]) => status !== VehicleMaintenanceStatus.CANCELLED)
       .reduce((sum, [, count]) => sum + count, 0);
     const openCount = OPEN_MAINTENANCE_STATUSES.reduce((sum, status) => sum + (countByStatus.get(status) ?? 0), 0);
+    const inProgressCount = countByStatus.get(VehicleMaintenanceStatus.IN_PROGRESS) ?? 0;
+    const vehiclesInMaintenanceCount = inProgressByVehicleRaw.length;
     const completedCount = countByStatus.get(VehicleMaintenanceStatus.COMPLETED) ?? 0;
     const cancelledCount = countByStatus.get(VehicleMaintenanceStatus.CANCELLED) ?? 0;
     const preventiveCount = byTypeRaw.find((r) => r.type === VehicleMaintenanceType.PREVENTIVE)?._count ?? 0;
@@ -943,6 +989,8 @@ export class FleetOperationsMetricsService {
     const entity = new FleetMaintenanceDashboardEntity();
     entity.totalCount = totalCount;
     entity.openCount = openCount;
+    entity.inProgressCount = inProgressCount;
+    entity.vehiclesInMaintenanceCount = vehiclesInMaintenanceCount;
     entity.completedCount = completedCount;
     entity.cancelledCount = cancelledCount;
     entity.scheduledCount = scheduledCount;
@@ -1930,22 +1978,55 @@ export class FleetOperationsMetricsService {
     const tripWhere = this.buildTripWhere(tenantId, filters, undefined);
     const metricsWhere = this.buildTripMetricsWhere(tenantId, filters);
 
-    const [completedTrips, inProgressTrips, cancelledTrips, durationAgg, activeVehiclesCount, completedTripRows] =
-      await Promise.all([
-        this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.COMPLETED } }),
-        this.prisma.trip.count({ where: { ...tripWhere, status: { in: ACTIVE_TRIP_STATUSES } } }),
-        this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.CANCELLED } }),
-        this.prisma.tripMetrics.aggregate({
-          where: metricsWhere,
-          _avg: { actualDurationMin: true },
-          _sum: { actualDurationMin: true },
-        }),
-        this.prisma.vehicle.count({ where: { ...this.buildVehicleWhere(tenantId, filters), status: VehicleStatus.ACTIVE } }),
-        this.prisma.trip.findMany({
-          where: { ...tripWhere, status: TripStatus.COMPLETED },
-          select: { composition: { select: { vehicleId: true } } },
-        }),
-      ]);
+    const [
+      completedTrips,
+      inProgressTrips,
+      cancelledTrips,
+      durationAgg,
+      activeVehiclesCount,
+      completedTripRows,
+      plannedTrips,
+      waitingDriverTrips,
+      waitingDepartureTrips,
+      pausedTrips,
+      tripsWithoutDriver,
+      tripsWithoutVehicle,
+      delayedTrips,
+    ] = await Promise.all([
+      this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.COMPLETED } }),
+      this.prisma.trip.count({ where: { ...tripWhere, status: { in: ACTIVE_TRIP_STATUSES } } }),
+      this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.CANCELLED } }),
+      this.prisma.tripMetrics.aggregate({
+        where: metricsWhere,
+        _avg: { actualDurationMin: true },
+        _sum: { actualDurationMin: true },
+      }),
+      this.prisma.vehicle.count({ where: { ...this.buildVehicleWhere(tenantId, filters), status: VehicleStatus.ACTIVE } }),
+      this.prisma.trip.findMany({
+        where: { ...tripWhere, status: TripStatus.COMPLETED },
+        select: { composition: { select: { vehicleId: true } } },
+      }),
+      // Fase 66 -- KPIs de composicao do funil operacional (secao 19 do
+      // pedido), todas contagens agregadas adicionais, independentes do
+      // volume de viagens (nunca 1 query por viagem).
+      this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.PLANNED } }),
+      this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.WAITING_DRIVER } }),
+      this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.WAITING_DEPARTURE } }),
+      this.prisma.trip.count({ where: { ...tripWhere, status: TripStatus.PAUSED } }),
+      this.prisma.trip.count({
+        where: { ...tripWhere, status: { in: NON_TERMINAL_TRIP_STATUSES }, driverId: null },
+      }),
+      this.prisma.trip.count({
+        where: { ...tripWhere, status: { in: NON_TERMINAL_TRIP_STATUSES }, composition: null },
+      }),
+      this.prisma.trip.count({
+        where: {
+          ...tripWhere,
+          status: { in: NON_TERMINAL_TRIP_STATUSES },
+          plannedArrival: { lt: new Date() },
+        },
+      }),
+    ]);
 
     const tripCountByVehicle = new Map<string, VehicleRankingAccumulator>();
     for (const row of completedTripRows) {
@@ -1961,6 +2042,13 @@ export class FleetOperationsMetricsService {
     entity.completedTrips = completedTrips;
     entity.inProgressTrips = inProgressTrips;
     entity.cancelledTrips = cancelledTrips;
+    entity.plannedTrips = plannedTrips;
+    entity.waitingDriverTrips = waitingDriverTrips;
+    entity.waitingDepartureTrips = waitingDepartureTrips;
+    entity.pausedTrips = pausedTrips;
+    entity.tripsWithoutDriver = tripsWithoutDriver;
+    entity.tripsWithoutVehicle = tripsWithoutVehicle;
+    entity.delayedTrips = delayedTrips;
     entity.averageTripDurationMinutes = durationAgg._avg.actualDurationMin ?? null;
     entity.averageCostPerTrip = safeAverage(totalCost, completedTrips);
     entity.utilizationPercent = this.computeUtilizationPercent(filters, durationAgg._sum.actualDurationMin, activeVehiclesCount);
@@ -1999,7 +2087,7 @@ export class FleetOperationsMetricsService {
     maintenanceMap: Map<string, VehicleRankingAccumulator>,
     stopMap: Map<string, VehicleRankingAccumulator>,
   ): Promise<FleetAlertEntity[]> {
-    const [stalledRows, pendingChecklistRows] = await Promise.all([
+    const [stalledRows, pendingChecklistRows, criticalOccurrenceRows] = await Promise.all([
       this.prisma.tripStop.findMany({
         where: {
           tenantId,
@@ -2025,6 +2113,24 @@ export class FleetOperationsMetricsService {
         },
         _count: true,
       }),
+      // Fase 68 -- ocorrencias criticas em aberto (severity=CRITICAL,
+      // resolvedAt/cancelledAt nulos). vehicleId nao-nulo porque
+      // FleetAlertEntity.vehicleId e obrigatorio -- ocorrencias sem veiculo
+      // vinculado nunca entram aqui (limitacao real, ver docs).
+      this.prisma.tripOccurrence.findMany({
+        where: {
+          tenantId,
+          severity: TripOccurrenceSeverity.CRITICAL,
+          resolvedAt: null,
+          cancelledAt: null,
+          vehicleId: { not: null },
+          ...this.vehicleFleetFilter(filters),
+          ...compact({ vehicleId: filters.vehicleId }),
+        },
+        select: { id: true, vehicleId: true, type: true, occurredAt: true },
+        take: ALERTS_LIMIT_PER_TYPE,
+        orderBy: { occurredAt: 'desc' },
+      }),
     ]);
 
     // Uma parada aberta por veiculo -- a mais antiga, caso existam varias.
@@ -2041,6 +2147,7 @@ export class FleetOperationsMetricsService {
       ...stopMap.keys(),
       ...stalledByVehicle.keys(),
       ...pendingChecklistRows.map((r) => r.vehicleId).filter((id): id is string => id !== null),
+      ...criticalOccurrenceRows.map((r) => r.vehicleId).filter((id): id is string => id !== null),
     ]);
     const plateById = await this.buildPlateMap([...allVehicleIds]);
 
@@ -2085,6 +2192,20 @@ export class FleetOperationsMetricsService {
         this.buildAlert('PENDING_CHECKLIST', 'INFO', row.vehicleId, plateById, `${row._count} checklist(s) pendente(s).`, row._count),
       );
       pendingCount += 1;
+    }
+
+    for (const row of criticalOccurrenceRows) {
+      if (!row.vehicleId) continue;
+      alerts.push(
+        this.buildAlert(
+          'TRIP_OCCURRENCE_CRITICAL',
+          'CRITICAL',
+          row.vehicleId,
+          plateById,
+          `Ocorrencia critica em aberto: ${row.type}.`,
+          null,
+        ),
+      );
     }
 
     return alerts;
@@ -2559,6 +2680,7 @@ export class FleetOperationsMetricsService {
     let lifespanCount = 0;
     let nearReplacementCount = 0;
     const byFleetMap = new Map<string | null, { count: number; cost: number }>();
+    const byPositionMap = new Map<string, number>();
     const vehicleCostMap = new Map<string, VehicleRankingAccumulator>();
     const tireWear: FleetTireWearEntity[] = [];
 
@@ -2584,6 +2706,10 @@ export class FleetOperationsMetricsService {
         vehicleAgg.value += purchasePrice;
         vehicleAgg.count += 1;
         vehicleCostMap.set(tire.vehicleId, vehicleAgg);
+
+        if (tire.position) {
+          byPositionMap.set(tire.position, (byPositionMap.get(tire.position) ?? 0) + 1);
+        }
       }
 
       if (tire.status === TireStatus.IN_USE) {
@@ -2615,6 +2741,7 @@ export class FleetOperationsMetricsService {
     entity.retreadValue = toNumberOrNull(retreadAgg._sum.cost) ?? 0;
     entity.averageLifespanKm = safeAverage(lifespanSum, lifespanCount);
     entity.nearReplacementCount = nearReplacementCount;
+    entity.averageCostPerTire = safeAverage(entity.investedValue + entity.retreadValue, tires.length);
 
     entity.byStatus = [...countByStatus.entries()].map(([status, count]) => {
       const row = new FleetTireStatusBreakdownEntity();
@@ -2622,6 +2749,14 @@ export class FleetOperationsMetricsService {
       row.count = count;
       return row;
     });
+    entity.byPosition = [...byPositionMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([position, count]) => {
+        const row = new FleetTirePositionBreakdownEntity();
+        row.position = position;
+        row.count = count;
+        return row;
+      });
     entity.byFleet = [...byFleetMap.entries()].map(([fleetId, agg]) => {
       const row = new FleetTireFleetBreakdownEntity();
       row.fleetId = fleetId;

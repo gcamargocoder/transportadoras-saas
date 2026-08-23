@@ -34,14 +34,21 @@ import { MulterExceptionFilter } from '../../toll-import/filters/multer-exceptio
 import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entity';
 import { TrackingPointsSyncResultEntity } from '../../trip-operations/entities/tracking-point.entity';
 import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
+import { DriverShiftEntity } from '../../trip-operations/entities/driver-shift.entity';
+import { TripOccurrenceEntity } from '../../trip-operations/entities/trip-occurrence.entity';
 import { CloseAxleEventDto } from '../../trip-operations/dto/close-axle-event.dto';
 import { CloseTripStopByDeviceEventDto } from '../../trip-operations/dto/close-trip-stop-by-device-event.dto';
 import { CloseTripStopDto } from '../../trip-operations/dto/close-trip-stop.dto';
 import { CreateAxleEventDto } from '../../trip-operations/dto/create-axle-event.dto';
+import { CreateDriverTripOccurrenceDto } from '../../trip-operations/dto/create-driver-trip-occurrence.dto';
 import { CreateTrackingPointsDto } from '../../trip-operations/dto/create-tracking-points.dto';
 import { CreateTripStopDto } from '../../trip-operations/dto/create-trip-stop.dto';
+import { StartDriverShiftDto } from '../../trip-operations/dto/start-driver-shift.dto';
+import { StartShiftBreakDto } from '../../trip-operations/dto/start-shift-break.dto';
 import { AxleEventsService } from '../../trip-operations/services/axle-events.service';
+import { DriverShiftsService } from '../../trip-operations/services/driver-shifts.service';
 import { TrackingPointsService } from '../../trip-operations/services/tracking-points.service';
+import { TripOccurrencesService } from '../../trip-operations/services/trip-occurrences.service';
 import { TripStopsService } from '../../trip-operations/services/trip-stops.service';
 import { CreateDriverFuelSupplyDto } from '../../fuel-supplies/dto/create-driver-fuel-supply.dto';
 import { FuelSupplyEntity } from '../../fuel-supplies/entities/fuel-supply.entity';
@@ -49,6 +56,9 @@ import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.
 import { SubmitDeliveryProofDto } from '../../fiscal/dto/submit-delivery-proof.dto';
 import { FiscalDocumentEntity } from '../../fiscal/entities/fiscal-document.entity';
 import { FiscalDocumentsService } from '../../fiscal/services/fiscal-documents.service';
+import { FindNotificationsQueryDto } from '../../notifications/dto/find-notifications-query.dto';
+import { NotificationEntity, PaginatedNotificationsEntity, UnreadNotificationCountEntity } from '../../notifications/entities/notification.entity';
+import { NotificationsService } from '../../notifications/services/notifications.service';
 import { TripEntity } from '../../trips/entities/trip.entity';
 import { DRIVER_TRIP_ROLES } from '../constants/driver-trip-roles.constants';
 import { buildDriverDeliveryProofMulterOptions } from '../config/driver-delivery-proof-storage.config';
@@ -83,11 +93,14 @@ export class DriverTripsController {
     private readonly tripStopsService: TripStopsService,
     private readonly axleEventsService: AxleEventsService,
     private readonly trackingPointsService: TrackingPointsService,
+    private readonly tripOccurrencesService: TripOccurrencesService,
+    private readonly driverShiftsService: DriverShiftsService,
     private readonly fuelSuppliesService: FuelSuppliesService,
     private readonly routingService: RoutingService,
     private readonly checklistTemplatesService: ChecklistTemplatesService,
     private readonly checklistExecutionsService: ChecklistExecutionsService,
     private readonly fiscalDocumentsService: FiscalDocumentsService,
+    private readonly notificationsService: NotificationsService,
     private readonly tenantContext: TenantContext,
     private readonly driverContext: DriverContext,
   ) {}
@@ -332,6 +345,128 @@ export class DriverTripsController {
     );
   }
 
+  // ==========================================================================
+  // OCORRENCIAS (Fase 67) -- TripOccurrencesService vive em modulo proprio
+  // (TripOperationsModule), importado aqui exatamente como TripStopsService/
+  // AxleEventsService acima: nenhum service/controller paralelo. driverId
+  // SEMPRE o motorista autenticado, vehicleId SEMPRE derivado da Trip --
+  // nunca aceitos do corpo. Motorista NUNCA resolve/cancela (so cria a
+  // propria ocorrencia): essas acoes ficam exclusivas do admin em
+  // TripsController.
+  // ==========================================================================
+
+  @Post('trips/:id/occurrences')
+  @ApiOperation({ summary: 'Registra uma ocorrencia nesta viagem (idempotente por deviceEventId).' })
+  @ApiOkResponse({ type: TripOccurrenceEntity })
+  async createOccurrence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateDriverTripOccurrenceDto,
+  ): Promise<TripOccurrenceEntity> {
+    const tenantId = this.tenantContext.requireTenantId();
+    const driverId = this.driverContext.requireDriverId();
+    await this.driverTripsService.getOne(tenantId, driverId, id);
+    return this.tripOccurrencesService.createFromDriverApp(
+      tenantId,
+      id,
+      driverId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get('trips/:id/occurrences')
+  @ApiOperation({ summary: 'Lista as ocorrencias registradas nesta viagem.' })
+  @ApiOkResponse({ type: TripOccurrenceEntity, isArray: true })
+  async findOccurrences(@Param('id', ParseUUIDPipe) id: string): Promise<TripOccurrenceEntity[]> {
+    const tenantId = this.tenantContext.requireTenantId();
+    await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
+    return this.tripOccurrencesService.findAllForTrip(tenantId, id, {});
+  }
+
+  // ==========================================================================
+  // JORNADA (Fase 67) -- ativa DriverShift/ShiftBreak (orfaos ate esta
+  // fase). Idempotencia por ESTADO (nunca deviceEventId, ver comentario em
+  // DriverShiftsService) -- reenviar start/end/pausa/retorno apos
+  // reconexao nunca duplica.
+  // ==========================================================================
+
+  @Get('shifts/active')
+  @ApiOperation({ summary: 'Jornada em aberto deste motorista, se houver.' })
+  @ApiOkResponse({ type: DriverShiftEntity })
+  getActiveShift(): Promise<DriverShiftEntity | null> {
+    return this.driverShiftsService.getActive(this.tenantContext.requireTenantId(), this.driverContext.requireDriverId());
+  }
+
+  @Post('shifts/start')
+  @ApiOperation({ summary: 'Inicia a jornada (idempotente se ja houver uma em aberto).' })
+  @ApiOkResponse({ type: DriverShiftEntity })
+  startShift(@Body() dto: StartDriverShiftDto): Promise<DriverShiftEntity> {
+    return this.driverShiftsService.start(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      dto ?? {},
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post('shifts/:id/end')
+  @ApiOperation({ summary: 'Encerra a jornada (idempotente). Fecha automaticamente uma pausa em aberto, se houver.' })
+  @ApiOkResponse({ type: DriverShiftEntity })
+  endShift(@Param('id', ParseUUIDPipe) id: string): Promise<DriverShiftEntity> {
+    return this.driverShiftsService.end(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post('shifts/:id/cancel')
+  @ApiOperation({ summary: 'Cancela uma jornada aberta por engano. Idempotente.' })
+  @ApiOkResponse({ type: DriverShiftEntity })
+  cancelShift(@Param('id', ParseUUIDPipe) id: string): Promise<DriverShiftEntity> {
+    return this.driverShiftsService.cancel(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post('shifts/:id/breaks')
+  @ApiOperation({ summary: 'Inicia uma pausa na jornada (idempotente se ja houver uma em aberto).' })
+  @ApiOkResponse({ type: DriverShiftEntity })
+  startBreak(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: StartShiftBreakDto,
+  ): Promise<DriverShiftEntity> {
+    return this.driverShiftsService.startBreak(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+      dto ?? {},
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post('shifts/:id/breaks/end')
+  @ApiOperation({ summary: 'Encerra a pausa em aberto da jornada (idempotente).' })
+  @ApiOkResponse({ type: DriverShiftEntity })
+  endBreak(@Param('id', ParseUUIDPipe) id: string): Promise<DriverShiftEntity> {
+    return this.driverShiftsService.endBreak(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      id,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
   @Post('trips/:id/fuel-supplies')
   @ApiOperation({
     summary:
@@ -555,5 +690,44 @@ export class DriverTripsController {
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
+  }
+
+  // ==========================================================================
+  // NOTIFICACOES (Fase 69, estendida na Fase 70) -- reaproveita o MESMO
+  // NotificationsService do admin-web (nenhum service/mecanismo paralelo).
+  // Nenhum dos 10 tipos administrativos da Fase 69 e destinado a DRIVER
+  // (ver docs/notifications.md); a partir da Fase 70, DELIVERY_PROOF_PENDING
+  // e DELIVERY_PROOF_PROBLEM SAO enviados ao motorista responsavel pela
+  // viagem (destinatario direto, nunca "todo usuario com role DRIVER") --
+  // o filtro por recipientId=userId no proprio service garante que o
+  // motorista so ve as suas.
+  // ==========================================================================
+
+  @Get('notifications')
+  @ApiOperation({ summary: 'Lista as notificações do motorista autenticado.' })
+  @ApiOkResponse({ type: PaginatedNotificationsEntity })
+  findNotifications(@Query() query: FindNotificationsQueryDto): Promise<PaginatedNotificationsEntity> {
+    return this.notificationsService.findAllForUser(
+      this.tenantContext.requireTenantId(),
+      this.tenantContext.requireUserId(),
+      query,
+    );
+  }
+
+  @Get('notifications/unread-count')
+  @ApiOperation({ summary: 'Contagem de notificações não lidas do motorista autenticado.' })
+  @ApiOkResponse({ type: UnreadNotificationCountEntity })
+  getUnreadNotificationCount(): Promise<UnreadNotificationCountEntity> {
+    return this.notificationsService.getUnreadCount(this.tenantContext.requireTenantId(), this.tenantContext.requireUserId());
+  }
+
+  @Patch('notifications/:id/read')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Marca uma notificação do motorista como lida. Idempotente.' })
+  @ApiOkResponse({ type: NotificationEntity })
+  markNotificationRead(@Param('id', ParseUUIDPipe) id: string): Promise<NotificationEntity> {
+    const tenantId = this.tenantContext.requireTenantId();
+    const userId = this.tenantContext.requireUserId();
+    return this.notificationsService.markRead(tenantId, userId, id, { userId }, this.tenantContext.requestMetadata);
   }
 }

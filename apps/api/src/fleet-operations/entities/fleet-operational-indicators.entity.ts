@@ -16,6 +16,37 @@ export class FleetOperationalIndicatorsEntity {
   @ApiProperty()
   cancelledTrips!: number;
 
+  @ApiProperty({ description: 'Fase 66 -- status PLANNED (planejamento, ainda nao despachada).' })
+  plannedTrips!: number;
+
+  @ApiProperty({ description: 'Fase 66 -- status WAITING_DRIVER (despachada, aguardando motorista chegar).' })
+  waitingDriverTrips!: number;
+
+  @ApiProperty({ description: 'Fase 66 -- status WAITING_DEPARTURE (motorista/veiculo prontos, aguardando saida).' })
+  waitingDepartureTrips!: number;
+
+  @ApiProperty({ description: 'Fase 66 -- status PAUSED isolado (subconjunto de inProgressTrips, que combina IN_PROGRESS+PAUSED).' })
+  pausedTrips!: number;
+
+  @ApiProperty({
+    description:
+      'Fase 66 -- viagens nao finalizadas (PLANNED/WAITING_DRIVER/WAITING_DEPARTURE/IN_PROGRESS/PAUSED) sem motorista vinculado.',
+  })
+  tripsWithoutDriver!: number;
+
+  @ApiProperty({
+    description:
+      'Fase 66 -- viagens nao finalizadas sem composicao (veiculo) vinculada.',
+  })
+  tripsWithoutVehicle!: number;
+
+  @ApiProperty({
+    description:
+      'Fase 66 -- viagens nao finalizadas com Trip.plannedArrival no passado (unica base temporal confiavel disponivel -- ' +
+      'nunca uma estimativa de ETA). Zero quando nenhuma viagem do escopo tem plannedArrival preenchido.',
+  })
+  delayedTrips!: number;
+
   @ApiProperty({ nullable: true, description: 'Media de TripMetrics.actualDurationMin, so viagens concluidas com o dado gravado.' })
   averageTripDurationMinutes!: number | null;
 

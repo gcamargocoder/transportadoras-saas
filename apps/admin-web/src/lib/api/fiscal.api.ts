@@ -1,7 +1,7 @@
 import type { Paginated, PaginationParams } from '../../types/api';
 import type { AuditLogEntity, FiscalDashboardEntity, FiscalDocumentEntity, TripDocumentStatusEntity } from '../../types/entities';
 import type { FiscalDocumentStatus, FiscalDocumentType } from '../../types/enums';
-import { api } from './http';
+import { api, apiFetchBlob } from './http';
 
 export interface FindFiscalDocumentsQuery extends PaginationParams {
   documentType?: FiscalDocumentType | undefined;
@@ -37,6 +37,13 @@ export function getTripDocumentStatus(tripId: string, signal?: AbortSignal) {
 
 export function getFiscalDocumentHistory(id: string, query: PaginationParams = {}) {
   return api.get<Paginated<AuditLogEntity>>(`/fiscal/documents/${id}/history`, query);
+}
+
+// Fase 68 -- preview/download do arquivo original (ex: comprovante de
+// entrega). Retorna o Blob puro; mimeType/fileName para exibir/salvar
+// devem vir da propria FiscalDocumentEntity ja carregada pelo chamador.
+export function getFiscalDocumentFile(id: string): Promise<Blob> {
+  return apiFetchBlob(`/fiscal/documents/${id}/file`);
 }
 
 export interface UploadFiscalDocumentFields {

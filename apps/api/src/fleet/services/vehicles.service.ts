@@ -459,6 +459,61 @@ export class VehiclesService {
     });
   }
 
+  // Fase 63 -- sincroniza Vehicle.status com a existencia (ou nao) de uma
+  // VehicleMaintenance IN_PROGRESS para o veiculo, o MESMO mecanismo ja
+  // usado por Driver.isActive/Driver.status na Fase 61 (campo persistido
+  // sincronizado, nunca uma segunda flag de disponibilidade derivada --
+  // resolveAvailability/buildAvailabilityWhere/getSummary ja leem
+  // Vehicle.status e continuam funcionando sem nenhuma alteracao). So ACTIVE
+  // e "promovido" para MAINTENANCE (SUSPENDED/INACTIVE ja sao mais
+  // restritivos, preservados como estao); so MAINTENANCE e "restaurado" para
+  // ACTIVE quando a ultima IN_PROGRESS deixa de existir (nunca sobrescreve
+  // um MAINTENANCE setado manualmente sem nenhuma manutencao vinculada
+  // continuar apos essa checagem == false, o que e o comportamento correto).
+  // Chamada de dentro da MESMA transacao de MaintenancesService.updateStatus
+  // (client opcional), nunca uma segunda escrita desacoplada.
+  async syncStatusForMaintenance(
+    tenantId: string,
+    vehicleId: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<void> {
+    const [vehicle, activeMaintenanceCount] = await Promise.all([
+      client.vehicle.findFirst({ where: { id: vehicleId, tenantId, deletedAt: null } }),
+      client.vehicleMaintenance.count({
+        where: { tenantId, vehicleId, status: VehicleMaintenanceStatus.IN_PROGRESS },
+      }),
+    ]);
+    if (!vehicle) return;
+
+    const hasActiveMaintenance = activeMaintenanceCount > 0;
+    let nextStatus: VehicleStatus | undefined;
+    if (hasActiveMaintenance && vehicle.status === VehicleStatus.ACTIVE) {
+      nextStatus = VehicleStatus.MAINTENANCE;
+    } else if (!hasActiveMaintenance && vehicle.status === VehicleStatus.MAINTENANCE) {
+      nextStatus = VehicleStatus.ACTIVE;
+    }
+    if (!nextStatus) return;
+
+    const updated = await client.vehicle.update({
+      where: { id: vehicleId },
+      data: { status: nextStatus },
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: resolveVehicleStatusChangeAction(vehicle.status, updated.status),
+      entityName: 'Vehicle',
+      entityId: vehicleId,
+      previousValue: { status: vehicle.status },
+      newValue: { status: updated.status },
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+  }
+
   async findActiveOrThrow(tenantId: string, id: string): Promise<Vehicle> {
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id, tenantId, deletedAt: null },

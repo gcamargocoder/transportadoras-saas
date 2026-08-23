@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { FuelSuppliesModule } from '../fuel-supplies/fuel-supplies.module';
 import { TiresModule } from '../tires/tires.module';
 import { FleetOperationsController } from './controllers/fleet-operations.controller';
+import { FleetOccurrencesMetricsService } from './services/fleet-occurrences-metrics.service';
 import { FleetOperationsMetricsService } from './services/fleet-operations-metrics.service';
 
 // Importa FuelSuppliesModule/TiresModule para reaproveitar seus
@@ -10,7 +11,7 @@ import { FleetOperationsMetricsService } from './services/fleet-operations-metri
 @Module({
   imports: [FuelSuppliesModule, TiresModule],
   controllers: [FleetOperationsController],
-  providers: [FleetOperationsMetricsService],
+  providers: [FleetOperationsMetricsService, FleetOccurrencesMetricsService],
   // Fase 62 -- exportado para VehicleOverviewService (FleetModule)
   // reaproveitar getFinancialDashboard sem recalcular custo/receita.
   exports: [FleetOperationsMetricsService],

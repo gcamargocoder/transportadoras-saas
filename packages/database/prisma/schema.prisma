@@ -684,6 +684,7 @@ model Tenant {
   tripSettlements          TripSettlement[]
   tripMetrics              TripMetrics[]
   driverShifts             DriverShift[]
+  tripOccurrences          TripOccurrence[]
   tollTransactions         TollTransaction[]
   tollAudits               TollAudit[]
   tollRoutes               TollRoute[]
@@ -924,6 +925,8 @@ model UserAccount {
   subscriptionPaymentsCreated     SubscriptionPayment[]
   fiscalDocumentsCreated          FiscalDocument[]          @relation("FiscalDocumentCreator")
   fiscalDocumentsUpdated          FiscalDocument[]          @relation("FiscalDocumentUpdater")
+  tripOccurrencesCreated          TripOccurrence[]          @relation("TripOccurrenceCreator")
+  tripOccurrencesResolved         TripOccurrence[]          @relation("TripOccurrenceResolver")
   contractsCreated                Contract[]                @relation("ContractCreator")
   contractsUpdated                Contract[]                @relation("ContractUpdater")
   freightTablesCreated            FreightTable[]            @relation("FreightTableCreator")
@@ -1021,40 +1024,40 @@ model Fleet {
 /// regiao (ex: "Toco", "Truck 6x2", "Cavalo Trucado") -- nao vale a pena
 /// travar num enum fixo.
 model Vehicle {
-  id                    String           @id @default(uuid()) @db.Uuid
-  tenantId              String           @map("tenant_id") @db.Uuid
-  fleetId               String?          @map("fleet_id") @db.Uuid
-  plate                 String           @db.VarChar(10)
-  renavam               String?          @db.VarChar(20)
-  chassisNumber         String?          @map("chassis_number") @db.VarChar(30)
+  id                    String               @id @default(uuid()) @db.Uuid
+  tenantId              String               @map("tenant_id") @db.Uuid
+  fleetId               String?              @map("fleet_id") @db.Uuid
+  plate                 String               @db.VarChar(10)
+  renavam               String?              @db.VarChar(20)
+  chassisNumber         String?              @map("chassis_number") @db.VarChar(30)
   brand                 String
   model                 String
-  manufactureYear       Int?             @map("manufacture_year")
-  modelYear             Int?             @map("model_year")
+  manufactureYear       Int?                 @map("manufacture_year")
+  modelYear             Int?                 @map("model_year")
   color                 String?
-  type                  VehicleType      @default(TRACTOR_UNIT)
+  type                  VehicleType          @default(TRACTOR_UNIT)
   category              String?
-  fuelType              VehicleFuelType? @map("fuel_type")
+  fuelType              VehicleFuelType?     @map("fuel_type")
   /// Capacidade do tanque de combustivel (litros).
-  tankCapacityLiters    Decimal?         @map("tank_capacity_liters") @db.Decimal(10, 2)
+  tankCapacityLiters    Decimal?             @map("tank_capacity_liters") @db.Decimal(10, 2)
   /// Consumo medio (km por litro).
-  averageConsumptionKmL Decimal?         @map("average_consumption_km_l") @db.Decimal(10, 2)
+  averageConsumptionKmL Decimal?             @map("average_consumption_km_l") @db.Decimal(10, 2)
   /// Quilometragem atual registrada do veiculo (distinta de
   /// Telemetry.odometerKm, que e uma serie historica de leituras).
-  odometerKm            Decimal?         @map("odometer_km") @db.Decimal(10, 2)
+  odometerKm            Decimal?             @map("odometer_km") @db.Decimal(10, 2)
   /// Peso Bruto Total (PBT), em kg.
-  grossWeightKg         Decimal?         @map("gross_weight_kg") @db.Decimal(10, 2)
-  netWeightKg           Decimal?         @map("net_weight_kg") @db.Decimal(10, 2)
-  cargoCapacityKg       Decimal?         @map("cargo_capacity_kg") @db.Decimal(10, 2)
-  axleCount             Int?             @map("axle_count")
+  grossWeightKg         Decimal?             @map("gross_weight_kg") @db.Decimal(10, 2)
+  netWeightKg           Decimal?             @map("net_weight_kg") @db.Decimal(10, 2)
+  cargoCapacityKg       Decimal?             @map("cargo_capacity_kg") @db.Decimal(10, 2)
+  axleCount             Int?                 @map("axle_count")
   notes                 String?
-  status                VehicleStatus    @default(ACTIVE)
+  status                VehicleStatus        @default(ACTIVE)
   /// Fase 62 -- classificacao de propriedade (mesmo espirito de Driver.type).
   ownershipType         VehicleOwnershipType @default(OWN) @map("ownership_type")
   /// Exclusao logica (mesmo padrao ja usado em Driver/UserAccount).
-  deletedAt             DateTime?        @map("deleted_at")
-  createdAt             DateTime         @default(now()) @map("created_at")
-  updatedAt             DateTime         @updatedAt @map("updated_at")
+  deletedAt             DateTime?            @map("deleted_at")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
 
   tenant                  Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fleet                   Fleet?                    @relation(fields: [fleetId], references: [id], onDelete: SetNull)
@@ -1068,6 +1071,7 @@ model Vehicle {
   fuelSupplies            FuelSupply[]
   tripStops               TripStop[]
   axleEvents              AxleEvent[]
+  tripOccurrences         TripOccurrence[]
   routePlans              RoutePlan[]
   tires                   Tire[]                    @relation("TireCurrentVehicle")
   tireMovementsAsPrevious TireMovement[]            @relation("TireMovementPreviousVehicle")
@@ -1612,6 +1616,7 @@ model Driver {
   userAccount         UserAccount?              @relation(fields: [userAccountId], references: [id], onDelete: SetNull)
   trips               Trip[]
   shifts              DriverShift[]
+  tripOccurrences     TripOccurrence[]
   tollTransactions    TollTransaction[]
   tripExpenses        TripExpense[]
   tripAdvances        TripAdvance[]
@@ -1667,19 +1672,26 @@ model DriverVehicleAssignment {
 
 /// Jornada de trabalho do motorista. trip_id e opcional -- a jornada pode
 /// existir fora de uma viagem especifica (parado, manutencao, descanso).
+/// Fase 67 -- status (OPEN/CLOSED/CANCELLED) e SEMPRE derivado de
+/// endedAt/cancelledAt no mapper, nunca uma coluna redundante (mesmo padrao
+/// de TripStop). cancelledAt adicionado para permitir cancelar uma jornada
+/// aberta por engano sem que ela entre em calculos de duracao.
 model DriverShift {
-  id        String    @id @default(uuid()) @db.Uuid
-  tenantId  String    @map("tenant_id") @db.Uuid
-  driverId  String    @map("driver_id") @db.Uuid
-  tripId    String?   @map("trip_id") @db.Uuid
-  startedAt DateTime  @map("started_at")
-  endedAt   DateTime? @map("ended_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  driverId    String    @map("driver_id") @db.Uuid
+  tripId      String?   @map("trip_id") @db.Uuid
+  startedAt   DateTime  @map("started_at")
+  endedAt     DateTime? @map("ended_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
-  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  driver Driver       @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  trip   Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  breaks ShiftBreak[]
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driver      Driver           @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  trip        Trip?            @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  breaks      ShiftBreak[]
+  occurrences TripOccurrence[]
 
   @@index([tenantId])
   @@index([driverId])
@@ -1687,18 +1699,106 @@ model DriverShift {
   @@map("driver_shifts")
 }
 
-/// Pausa dentro de uma jornada de motorista.
+/// Pausa dentro de uma jornada de motorista. type reaproveita o enum
+/// TripStopType (ja possui REST/MEAL/FUEL/MAINTENANCE/OTHER -- nao ha
+/// necessidade de um enum novo, Fase 67).
 model ShiftBreak {
-  id            String    @id @default(uuid()) @db.Uuid
-  driverShiftId String    @map("driver_shift_id") @db.Uuid
-  startedAt     DateTime  @map("started_at")
-  endedAt       DateTime? @map("ended_at")
+  id            String       @id @default(uuid()) @db.Uuid
+  driverShiftId String       @map("driver_shift_id") @db.Uuid
+  type          TripStopType @default(REST)
+  startedAt     DateTime     @map("started_at")
+  endedAt       DateTime?    @map("ended_at")
   reason        String?
 
   driverShift DriverShift @relation(fields: [driverShiftId], references: [id], onDelete: Cascade)
 
   @@index([driverShiftId])
   @@map("shift_breaks")
+}
+
+enum TripOccurrenceType {
+  ACCIDENT
+  BREAKDOWN
+  DELAY
+  ROUTE_DEVIATION
+  DELIVERY_PROBLEM
+  DOCUMENT_PROBLEM
+  VEHICLE_PROBLEM
+  FUEL_PROBLEM
+  TIRE_PROBLEM
+  OTHER
+
+  @@map("trip_occurrence_type")
+}
+
+enum TripOccurrenceSeverity {
+  INFO
+  WARNING
+  CRITICAL
+
+  @@map("trip_occurrence_severity")
+}
+
+enum TripOccurrenceStatus {
+  OPEN
+  RESOLVED
+  CANCELLED
+
+  @@map("trip_occurrence_status")
+}
+
+/// Ocorrencia registrada durante uma viagem (Fase 67). Nunca uma segunda
+/// fonte de eventos -- apenas o registro do proprio incidente; a timeline
+/// unificada (GET /trips/:id/timeline) agrega este model como mais uma
+/// origem, junto de TripStop/RouteEvent/FuelSupply/etc. status e sempre
+/// derivado de resolvedAt/cancelledAt no mapper (mesmo padrao de TripStop),
+/// nunca redundante. Evidencia reaproveita Attachment via FK direta
+/// (mesmo padrao de FuelSupply.attachmentId/TripExpense.attachmentId),
+/// nunca um sistema de arquivos novo.
+model TripOccurrence {
+  id            String                 @id @default(uuid()) @db.Uuid
+  tenantId      String                 @map("tenant_id") @db.Uuid
+  tripId        String                 @map("trip_id") @db.Uuid
+  driverShiftId String?                @map("driver_shift_id") @db.Uuid
+  driverId      String?                @map("driver_id") @db.Uuid
+  vehicleId     String?                @map("vehicle_id") @db.Uuid
+  type          TripOccurrenceType
+  severity      TripOccurrenceSeverity @default(INFO)
+  description   String
+  occurredAt    DateTime               @map("occurred_at")
+  latitude      Decimal?               @db.Decimal(9, 6)
+  longitude     Decimal?               @db.Decimal(9, 6)
+  locationLabel String?                @map("location_label")
+  resolvedAt    DateTime?              @map("resolved_at")
+  resolvedBy    String?                @map("resolved_by") @db.Uuid
+  cancelledAt   DateTime?              @map("cancelled_at")
+  attachmentId  String?                @map("attachment_id") @db.Uuid
+  metadata      Json?                  @default("{}")
+  /// Idempotencia de submissao offline pelo Driver App (mesmo padrao de
+  /// TripStop/FuelSupply/AxleEvent/ChecklistExecution/FiscalDocument).
+  /// Sempre null para ocorrencias criadas pelo fluxo administrativo, unico
+  /// por tenant (Postgres permite multiplos NULL sob unique).
+  deviceEventId String?                @unique @map("device_event_id")
+  createdBy     String                 @map("created_by") @db.Uuid
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip        Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  driverShift DriverShift? @relation(fields: [driverShiftId], references: [id], onDelete: SetNull)
+  driver      Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle     Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  attachment  Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator     UserAccount  @relation("TripOccurrenceCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  resolver    UserAccount? @relation("TripOccurrenceResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, severity])
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, driverId])
+  @@index([tenantId, vehicleId])
+  @@map("trip_occurrences")
 }
 
 // ============================================================================
@@ -1898,6 +1998,7 @@ model Trip {
   fuelSupplies        FuelSupply[]
   metrics             TripMetrics?
   driverShifts        DriverShift[]
+  tripOccurrences     TripOccurrence[]
   telemetry           Telemetry[]
   tripStops           TripStop[]
   axleEvents          AxleEvent[]
@@ -2269,24 +2370,87 @@ model Alert {
 
 /// Entrega de um Alert a um usuario por um canal especifico. Um Alert pode
 /// gerar varias Notifications (push + email, por exemplo).
+/// Fase 69 -- Centro de Alertas e Notificacoes. Ate aqui, model 100% orfao
+/// (zero uso em qualquer service/controller, confirmado por auditoria --
+/// diferente de Alert, que e ativo/usado por RoutingService/TripsService/
+/// FleetOperationsMetricsService). Ativado como o CENTRO INTERNO de
+/// notificacoes: type/title/message/severity/entityType/entityId/readAt
+/// sao os campos realmente usados nesta fase (leitura/nao-lida, navegacao
+/// para a origem). alertId/channel/status/sentAt sao preservados (sempre
+/// nulos nesta fase) para uma fase FUTURA de entrega por canal externo
+/// (email/push/whatsapp) -- nunca removidos, nunca reaproveitados com
+/// outro significado (nenhuma alteracao destrutiva).
 model Notification {
-  id          String              @id @default(uuid()) @db.Uuid
-  tenantId    String              @map("tenant_id") @db.Uuid
-  alertId     String              @map("alert_id") @db.Uuid
-  recipientId String              @map("recipient_id") @db.Uuid
-  channel     NotificationChannel
-  status      NotificationStatus  @default(PENDING)
-  sentAt      DateTime?           @map("sent_at")
-  createdAt   DateTime            @default(now()) @map("created_at")
+  id          String               @id @default(uuid()) @db.Uuid
+  tenantId    String               @map("tenant_id") @db.Uuid
+  /// Vinculo LEGADO e opcional com o model Alert (ROUTE_DEVIATION/etc) --
+  /// as notificacoes desta fase (originadas de FleetAlert/TripOccurrence/
+  /// Vehicle/etc) nunca tem um Alert correspondente, portanto opcional.
+  alertId     String?              @map("alert_id") @db.Uuid
+  recipientId String               @map("recipient_id") @db.Uuid
+  /// Fase 69 -- classificacao da notificacao (mesma fonte de verdade do
+  /// FleetAlert correspondente, nunca uma segunda logica de deteccao).
+  type        NotificationType
+  title       String
+  message     String
+  /// Reaproveita o enum AlertSeverity (LOW/MEDIUM/HIGH/CRITICAL) ja
+  /// existente -- nenhum enum de severidade novo.
+  severity    AlertSeverity        @default(MEDIUM)
+  /// Nome do model de origem (ex: "TripOccurrence", "Vehicle",
+  /// "VehicleMaintenance", "Tire", "FuelSupply", "FiscalDocument", "Trip",
+  /// "Driver", "TripSettlement") + id do registro -- permite navegar ate a
+  /// origem sem duplicar nenhum dado dela aqui.
+  entityType  String               @map("entity_type")
+  entityId    String               @map("entity_id") @db.Uuid
+  /// Preenchido quando o destinatario le a notificacao. Nunca apagada
+  /// quando a condicao de origem e resolvida -- historico permanece.
+  readAt      DateTime?            @map("read_at")
+  /// Dados adicionais de exibicao (ex: placa, tipo da ocorrencia) --
+  /// somente o que evita uma consulta extra na tela de listagem, nunca um
+  /// snapshot completo da entidade de origem.
+  metadata    Json?
+  /// Campos legados de entrega por canal externo (Fase 69 nunca preenche;
+  /// ver comentario do model acima).
+  channel     NotificationChannel?
+  status      NotificationStatus?  @default(PENDING)
+  sentAt      DateTime?            @map("sent_at")
+  createdAt   DateTime             @default(now()) @map("created_at")
 
   tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  alert     Alert       @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  alert     Alert?      @relation(fields: [alertId], references: [id], onDelete: SetNull)
   recipient UserAccount @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
+  /// Deduplicacao (secao 5/17 do pedido Fase 69): o MESMO alerta nunca gera
+  /// uma segunda notificacao logica para o mesmo destinatario enquanto a
+  /// condicao seguir ativa -- geracao usa createMany({skipDuplicates:true})
+  /// contra esta chave, nunca um "findFirst then create" por notificacao.
+  @@unique([tenantId, recipientId, type, entityType, entityId])
   @@index([tenantId])
   @@index([alertId])
-  @@index([recipientId, status])
+  @@index([recipientId, readAt])
   @@map("notifications")
+}
+
+enum NotificationType {
+  CRITICAL_OCCURRENCE
+  VEHICLE_UNAVAILABLE
+  VEHICLE_MAINTENANCE
+  TIRE_NEAR_REPLACEMENT
+  FUEL_ODOMETER_REGRESSION
+  FISCAL_DOCUMENT_PROBLEM
+  TRIP_DELAYED
+  DRIVER_SUSPENDED
+  DRIVER_INACTIVE
+  BILLING_PENDING
+  /// Fase 70 -- reaproveita a MESMA classificacao de
+  /// trip-compliance.util.ts (computeDeliveryProofStatus), nunca uma
+  /// segunda maquina de estados: PENDING = comprovante ja enviado
+  /// aguardando revisao (nunca "ausente", a Fase 54 documenta que nao ha
+  /// regra de obrigatoriedade configurada -- ver docs/notifications.md).
+  DELIVERY_PROOF_PENDING
+  DELIVERY_PROOF_PROBLEM
+
+  @@map("notification_type")
 }
 
 /// Dados de telemetria do veiculo (ignicao, bateria, combustivel,
@@ -2990,6 +3154,8 @@ model Attachment {
   /// Fase 52 -- arquivo do documento fiscal/documental (PDF/XML/JPG/PNG),
   /// mesmo mecanismo generico de storage, nunca um storage novo.
   fiscalDocuments   FiscalDocument[]
+  /// Fase 67 -- evidencia de ocorrencia (foto), mesmo mecanismo generico.
+  tripOccurrences   TripOccurrence[]
 
   @@index([tenantId, entityName, entityId])
   @@map("attachments")

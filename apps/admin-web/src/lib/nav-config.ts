@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bell,
   Building2,
   CircleDot,
   Container,
@@ -70,6 +71,11 @@ export const NAV_GROUPS: NavGroup[] = [
         roles: DASHBOARD_ROLES,
         module: TenantModule.DASHBOARDS,
       },
+      // Fase 69 -- sem restricao de role/modulo: qualquer usuario autenticado
+      // ve as PROPRIAS notificacoes (mesmo criterio do backend, que nunca
+      // aplica @Roles em NotificationsController -- o isolamento e por
+      // usuario, nao por papel).
+      { label: 'Notificações', href: '/notifications', icon: Bell, roles: [] },
     ],
   },
   {

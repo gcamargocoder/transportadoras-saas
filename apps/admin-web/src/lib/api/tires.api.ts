@@ -70,11 +70,17 @@ export function getTireMovements(id: string, query: PaginationParams = {}) {
   return api.get<Paginated<TireMovementEntity>>(`/tires/${id}/movements`, query);
 }
 
+// Fase 64 -- nomes alinhados ao CreateTireMovementDto do backend
+// (newLocationType/newVehicleId/newTrailerId/newPosition). O client
+// anterior enviava locationType/vehicleId/trailerId/position, que o
+// ValidationPipe global (forbidNonWhitelisted: true) sempre rejeitava com
+// 400 -- bug pre-existente que deixava "Nova movimentacao" inoperante,
+// corrigido aqui.
 export interface CreateTireMovementPayload {
-  locationType: TireLocationType;
-  vehicleId?: string | undefined;
-  trailerId?: string | undefined;
-  position?: string | undefined;
+  newLocationType: TireLocationType;
+  newVehicleId?: string | undefined;
+  newTrailerId?: string | undefined;
+  newPosition?: string | undefined;
   odometerKm?: number | undefined;
   reason?: string | undefined;
 }

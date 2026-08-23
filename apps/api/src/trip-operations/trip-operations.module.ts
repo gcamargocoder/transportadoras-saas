@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { RoutingModule } from '../routing/routing.module';
 import { TripStopsController } from './controllers/trip-stops.controller';
 import { AxleEventsService } from './services/axle-events.service';
+import { DriverShiftsService } from './services/driver-shifts.service';
 import { TrackingPointsService } from './services/tracking-points.service';
+import { TripOccurrencesService } from './services/trip-occurrences.service';
 import { TripStopsService } from './services/trip-stops.service';
 
 // Ate a Fase 43, modulo sem controllers proprios (Fase 25): expunha so os 3
@@ -20,10 +22,13 @@ import { TripStopsService } from './services/trip-stops.service';
 // deteccao de desvio a cada lote de localizacao -- RoutingModule nao
 // depende deste modulo de volta, sem ciclo (mesmo desenho de dependencia
 // unidirecional ja usado no projeto).
+// Fase 67 -- TripOccurrencesService/DriverShiftsService seguem o MESMO
+// desenho dos 3 services acima (so PrismaService/AuditService, nenhuma
+// dependencia de TripsService, para nao correr risco de ciclo).
 @Module({
   imports: [RoutingModule],
   controllers: [TripStopsController],
-  providers: [TripStopsService, AxleEventsService, TrackingPointsService],
-  exports: [TripStopsService, AxleEventsService, TrackingPointsService],
+  providers: [TripStopsService, AxleEventsService, TrackingPointsService, TripOccurrencesService, DriverShiftsService],
+  exports: [TripStopsService, AxleEventsService, TrackingPointsService, TripOccurrencesService, DriverShiftsService],
 })
 export class TripOperationsModule {}

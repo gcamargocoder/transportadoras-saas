@@ -21,9 +21,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
 import { Roles } from '../../auth/decorators/roles.decorator';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { TenantModule } from '@prisma/client';
@@ -44,18 +42,26 @@ import { TollReconciliationEntity } from '../../toll-routes/entities/toll-reconc
 import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entity';
 import { TrackingPointEntity } from '../../trip-operations/entities/tracking-point.entity';
 import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
+import { DriverShiftEntity } from '../../trip-operations/entities/driver-shift.entity';
+import { TripOccurrenceEntity } from '../../trip-operations/entities/trip-occurrence.entity';
 import { AxleEventsService } from '../../trip-operations/services/axle-events.service';
+import { DriverShiftsService } from '../../trip-operations/services/driver-shifts.service';
 import { TrackingPointsService } from '../../trip-operations/services/tracking-points.service';
+import { TripOccurrencesService } from '../../trip-operations/services/trip-occurrences.service';
 import { TripStopsService } from '../../trip-operations/services/trip-stops.service';
+import { CreateTripOccurrenceDto } from '../../trip-operations/dto/create-trip-occurrence.dto';
+import { FindTripOccurrencesQueryDto } from '../../trip-operations/dto/find-trip-occurrences-query.dto';
 import { TRIP_READ_ROLES, TRIP_WRITE_ROLES } from '../constants/trip-roles.constants';
 import { CreateRouteEventDto } from '../dto/create-route-event.dto';
 import { CreateTripDto } from '../dto/create-trip.dto';
 import { FindTripsQueryDto } from '../dto/find-trips-query.dto';
+import { FindTripTimelineQueryDto } from '../dto/find-trip-timeline-query.dto';
 import { PlannedTripMetricsDto } from '../dto/planned-trip-metrics.dto';
 import { UpdateRouteEventDto } from '../dto/update-route-event.dto';
 import { UpdateTripStatusDto } from '../dto/update-trip-status.dto';
 import { UpdateTripDto } from '../dto/update-trip.dto';
 import { PaginatedTripsEntity } from '../entities/paginated-trips.entity';
+import { PaginatedTripTimelineEntity } from '../entities/trip-timeline-event.entity';
 import { RouteEventEntity } from '../entities/route-event.entity';
 import { RouteVersionEntity } from '../entities/route-version.entity';
 import { TripMetricsEntity } from '../entities/trip-metrics.entity';
@@ -65,6 +71,7 @@ import { TripEntity } from '../entities/trip.entity';
 import { RouteEventsService } from '../services/route-events.service';
 import { RouteVersionsService } from '../services/route-versions.service';
 import { TripMetricsService } from '../services/trip-metrics.service';
+import { TripTimelineService } from '../services/trip-timeline.service';
 import { TripsService } from '../services/trips.service';
 
 @ApiTags('trips')
@@ -83,6 +90,9 @@ export class TripsController {
     private readonly tripStopsService: TripStopsService,
     private readonly axleEventsService: AxleEventsService,
     private readonly trackingPointsService: TrackingPointsService,
+    private readonly tripTimelineService: TripTimelineService,
+    private readonly tripOccurrencesService: TripOccurrencesService,
+    private readonly driverShiftsService: DriverShiftsService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -197,16 +207,91 @@ export class TripsController {
   @Roles(...TRIP_READ_ROLES)
   @ApiOperation({
     summary:
-      'Timeline de eventos da viagem (criada, motorista/veiculo vinculado, inicio, pausa, ' +
-      'retorno, chegada, conclusao, cancelamento) -- cada evento traz quem, quando, IP e User-Agent.',
+      'Timeline unificada da viagem (Fase 67): agrega paradas, eventos de rota, abastecimentos, ' +
+      'pedagios, excecoes de eixo, checklists, documentos fiscais/comprovante de entrega, ' +
+      'despesas, receitas, ocorrencias e auditoria numa unica projecao ordenada, com filtros por ' +
+      'origem/tipo/periodo e paginacao.',
   })
-  @ApiOkResponse({ type: PaginatedAuditLogEntity })
+  @ApiOkResponse({ type: PaginatedTripTimelineEntity })
   @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
   findTimeline(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query() query: PaginationQueryDto,
-  ): Promise<PaginatedAuditLogEntity> {
-    return this.tripsService.getTimeline(this.tenantContext.requireTenantId(), id, query);
+    @Query() query: FindTripTimelineQueryDto,
+  ): Promise<PaginatedTripTimelineEntity> {
+    return this.tripTimelineService.getTimeline(this.tenantContext.requireTenantId(), id, query);
+  }
+
+  @Get(':id/occurrences')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({ summary: 'Lista as ocorrencias registradas nesta viagem.' })
+  @ApiOkResponse({ type: TripOccurrenceEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findOccurrences(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: FindTripOccurrencesQueryDto,
+  ): Promise<TripOccurrenceEntity[]> {
+    return this.tripOccurrencesService.findAllForTrip(this.tenantContext.requireTenantId(), id, query);
+  }
+
+  @Post(':id/occurrences')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({ summary: 'Registra uma ocorrencia administrativamente nesta viagem.' })
+  @ApiCreatedResponse({ type: TripOccurrenceEntity })
+  @ApiNotFoundResponse({ description: 'Viagem, motorista, veiculo ou anexo nao encontrados nesta empresa.' })
+  createOccurrence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateTripOccurrenceDto,
+  ): Promise<TripOccurrenceEntity> {
+    return this.tripOccurrencesService.create(
+      this.tenantContext.requireTenantId(),
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Patch(':id/occurrences/:occurrenceId/resolve')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({ summary: 'Resolve uma ocorrencia em aberto. Idempotente.' })
+  @ApiOkResponse({ type: TripOccurrenceEntity })
+  resolveOccurrence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('occurrenceId', ParseUUIDPipe) occurrenceId: string,
+  ): Promise<TripOccurrenceEntity> {
+    return this.tripOccurrencesService.resolve(
+      this.tenantContext.requireTenantId(),
+      id,
+      occurrenceId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Patch(':id/occurrences/:occurrenceId/cancel')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({ summary: 'Cancela um registro de ocorrencia indevido. Idempotente.' })
+  @ApiOkResponse({ type: TripOccurrenceEntity })
+  cancelOccurrence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('occurrenceId', ParseUUIDPipe) occurrenceId: string,
+  ): Promise<TripOccurrenceEntity> {
+    return this.tripOccurrencesService.cancel(
+      this.tenantContext.requireTenantId(),
+      id,
+      occurrenceId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/shifts')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({ summary: 'Jornadas de motorista vinculadas a esta viagem.' })
+  @ApiOkResponse({ type: DriverShiftEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findShifts(@Param('id', ParseUUIDPipe) id: string): Promise<DriverShiftEntity[]> {
+    return this.driverShiftsService.findAllForTrip(this.tenantContext.requireTenantId(), id);
   }
 
   @Get(':id/summary')

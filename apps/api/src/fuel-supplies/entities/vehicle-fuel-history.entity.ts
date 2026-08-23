@@ -27,4 +27,12 @@ export class VehicleFuelHistoryEntity {
       'Distancia total / litros abastecidos entre o 1o e o ultimo odometro (null com menos de 2 abastecimentos).',
   })
   averageConsumptionKmL!: number | null;
+
+  @ApiProperty({
+    description:
+      'Fase 65 -- true quando algum abastecimento mais recente (por supplyDate) tem odometerKm menor que um ' +
+      'anterior (detectOdometerRegression, mesma funcao ja usada pelos alertas de frota) -- nunca um "zero" ' +
+      'mascarando a ausencia de inconsistencia.',
+  })
+  hasOdometerRegression!: boolean;
 }

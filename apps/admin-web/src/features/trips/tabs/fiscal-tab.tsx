@@ -267,7 +267,7 @@ export function FiscalTab({ tripId }: { tripId: string }): JSX.Element {
           )}
           <p className="mt-1.5 text-[11px] text-ink-subtle">
             Comprovante de entrega é evidência documental operacional. Sua existência não representa validação fiscal perante a SEFAZ.
-            Visualização de arquivo (preview/download) ainda não disponível nesta fase — ver detalhe do documento para os dados registrados.
+            Abra o detalhe do documento para visualizar/baixar o arquivo original.
           </p>
         </div>
       )}

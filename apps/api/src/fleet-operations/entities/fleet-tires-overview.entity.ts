@@ -20,6 +20,17 @@ export class FleetTireStatusBreakdownEntity {
 // So pneus ATUALMENTE montados em veiculo (tire.vehicleId setado) --
 // pneus em estoque/carreta ja estao cobertos por summary.stockCount, nunca
 // atribuidos a uma frota que nao tem relacao direta com eles.
+// Fase 64 -- so pneus com Tire.position preenchida (VEHICLE/TRAILER com
+// posicao informada); texto livre, nunca uma taxonomia de eixo/lado
+// inventada (ver docs/tire-management.md).
+export class FleetTirePositionBreakdownEntity {
+  @ApiProperty()
+  position!: string;
+
+  @ApiProperty()
+  count!: number;
+}
+
 export class FleetTireFleetBreakdownEntity {
   @ApiProperty({ nullable: true, format: 'uuid' })
   fleetId!: string | null;
@@ -100,8 +111,20 @@ export class FleetTiresOverviewEntity {
   @ApiProperty({ description: 'Pneus IN_USE com currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM.' })
   nearReplacementCount!: number;
 
+  @ApiProperty({
+    nullable: true,
+    description: 'Fase 64 -- (investedValue + retreadValue) / totalTires. Null quando totalTires = 0 (nunca dividir por zero).',
+  })
+  averageCostPerTire!: number | null;
+
   @ApiProperty({ type: [FleetTireStatusBreakdownEntity] })
   byStatus!: FleetTireStatusBreakdownEntity[];
+
+  @ApiProperty({
+    type: [FleetTirePositionBreakdownEntity],
+    description: 'Fase 64 -- so pneus atualmente montados com posicao informada (Tire.position, texto livre).',
+  })
+  byPosition!: FleetTirePositionBreakdownEntity[];
 
   @ApiProperty({ type: [FleetTireFleetBreakdownEntity] })
   byFleet!: FleetTireFleetBreakdownEntity[];

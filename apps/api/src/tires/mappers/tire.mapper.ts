@@ -1,6 +1,7 @@
 import { Tire, Trailer, UserAccount, Vehicle } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
-import { TireEntity } from '../entities/tire.entity';
+import { TireEntity, TireLifecycleEntity } from '../entities/tire.entity';
+import { TireLifecycleResult } from '../utils/tire-lifecycle.util';
 
 export type TireWithRelations = Tire & {
   vehicle: Vehicle | null;
@@ -9,7 +10,9 @@ export type TireWithRelations = Tire & {
   updater: UserAccount | null;
 };
 
-export function toTireEntity(tire: TireWithRelations): TireEntity {
+// Fase 64 -- so passado por TiresService.findOne (GET /tires/:id); listagem
+// (GET /tires) chama sem o 2o argumento e o campo fica null, evitando N+1.
+export function toTireEntity(tire: TireWithRelations, lifecycle?: TireLifecycleResult): TireEntity {
   const entity = new TireEntity();
   entity.id = tire.id;
   entity.tenantId = tire.tenantId;
@@ -37,5 +40,13 @@ export function toTireEntity(tire: TireWithRelations): TireEntity {
   entity.updaterName = tire.updater?.name ?? null;
   entity.createdAt = tire.createdAt;
   entity.updatedAt = tire.updatedAt;
+  entity.lifecycle = lifecycle
+    ? Object.assign(new TireLifecycleEntity(), {
+        totalCost: lifecycle.totalCost,
+        interventionsCount: lifecycle.interventionsCount,
+        daysInstalled: lifecycle.daysInstalled,
+        costPerKm: lifecycle.costPerKm,
+      })
+    : null;
   return entity;
 }

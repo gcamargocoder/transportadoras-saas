@@ -11,9 +11,13 @@ import { toTripMetricsEntity } from '../mappers/trip-metrics.mapper';
 import { TripsService } from './trips.service';
 
 // TripMetrics nasce junto com o Trip (ver TripsService.create) -- este
-// service so atualiza os valores PREVISTOS. Campos "actual*" nao sao
-// expostos para escrita nesta fase (ficam vazios ate rastreamento/
-// telemetria/pedagio existirem).
+// service so atualiza os valores PREVISTOS (PATCH /trips/:id/metrics,
+// entrada manual/planejamento). Os campos "actual*" (executado) nunca sao
+// expostos para escrita manual aqui -- desde a Fase 66 sao calculados
+// automaticamente por TripsService.updateActualTripMetrics ao concluir a
+// viagem (actualDistanceKm via odometro inicial/final, actualFuelLiters/
+// actualTollAmount/actualTotalCost reaproveitando TripSettlementsService.
+// getFinancialDashboard), nunca aceitos do cliente.
 @Injectable()
 export class TripMetricsService {
   constructor(

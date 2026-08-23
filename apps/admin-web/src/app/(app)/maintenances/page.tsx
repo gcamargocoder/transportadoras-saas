@@ -1,21 +1,27 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Plus } from 'lucide-react';
+import { Ban, CheckCircle2, Pencil, Play, Plus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
+import { ConfirmDialog } from '../../../components/ui/confirm-dialog';
 import { DataTable } from '../../../components/ui/data-table';
 import { FilterBar } from '../../../components/ui/filter-bar';
 import { FormField } from '../../../components/ui/form-field';
+import { Input } from '../../../components/ui/input';
+import { Modal } from '../../../components/ui/modal';
 import { PageHeader } from '../../../components/ui/page-header';
 import { Pagination } from '../../../components/ui/pagination';
 import { Select } from '../../../components/ui/select';
+import { useToast } from '../../../components/ui/toast';
 import { useAuth } from '../../../hooks/use-auth';
 import { CreateMaintenanceModal } from '../../../features/fleet/create-maintenance-modal';
+import { UpdateMaintenanceModal } from '../../../features/fleet/update-maintenance-modal';
 import { MAINTENANCE_STATUS_TONE } from '../../../features/fleet/status';
-import { listMaintenances } from '../../../lib/api/fleet.api';
+import { toFriendlyMessage } from '../../../lib/api/errors';
+import { listMaintenances, updateMaintenanceStatus } from '../../../lib/api/fleet.api';
 import { FLEET_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_STATUS_LABELS, MAINTENANCE_TYPE_LABELS } from '../../../lib/labels';
 import type { MaintenanceEntity } from '../../../types/entities';
@@ -24,17 +30,44 @@ import { formatCurrency, formatDate } from '../../../utils/format';
 
 const PAGE_SIZE = 20;
 
+// Fase 63 -- so faz sentido oferecer a acao quando o status atual permite a
+// transicao (COMPLETED/CANCELLED sao terminais no backend -- ver
+// maintenance-status-transition.util.ts -- os botoes desaparecem sozinhos
+// para uma manutencao ja encerrada, nunca dependem de um 409 para se
+// esconder).
+const NON_TERMINAL_STATUSES: VehicleMaintenanceStatus[] = ['OPEN', 'WAITING_PARTS', 'IN_PROGRESS'];
+
 export default function MaintenancesPage(): JSX.Element {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const toast = useToast();
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<VehicleMaintenanceStatus | ''>('');
   const [component, setComponent] = useState<MaintenanceComponent | ''>('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<MaintenanceEntity | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<MaintenanceEntity | null>(null);
+  const [completeTarget, setCompleteTarget] = useState<MaintenanceEntity | null>(null);
+  const [completeDate, setCompleteDate] = useState('');
+  const canWrite = hasRole(user?.role, FLEET_WRITE_ROLES);
 
   const query = useQuery({
     queryKey: ['maintenances', { page, status, component }],
     queryFn: ({ signal }) =>
       listMaintenances({ page, pageSize: PAGE_SIZE, status: status || undefined, component: component || undefined }, signal),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, next, completedAt }: { id: string; next: VehicleMaintenanceStatus; completedAt?: string }) =>
+      updateMaintenanceStatus(id, next, completedAt),
+    onSuccess: () => {
+      toast.success('Status da manutenção atualizado.');
+      queryClient.invalidateQueries({ queryKey: ['maintenances'] });
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      setCancelTarget(null);
+      setCompleteTarget(null);
+    },
+    onError: (error) => toast.error('Não foi possível atualizar o status.', toFriendlyMessage(error)),
   });
 
   const columns = useMemo<ColumnDef<MaintenanceEntity, unknown>[]>(
@@ -52,8 +85,56 @@ export default function MaintenancesPage(): JSX.Element {
           </Badge>
         ),
       },
+      ...(canWrite
+        ? [
+            {
+              header: 'Ações',
+              id: 'actions',
+              cell: ({ row }: { row: { original: MaintenanceEntity } }) => {
+                const m = row.original;
+                const editable = NON_TERMINAL_STATUSES.includes(m.status);
+                return (
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" title="Editar" onClick={() => setEditTarget(m)}>
+                      <Pencil size={14} />
+                    </Button>
+                    {m.status === 'OPEN' || m.status === 'WAITING_PARTS' ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Iniciar"
+                        disabled={statusMutation.isPending}
+                        onClick={() => statusMutation.mutate({ id: m.id, next: 'IN_PROGRESS' })}
+                      >
+                        <Play size={14} />
+                      </Button>
+                    ) : null}
+                    {editable ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Concluir"
+                        onClick={() => {
+                          setCompleteDate(new Date().toISOString().slice(0, 10));
+                          setCompleteTarget(m);
+                        }}
+                      >
+                        <CheckCircle2 size={14} />
+                      </Button>
+                    ) : null}
+                    {editable ? (
+                      <Button variant="ghost" size="sm" title="Cancelar" onClick={() => setCancelTarget(m)}>
+                        <Ban size={14} />
+                      </Button>
+                    ) : null}
+                  </div>
+                );
+              },
+            },
+          ]
+        : []),
     ],
-    [],
+    [canWrite, statusMutation],
   );
 
   return (
@@ -129,6 +210,57 @@ export default function MaintenancesPage(): JSX.Element {
       </div>
 
       <CreateMaintenanceModal open={createOpen} onClose={() => setCreateOpen(false)} />
+
+      {editTarget && (
+        <UpdateMaintenanceModal open={Boolean(editTarget)} onClose={() => setEditTarget(null)} maintenance={editTarget} />
+      )}
+
+      <ConfirmDialog
+        open={Boolean(cancelTarget)}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={() => cancelTarget && statusMutation.mutate({ id: cancelTarget.id, next: 'CANCELLED' })}
+        title="Cancelar manutenção"
+        description="Esta manutenção será marcada como cancelada e não poderá mais ser alterada. Deseja continuar?"
+        confirmLabel="Cancelar manutenção"
+        danger
+        loading={statusMutation.isPending}
+      />
+
+      <Modal
+        open={Boolean(completeTarget)}
+        onClose={() => setCompleteTarget(null)}
+        title="Concluir manutenção"
+        size="sm"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setCompleteTarget(null)} disabled={statusMutation.isPending}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={() =>
+                completeTarget &&
+                statusMutation.mutate({ id: completeTarget.id, next: 'COMPLETED', completedAt: completeDate })
+              }
+              loading={statusMutation.isPending}
+              disabled={!completeDate}
+            >
+              Concluir
+            </Button>
+          </>
+        }
+      >
+        <FormField label="Data de conclusão" htmlFor="completedAt" required>
+          <Input
+            id="completedAt"
+            type="date"
+            value={completeDate}
+            onChange={(e) => setCompleteDate(e.target.value)}
+          />
+        </FormField>
+        <p className="mt-2 text-xs text-ink-subtle">
+          É necessário que a manutenção já tenha custo de mão de obra e/ou peças informado (edite antes, se preciso).
+        </p>
+      </Modal>
     </div>
   );
 }

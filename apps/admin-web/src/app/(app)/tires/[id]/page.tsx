@@ -169,6 +169,26 @@ export default function TireDetailPage(): JSX.Element {
             <Field label="Data de compra" value={formatDate(tire.purchaseDate)} />
           </div>
         </CardBody>
+        {tire.lifecycle && (
+          <CardBody className="border-t border-border">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Field label="Custo total (compra + recapagens)" value={formatCurrency(tire.lifecycle.totalCost)} />
+              <Field label="Intervenções registradas" value={String(tire.lifecycle.interventionsCount)} />
+              <Field
+                label="Dias instalado"
+                value={tire.lifecycle.daysInstalled !== null ? `${tire.lifecycle.daysInstalled} dia(s)` : '-'}
+              />
+              <Field
+                label="Custo por km"
+                value={
+                  tire.lifecycle.costPerKm.available && tire.lifecycle.costPerKm.value !== null
+                    ? `${formatCurrency(tire.lifecycle.costPerKm.value)}/km`
+                    : 'Indisponível (odômetro insuficiente)'
+                }
+              />
+            </div>
+          </CardBody>
+        )}
       </Card>
 
       <Tabs

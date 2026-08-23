@@ -1,12 +1,13 @@
 import * as Location from 'expo-location';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
 import * as driverTripsApi from '../api/driverTrips.api';
 import { DriverRoute, NearbyTollPlaza } from '../api/driverTrips.types';
+import * as notificationsApi from '../api/driverNotifications.api';
 import { useAuth } from '../auth/AuthContext';
 import { useLocationTracker } from '../location/useLocationTracker';
 import { submitOrQueue } from '../storage/syncQueue';
@@ -33,6 +34,22 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
   const [recalculating, setRecalculating] = useState(false);
   const [nearbyPlaza, setNearbyPlaza] = useState<NearbyTollPlaza | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+  // Fase 70 -- badge de nao lidas: carrega ao abrir a Home e volta a
+  // consultar em todo pull-to-refresh (ver onPullToRefresh) -- sem push,
+  // nao ha como saber de uma notificacao nova sem o usuario reabrir/puxar
+  // a tela.
+  const loadUnreadNotifications = useCallback(() => {
+    notificationsApi
+      .getUnreadNotificationCount()
+      .then((result) => setUnreadNotifications(result.total))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    loadUnreadNotifications();
+  }, [loadUnreadNotifications]);
 
   const isTracking = activeTrip?.status === 'IN_PROGRESS';
   useLocationTracker(isTracking ? activeTrip!.id : null, config);
@@ -119,6 +136,7 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
   async function onPullToRefresh(): Promise<void> {
     setRefreshing(true);
     await refresh();
+    loadUnreadNotifications();
     setRefreshing(false);
   }
 
@@ -136,9 +154,18 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onPullToRefresh} />}
     >
       <View style={{ padding: 20, gap: 16 }}>
-        <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700' }}>
-          Ola, {driverName ?? 'motorista'}
-        </Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700' }}>
+            Ola, {driverName ?? 'motorista'}
+          </Text>
+          <View style={{ minWidth: 150 }}>
+            <Button
+              label={unreadNotifications > 0 ? `Notificações (${unreadNotifications})` : 'Notificações'}
+              variant="secondary"
+              onPress={() => navigation.navigate('Notifications')}
+            />
+          </View>
+        </View>
 
         {!activeTrip ? (
           <Card>
@@ -289,6 +316,20 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
                   label="Checklist pos-viagem"
                   variant="secondary"
                   onPress={() => navigation.navigate('Checklist', { tripId: activeTrip.id, type: 'POST_TRIP' })}
+                />
+              </View>
+              <View style={{ flexGrow: 1, minWidth: '45%' }}>
+                <Button
+                  label="Ocorrências"
+                  variant="secondary"
+                  onPress={() => navigation.navigate('Occurrence', { tripId: activeTrip.id })}
+                />
+              </View>
+              <View style={{ flexGrow: 1, minWidth: '45%' }}>
+                <Button
+                  label="Jornada"
+                  variant="secondary"
+                  onPress={() => navigation.navigate('Shift', { tripId: activeTrip.id })}
                 />
               </View>
             </View>

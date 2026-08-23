@@ -23,6 +23,7 @@ import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RoutingModule } from './routing/routing.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -84,6 +85,7 @@ import { UsersModule } from './users/users.module';
     TollDataModule,
     MaintenanceModule,
     FleetOperationsModule,
+    NotificationsModule,
     BillingModule,
     FiscalModule,
     FreightModule,

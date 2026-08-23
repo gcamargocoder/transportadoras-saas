@@ -37,6 +37,7 @@ import { toTireMovementEntity, TireMovementWithRelations } from '../mappers/tire
 import { toTireRetreadEntity } from '../mappers/tire-retread.mapper';
 import { toTireEntity, TireWithRelations } from '../mappers/tire.mapper';
 import { describeTireMovement } from '../utils/tire-location-description.util';
+import { computeTireLifecycle } from '../utils/tire-lifecycle.util';
 
 const TIRE_INCLUDE = {
   vehicle: true,
@@ -89,13 +90,52 @@ export class TiresService {
     ]);
 
     const result = new PaginatedTiresEntity();
-    result.items = items.map(toTireEntity);
+    result.items = items.map((item) => toTireEntity(item));
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
 
+  // Fase 64 -- indicadores de vida util (secao 10 do pedido), calculados
+  // apenas aqui (nunca em findAll -- evitaria N+1 real numa listagem
+  // paginada). 3 queries fixas, bounded a UM pneu, independente do
+  // historico dele.
   async findOne(tenantId: string, id: string): Promise<TireEntity> {
-    return toTireEntity(await this.findOwnedOrThrow(tenantId, id));
+    const tire = await this.findOwnedOrThrow(tenantId, id);
+
+    const [retreadAgg, inspectionsCount, mostRecentInstall, odometerRows] = await Promise.all([
+      this.prisma.tireRetread.aggregate({
+        where: { tenantId, tireId: id },
+        _sum: { cost: true },
+        _count: { _all: true },
+      }),
+      this.prisma.tireInspection.count({ where: { tenantId, tireId: id } }),
+      tire.locationType !== TireLocationType.STOCK
+        ? this.prisma.tireMovement.findFirst({
+            where: { tenantId, tireId: id, newLocationType: { not: TireLocationType.STOCK } },
+            orderBy: { movementDate: 'desc' },
+            select: { movementDate: true },
+          })
+        : null,
+      this.prisma.tireMovement.findMany({
+        where: { tenantId, tireId: id, odometerKm: { not: null } },
+        select: { odometerKm: true },
+      }),
+    ]);
+
+    const lifecycle = computeTireLifecycle({
+      purchasePrice: toNumberOrNull(tire.purchasePrice),
+      retreadCostSum: toNumberOrNull(retreadAgg._sum.cost) ?? 0,
+      retreadsCount: retreadAgg._count._all,
+      inspectionsCount,
+      currentLocationType: tire.locationType,
+      mostRecentInstallDate: mostRecentInstall?.movementDate ?? null,
+      odometerReadings: odometerRows
+        .map((row) => toNumberOrNull(row.odometerKm))
+        .filter((value): value is number => value !== null),
+      now: new Date(),
+    });
+
+    return toTireEntity(tire, lifecycle);
   }
 
   async create(

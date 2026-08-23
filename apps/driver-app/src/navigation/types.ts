@@ -10,6 +10,12 @@ export type RootStackParamList = {
   Stops: { tripId: string };
   // Fase 56 -- comprovante de entrega.
   DeliveryProof: { tripId: string };
+  // Fase 67 -- ocorrencias e jornada do motorista.
+  Occurrence: { tripId: string };
+  Shift: { tripId: string };
+  // Fase 70 -- lista as notificacoes do motorista (independe de viagem
+  // ativa, por isso sem params -- reaproveita GET driver/notifications).
+  Notifications: undefined;
   // Fase 39 -- tela de selecao/criacao (lista templates PUBLISHED do tipo
   // pedido, cria ou retoma a execucao).
   Checklist: { tripId: string; type: ChecklistType };

@@ -11,6 +11,9 @@ import { FinishTripScreen } from '../screens/FinishTripScreen';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
+import { OccurrenceScreen } from '../screens/OccurrenceScreen';
+import { ShiftScreen } from '../screens/ShiftScreen';
 import { StartTripScreen } from '../screens/StartTripScreen';
 import { StopsScreen } from '../screens/StopsScreen';
 import { TollScreen } from '../screens/TollScreen';
@@ -79,6 +82,21 @@ export function RootNavigator(): React.JSX.Element {
               name="DeliveryProof"
               component={DeliveryProofScreen}
               options={{ headerShown: true, title: 'Comprovante de entrega' }}
+            />
+            <Stack.Screen
+              name="Occurrence"
+              component={OccurrenceScreen}
+              options={{ headerShown: true, title: 'Ocorrências' }}
+            />
+            <Stack.Screen
+              name="Shift"
+              component={ShiftScreen}
+              options={{ headerShown: true, title: 'Jornada' }}
+            />
+            <Stack.Screen
+              name="Notifications"
+              component={NotificationsScreen}
+              options={{ headerShown: true, title: 'Notificações' }}
             />
             <Stack.Screen
               name="Checklist"

@@ -11,11 +11,14 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseFilters,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiCreatedResponse, ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
@@ -86,6 +89,24 @@ export class FiscalDocumentsController {
   @ApiOkResponse({ type: FiscalDocumentEntity })
   findOne(@Param('id', ParseUUIDPipe) id: string): Promise<FiscalDocumentEntity> {
     return this.fiscalDocumentsService.findOne(this.tenantContext.requireTenantId(), id);
+  }
+
+  @Get(':id/file')
+  @Roles(...FISCAL_DOCUMENTS_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 68 -- preview/download do arquivo original do documento (ex: comprovante de entrega). ' +
+      'Imagem/PDF: inline (preview no navegador). Demais formatos: download. Acessa o arquivo ' +
+      'SOMENTE via Attachment.storageKey (nunca um caminho vindo do cliente).',
+  })
+  async getFile(@Param('id', ParseUUIDPipe) id: string, @Res({ passthrough: true }) res: Response): Promise<StreamableFile> {
+    const file = await this.fiscalDocumentsService.getFile(this.tenantContext.requireTenantId(), id);
+    const safeFileName = file.fileName.replace(/["\r\n]/g, '_');
+    res.set({
+      'Content-Type': file.mimeType,
+      'Content-Disposition': `${file.inline ? 'inline' : 'attachment'}; filename="${safeFileName}"`,
+    });
+    return new StreamableFile(file.stream);
   }
 
   @Get(':id/history')

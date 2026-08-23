@@ -178,3 +178,62 @@ export interface SubmitDeliveryProofInput {
   observation?: string;
   capturedAt?: string;
 }
+
+// Fase 67 -- ocorrencias e jornada do motorista.
+export type TripOccurrenceType =
+  | 'ACCIDENT'
+  | 'BREAKDOWN'
+  | 'DELAY'
+  | 'ROUTE_DEVIATION'
+  | 'DELIVERY_PROBLEM'
+  | 'DOCUMENT_PROBLEM'
+  | 'VEHICLE_PROBLEM'
+  | 'FUEL_PROBLEM'
+  | 'TIRE_PROBLEM'
+  | 'OTHER';
+export type TripOccurrenceSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+export type TripOccurrenceStatus = 'OPEN' | 'RESOLVED' | 'CANCELLED';
+
+export interface TripOccurrence {
+  id: string;
+  tripId: string;
+  type: TripOccurrenceType;
+  severity: TripOccurrenceSeverity;
+  status: TripOccurrenceStatus;
+  description: string;
+  occurredAt: string;
+}
+
+export interface CreateOccurrenceInput {
+  deviceEventId: string;
+  type: TripOccurrenceType;
+  severity?: TripOccurrenceSeverity;
+  description: string;
+  occurredAt: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+// Jornada: status sempre derivado pelo backend (endedAt/cancelledAt),
+// idempotencia por ESTADO (nao por deviceEventId -- ver comentario em
+// syncQueue.ts, mesmo principio de pause/resume/complete de viagem).
+export type DriverShiftStatus = 'OPEN' | 'CLOSED' | 'CANCELLED';
+
+export interface ShiftBreak {
+  id: string;
+  type: TripStopType;
+  startedAt: string;
+  endedAt: string | null;
+  durationMinutes: number | null;
+}
+
+export interface DriverShift {
+  id: string;
+  tripId: string | null;
+  status: DriverShiftStatus;
+  startedAt: string;
+  endedAt: string | null;
+  durationMinutes: number | null;
+  workedMinutes: number | null;
+  breaks: ShiftBreak[];
+}

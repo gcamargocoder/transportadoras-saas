@@ -36,10 +36,12 @@ function buildOverview(overrides: Partial<FleetTiresOverviewEntity> = {}): Fleet
     retreadValue: 3200,
     averageLifespanKm: 90000,
     nearReplacementCount: 3,
+    averageCostPerTire: 2410,
     byStatus: [
       { status: 'IN_USE', count: 12 },
       { status: 'STOCK', count: 5 },
     ],
+    byPosition: [{ position: 'Dianteiro Esquerdo', count: 1 }],
     byFleet: [
       { fleetId: 'f1', fleetName: 'Frota SP', count: 8 },
       { fleetId: null, fleetName: 'Sem frota', count: 4 },

@@ -1,7 +1,6 @@
 import type { Paginated, PaginationParams } from '../../types/api';
 import type {
   FleetEntity,
-  FuelSupplyEntity,
   MaintenanceEntity,
   TagProviderEntity,
   TrailerEntity,
@@ -9,6 +8,7 @@ import type {
   VehicleDocumentEntity,
   VehicleDriverAssignmentEntity,
   VehicleEntity,
+  VehicleFuelHistoryEntity,
   VehicleOverviewEntity,
   VehicleSummaryEntity,
   VehicleTagEntity,
@@ -127,8 +127,14 @@ export function getVehicleMaintenances(id: string, query: PaginationParams = {})
   return api.get<Paginated<MaintenanceEntity>>(`/vehicles/${id}/maintenances`, query);
 }
 
-export function getVehicleFuelHistory(id: string, query: PaginationParams = {}) {
-  return api.get<Paginated<FuelSupplyEntity>>(`/vehicles/${id}/fuel-history`, query);
+// Fase 65 -- GET /vehicles/:id/fuel-history NAO e paginado (retorna
+// VehicleFuelHistoryEntity: items limitados por `limit` + totais/consumo
+// medio do HISTORICO COMPLETO do veiculo) -- corrigido aqui um contrato
+// divergente pre-existente (esta funcao estava tipada como
+// Paginated<FuelSupplyEntity> e enviava `pageSize`, que o backend ignora
+// silenciosamente; o parametro real e `limit`).
+export function getVehicleFuelHistory(id: string, limit = 20) {
+  return api.get<VehicleFuelHistoryEntity>(`/vehicles/${id}/fuel-history`, { limit });
 }
 
 export function getVehicleTags(id: string) {
@@ -270,8 +276,8 @@ export function updateMaintenance(id: string, payload: Partial<CreateMaintenance
   return api.patch<MaintenanceEntity>(`/maintenances/${id}`, payload);
 }
 
-export function updateMaintenanceStatus(id: string, status: VehicleMaintenanceStatus) {
-  return api.patch<MaintenanceEntity>(`/maintenances/${id}/status`, { status });
+export function updateMaintenanceStatus(id: string, status: VehicleMaintenanceStatus, completedAt?: string) {
+  return api.patch<MaintenanceEntity>(`/maintenances/${id}/status`, { status, completedAt });
 }
 
 export function deleteMaintenance(id: string) {

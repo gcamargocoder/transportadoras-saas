@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
-import { extname } from 'path';
+import { createReadStream, promises as fs, ReadStream } from 'fs';
+import { extname, join, resolve } from 'path';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType, Prisma } from '@prisma/client';
+import { AppConfig } from '../../config/configuration';
 import { AuditService } from '../../audit/services/audit.service';
 import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
 import { toAuditLogEntity } from '../../audit/mappers/audit-log.mapper';
@@ -87,6 +89,7 @@ export class FiscalDocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly configService: ConfigService<AppConfig, true>,
   ) {}
 
   async findAll(tenantId: string, query: FindFiscalDocumentsQueryDto): Promise<PaginatedFiscalDocumentsEntity> {
@@ -122,6 +125,51 @@ export class FiscalDocumentsService {
     entity.relatedDocuments = related.relatedDocuments;
     entity.relatedDocumentsAvailable = related.relatedDocumentsAvailable;
     return entity;
+  }
+
+  // Fase 68 -- GET /fiscal/documents/:id/file (preview/download). NUNCA
+  // confia no filename do cliente: le SOMENTE via Attachment.storageKey
+  // (sempre um UUID+extensao gerado pelo servidor no upload, ver
+  // fiscal-document-storage.config.ts/driver-delivery-proof-storage.config.ts
+  // -- os 2 unicos pontos de escrita), resolvido dentro do MESMO diretorio
+  // privado ja configurado (fiscalDocuments.storageDir), nunca um caminho
+  // vindo de fora. Content-Type reaproveita FiscalDocument.mimeType (ja
+  // coletado no upload, mesmo dado que a validacao de assinatura binaria
+  // real do arquivo -- assertValidFileSignature -- ja confirmou bater com a
+  // extensao no momento do upload); nunca um sistema de storage novo.
+  async getFile(
+    tenantId: string,
+    id: string,
+  ): Promise<{ stream: ReadStream; mimeType: string; fileName: string; inline: boolean }> {
+    const document = await this.findOwnedOrThrow(tenantId, id);
+    if (!document.attachmentId) {
+      throw new NotFoundException('Este documento fiscal nao possui arquivo anexado.');
+    }
+
+    const attachment = await this.prisma.attachment.findFirst({
+      where: { id: document.attachmentId, tenantId },
+    });
+    if (!attachment) {
+      throw new NotFoundException('Anexo nao encontrado nesta empresa.');
+    }
+
+    const storageDir = resolve(this.configService.get('fiscalDocuments.storageDir', { infer: true }));
+    const filePath = join(storageDir, attachment.storageKey);
+    try {
+      await fs.access(filePath);
+    } catch {
+      throw new NotFoundException('Arquivo nao encontrado no armazenamento.');
+    }
+
+    const mimeType = document.mimeType ?? 'application/octet-stream';
+    const inline = mimeType.startsWith('image/') || mimeType === 'application/pdf';
+
+    return {
+      stream: createReadStream(filePath),
+      mimeType,
+      fileName: document.fileName ?? attachment.storageKey,
+      inline,
+    };
   }
 
   // POST /fiscal/documents/upload -- upload direto (PDF/XML/JPG/JPEG/PNG),

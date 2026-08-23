@@ -180,6 +180,18 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
                 icon={AlertTriangle}
                 tone={query.data.overview.openAlerts > 0 ? 'danger' : 'success'}
               />
+              <StatCard
+                label="Ocorrências abertas"
+                value={formatNumber(query.data.overview.openOccurrences)}
+                icon={ShieldAlert}
+                tone={query.data.overview.openOccurrences > 0 ? 'warning' : 'success'}
+              />
+              <StatCard
+                label="Ocorrências críticas"
+                value={formatNumber(query.data.overview.criticalOpenOccurrences)}
+                icon={ShieldAlert}
+                tone={query.data.overview.criticalOpenOccurrences > 0 ? 'danger' : 'success'}
+              />
               <StatCard label="Custo total" value={formatCurrency(query.data.costs.totalCost)} icon={Wallet} />
             </div>
           </section>
@@ -250,6 +262,32 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
                   />
                 </div>
               )}
+              {operationalQuery.data && (
+                <div className="grid grid-cols-2 gap-4 border-t border-border p-5 sm:grid-cols-3 lg:grid-cols-7">
+                  <StatCard label="Planejadas" value={formatNumber(operationalQuery.data.plannedTrips)} />
+                  <StatCard label="Aguardando motorista" value={formatNumber(operationalQuery.data.waitingDriverTrips)} />
+                  <StatCard label="Aguardando saída" value={formatNumber(operationalQuery.data.waitingDepartureTrips)} />
+                  <StatCard label="Pausadas" value={formatNumber(operationalQuery.data.pausedTrips)} tone="warning" />
+                  <StatCard
+                    label="Sem motorista"
+                    value={formatNumber(operationalQuery.data.tripsWithoutDriver)}
+                    icon={UserRound}
+                    tone={operationalQuery.data.tripsWithoutDriver > 0 ? 'warning' : 'success'}
+                  />
+                  <StatCard
+                    label="Sem veículo"
+                    value={formatNumber(operationalQuery.data.tripsWithoutVehicle)}
+                    icon={Truck}
+                    tone={operationalQuery.data.tripsWithoutVehicle > 0 ? 'warning' : 'success'}
+                  />
+                  <StatCard
+                    label="Atrasadas"
+                    value={formatNumber(operationalQuery.data.delayedTrips)}
+                    icon={AlertTriangle}
+                    tone={operationalQuery.data.delayedTrips > 0 ? 'danger' : 'success'}
+                  />
+                </div>
+              )}
             </Card>
           </section>
 
@@ -301,6 +339,37 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
                   icon={AlertTriangle}
                   tone={query.data.stops.durationAlerts.length > 0 ? 'danger' : 'success'}
                 />
+              </div>
+            </Card>
+          </section>
+
+          {/* ===== Secao 3.52: Ocorrencias (Fase 68) ===== */}
+          <section>
+            <Card>
+              <CardHeader
+                title="Ocorrências"
+                description="Incidentes registrados durante as viagens (acidente, quebra, atraso, desvio de rota, etc)."
+                action={
+                  <Link href="/operations/fleet/occurrences" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <StatCard
+                  label="Em aberto"
+                  value={formatNumber(query.data.overview.openOccurrences)}
+                  icon={ShieldAlert}
+                  tone={query.data.overview.openOccurrences > 0 ? 'warning' : 'success'}
+                />
+                <StatCard
+                  label="Críticas em aberto"
+                  value={formatNumber(query.data.overview.criticalOpenOccurrences)}
+                  icon={ShieldAlert}
+                  tone={query.data.overview.criticalOpenOccurrences > 0 ? 'danger' : 'success'}
+                />
+                <StatCard label="Resolvidas" value={formatNumber(query.data.overview.resolvedOccurrences)} tone="success" />
+                <StatCard label="Canceladas" value={formatNumber(query.data.overview.cancelledOccurrences)} />
               </div>
             </Card>
           </section>

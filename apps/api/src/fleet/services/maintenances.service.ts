@@ -16,6 +16,10 @@ import { UpdateMaintenanceDto } from '../dto/update-maintenance.dto';
 import { MaintenanceEntity } from '../entities/maintenance.entity';
 import { PaginatedMaintenancesEntity } from '../entities/paginated-maintenances.entity';
 import { toMaintenanceEntity } from '../mappers/maintenance.mapper';
+import {
+  assertValidMaintenanceStatusTransition,
+  resolveMaintenanceStatusChangeAction,
+} from '../utils/maintenance-status-transition.util';
 import { normalizePlate } from '../utils/normalize-plate.util';
 import { VehiclesService } from './vehicles.service';
 
@@ -273,6 +277,7 @@ export class MaintenancesService {
     metadata: RequestMetadata,
   ): Promise<MaintenanceEntity> {
     const before = await this.findOwnedOrThrow(tenantId, id);
+    assertValidMaintenanceStatusTransition(before.status, dto.status);
 
     const data: Prisma.VehicleMaintenanceUpdateInput = { status: dto.status };
 
@@ -294,12 +299,26 @@ export class MaintenancesService {
       data.completedAt = effectiveCompletedAt;
     }
 
-    const maintenance = await this.prisma.vehicleMaintenance.update({ where: { id }, data });
+    // Fase 63 -- atualiza a manutencao e sincroniza Vehicle.status (ver
+    // VehiclesService.syncStatusForMaintenance) na MESMA transacao: nunca um
+    // estado intermediario onde a manutencao ja esta IN_PROGRESS mas o
+    // veiculo ainda aparece disponivel (ou vice-versa).
+    const maintenance = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.vehicleMaintenance.update({ where: { id }, data });
+      await this.vehiclesService.syncStatusForMaintenance(
+        tenantId,
+        updated.vehicleId,
+        actor,
+        metadata,
+        tx,
+      );
+      return updated;
+    });
 
     await this.audit.log({
       tenantId,
       userId: actor.userId,
-      action: 'maintenance.status_changed',
+      action: resolveMaintenanceStatusChangeAction(before.status, maintenance.status),
       entityName: 'VehicleMaintenance',
       entityId: id,
       previousValue: { status: before.status },

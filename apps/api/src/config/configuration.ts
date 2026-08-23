@@ -62,6 +62,18 @@ export interface AppConfig {
     // nunca polling agressivo da fonte oficial (secao 10 da fase).
     cronExpression: string;
   };
+  // Fase 70 -- processamento periodico do Centro de Notificacoes (tira a
+  // geracao do caminho sincrono de GET /notifications/unread-count). Ligado
+  // por padrao (diferente de tollDataSync): nunca faz chamada de rede
+  // externa, so leitura/escrita interna idempotente (createMany
+  // skipDuplicates) -- mesmo criterio de seguranca de
+  // TenantLifecycleScheduler/BillingLifecycleScheduler (sempre ligados,
+  // @Cron estatico), so que configuravel por precisar de um intervalo
+  // (nao uma vez ao dia).
+  notificationsProcessing: {
+    enabled: boolean;
+    cronExpression: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -102,5 +114,12 @@ export default (): AppConfig => ({
   tollDataSync: {
     enabled: (process.env.TOLL_DATA_SYNC_ENABLED ?? 'false').toLowerCase() === 'true',
     cronExpression: process.env.TOLL_DATA_SYNC_CRON ?? '0 3 * * *',
+  },
+  notificationsProcessing: {
+    enabled: (process.env.NOTIFICATIONS_PROCESS_ENABLED ?? 'true').toLowerCase() === 'true',
+    // A cada 5 minutos por padrao (secao 13 do pedido) -- nunca polling
+    // agressivo, e sempre ajustavel por env var sem precisar de deploy de
+    // codigo.
+    cronExpression: process.env.NOTIFICATIONS_PROCESS_CRON ?? '*/5 * * * *',
   },
 });

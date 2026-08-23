@@ -11,6 +11,7 @@ import { LocationsService } from './services/locations.service';
 import { RouteEventsService } from './services/route-events.service';
 import { RouteVersionsService } from './services/route-versions.service';
 import { TripMetricsService } from './services/trip-metrics.service';
+import { TripTimelineService } from './services/trip-timeline.service';
 import { TripsService } from './services/trips.service';
 
 @Module({
@@ -21,6 +22,7 @@ import { TripsService } from './services/trips.service';
     RouteVersionsService,
     RouteEventsService,
     TripMetricsService,
+    TripTimelineService,
     CustomersService,
     LocationsService,
   ],

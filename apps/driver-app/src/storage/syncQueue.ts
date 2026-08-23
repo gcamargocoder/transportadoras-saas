@@ -2,7 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as driverChecklistApi from '../api/driverChecklist.api';
 import { ChecklistAnswerInput, ChecklistEvidenceType } from '../api/driverChecklist.types';
 import * as driverTripsApi from '../api/driverTrips.api';
-import { AxleEventSource, TrackingPointInput, TripStopType } from '../api/driverTrips.types';
+import {
+  AxleEventSource,
+  TrackingPointInput,
+  TripOccurrenceSeverity,
+  TripOccurrenceType,
+  TripStopType,
+} from '../api/driverTrips.types';
 import { compact } from '../utils/compact';
 
 // Fila offline (Fase 25, secao 17/18) -- eventos de CRIACAO gerados pelo app
@@ -105,7 +111,31 @@ type PendingAction =
       localFileUri: string;
       fileName: string;
       mimeType: string;
-    };
+    }
+  // Fase 67 -- ocorrencia registrada pelo motorista. Idempotente por
+  // deviceEventId, mesmo padrao de stop-open/fuel-supply/axle-event-open.
+  | {
+      kind: 'occurrence-create';
+      tripId: string;
+      deviceEventId: string;
+      type: TripOccurrenceType;
+      severity?: TripOccurrenceSeverity;
+      description: string;
+      occurredAt: string;
+      latitude?: number;
+      longitude?: number;
+    }
+  // Fase 67 -- jornada do motorista. Idempotente por ESTADO no backend
+  // (mesmo principio de pause/resume/complete acima) -- nunca por
+  // deviceEventId, o schema de DriverShift/ShiftBreak nao tem esse campo.
+  // 'shift-start' NAO entra nesta fila (mesmo motivo de checklist-create
+  // abaixo: as acoes seguintes precisam do id gerado pelo servidor, que
+  // esta fila nao resolve encadeado) -- e sempre tentado online antes de
+  // habilitar pausa/retorno/encerramento na tela.
+  | { kind: 'shift-end'; shiftId: string }
+  | { kind: 'shift-cancel'; shiftId: string }
+  | { kind: 'shift-break-start'; shiftId: string; type?: TripStopType }
+  | { kind: 'shift-break-end'; shiftId: string };
 
 const STORAGE_KEY = 'driverapp.syncQueue';
 
@@ -213,6 +243,27 @@ async function runAction(action: PendingAction): Promise<void> {
         },
         { uri: action.localFileUri, name: action.fileName, type: action.mimeType },
       );
+      return;
+    case 'occurrence-create':
+      await driverTripsApi.createOccurrence(action.tripId, {
+        deviceEventId: action.deviceEventId,
+        type: action.type,
+        description: action.description,
+        occurredAt: action.occurredAt,
+        ...compact({ severity: action.severity, latitude: action.latitude, longitude: action.longitude }),
+      });
+      return;
+    case 'shift-end':
+      await driverTripsApi.endShift(action.shiftId);
+      return;
+    case 'shift-cancel':
+      await driverTripsApi.cancelShift(action.shiftId);
+      return;
+    case 'shift-break-start':
+      await driverTripsApi.startShiftBreak(action.shiftId, action.type);
+      return;
+    case 'shift-break-end':
+      await driverTripsApi.endShiftBreak(action.shiftId);
       return;
   }
 }

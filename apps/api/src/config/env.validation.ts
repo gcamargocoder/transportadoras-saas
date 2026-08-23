@@ -123,6 +123,20 @@ class EnvironmentVariables {
   @IsString()
   @MinLength(1)
   TOLL_DATA_SYNC_CRON?: string;
+
+  // Fase 70 -- processamento periodico do Centro de Notificacoes. Ligado
+  // por padrao (string, nao boolean: env vars sao sempre texto -- mesmo
+  // padrao de TOLL_DATA_SYNC_ENABLED).
+  @IsOptional()
+  @IsString()
+  NOTIFICATIONS_PROCESS_ENABLED?: string;
+
+  // A cada 5 minutos por padrao -- validado so como string nao vazia aqui
+  // (mesmo motivo de TOLL_DATA_SYNC_CRON).
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  NOTIFICATIONS_PROCESS_CRON?: string;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

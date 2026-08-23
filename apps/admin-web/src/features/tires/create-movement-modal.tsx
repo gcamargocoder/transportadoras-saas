@@ -71,13 +71,17 @@ export function CreateMovementModal({
   const mutation = useMutation({
     mutationFn: (values: FormValues) =>
       createTireMovement(tireId, {
-        ...values,
-        vehicleId: values.locationType === 'VEHICLE' ? values.vehicleId : undefined,
-        trailerId: values.locationType === 'TRAILER' ? values.trailerId : undefined,
+        newLocationType: values.locationType,
+        newVehicleId: values.locationType === 'VEHICLE' ? values.vehicleId : undefined,
+        newTrailerId: values.locationType === 'TRAILER' ? values.trailerId : undefined,
+        newPosition: values.position,
+        odometerKm: values.odometerKm,
+        reason: values.reason,
       }),
     onSuccess: () => {
       toast.success('Movimentação registrada com sucesso.');
       queryClient.invalidateQueries({ queryKey: ['tires'] });
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
       reset({ locationType: 'STOCK' });
       onClose();
     },

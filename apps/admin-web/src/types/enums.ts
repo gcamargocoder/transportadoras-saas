@@ -666,3 +666,78 @@ export const FleetAlertSeverity = {
   CRITICAL: 'CRITICAL',
 } as const;
 export type FleetAlertSeverity = (typeof FleetAlertSeverity)[keyof typeof FleetAlertSeverity];
+
+// Fase 67 -- espelha TripOccurrenceType/Severity/Status do backend
+// (apps/api/src/trip-operations/entities/trip-occurrence.entity.ts).
+export const TripOccurrenceType = {
+  ACCIDENT: 'ACCIDENT',
+  BREAKDOWN: 'BREAKDOWN',
+  DELAY: 'DELAY',
+  ROUTE_DEVIATION: 'ROUTE_DEVIATION',
+  DELIVERY_PROBLEM: 'DELIVERY_PROBLEM',
+  DOCUMENT_PROBLEM: 'DOCUMENT_PROBLEM',
+  VEHICLE_PROBLEM: 'VEHICLE_PROBLEM',
+  FUEL_PROBLEM: 'FUEL_PROBLEM',
+  TIRE_PROBLEM: 'TIRE_PROBLEM',
+  OTHER: 'OTHER',
+} as const;
+export type TripOccurrenceType = (typeof TripOccurrenceType)[keyof typeof TripOccurrenceType];
+
+export const TripOccurrenceSeverity = {
+  INFO: 'INFO',
+  WARNING: 'WARNING',
+  CRITICAL: 'CRITICAL',
+} as const;
+export type TripOccurrenceSeverity = (typeof TripOccurrenceSeverity)[keyof typeof TripOccurrenceSeverity];
+
+export const TripOccurrenceStatus = {
+  OPEN: 'OPEN',
+  RESOLVED: 'RESOLVED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type TripOccurrenceStatus = (typeof TripOccurrenceStatus)[keyof typeof TripOccurrenceStatus];
+
+// Fase 67 -- espelha DriverShiftStatus (sempre derivado de endedAt/
+// cancelledAt, mesmo principio de TripStopStatus).
+export const DriverShiftStatus = {
+  OPEN: 'OPEN',
+  CLOSED: 'CLOSED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type DriverShiftStatus = (typeof DriverShiftStatus)[keyof typeof DriverShiftStatus];
+
+// Fase 67 -- origem de cada item da timeline unificada (GET /trips/:id/timeline).
+export const TripTimelineOrigin = {
+  STOP: 'STOP',
+  ROUTE_EVENT: 'ROUTE_EVENT',
+  FUEL: 'FUEL',
+  TOLL: 'TOLL',
+  AXLE: 'AXLE',
+  CHECKLIST: 'CHECKLIST',
+  FISCAL: 'FISCAL',
+  DELIVERY_PROOF: 'DELIVERY_PROOF',
+  EXPENSE: 'EXPENSE',
+  REVENUE: 'REVENUE',
+  OCCURRENCE: 'OCCURRENCE',
+  AUDIT: 'AUDIT',
+} as const;
+export type TripTimelineOrigin = (typeof TripTimelineOrigin)[keyof typeof TripTimelineOrigin];
+
+// Fase 69 -- Centro de Alertas e Notificacoes.
+export const NotificationType = {
+  CRITICAL_OCCURRENCE: 'CRITICAL_OCCURRENCE',
+  VEHICLE_UNAVAILABLE: 'VEHICLE_UNAVAILABLE',
+  VEHICLE_MAINTENANCE: 'VEHICLE_MAINTENANCE',
+  TIRE_NEAR_REPLACEMENT: 'TIRE_NEAR_REPLACEMENT',
+  FUEL_ODOMETER_REGRESSION: 'FUEL_ODOMETER_REGRESSION',
+  FISCAL_DOCUMENT_PROBLEM: 'FISCAL_DOCUMENT_PROBLEM',
+  TRIP_DELAYED: 'TRIP_DELAYED',
+  DRIVER_SUSPENDED: 'DRIVER_SUSPENDED',
+  DRIVER_INACTIVE: 'DRIVER_INACTIVE',
+  BILLING_PENDING: 'BILLING_PENDING',
+  // Fase 70 -- comprovante de entrega (reaproveita a classificacao de
+  // computeDeliveryProofStatus, ver docs/notifications.md).
+  DELIVERY_PROOF_PENDING: 'DELIVERY_PROOF_PENDING',
+  DELIVERY_PROOF_PROBLEM: 'DELIVERY_PROOF_PROBLEM',
+} as const;
+export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType];

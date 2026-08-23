@@ -58,6 +58,12 @@ import type {
   TripStopSource,
   TripStopStatus,
   TripStopType,
+  TripOccurrenceType,
+  TripOccurrenceSeverity,
+  TripOccurrenceStatus,
+  DriverShiftStatus,
+  TripTimelineOrigin,
+  NotificationType,
   UserRole,
   VehicleFuelType,
   VehicleMaintenancePriority,
@@ -410,7 +416,24 @@ export interface VehicleMetricsEntity {
   documentsProblematic: number;
   maintenancesCount: number;
   fuelSuppliesCount: number;
+  lastFuelSupplyLiters: number | null;
+  lastFuelSupplyAmount: number | null;
+  lastFuelSupplyDate: string | null;
+  averageFuelConsumptionKmL: number | null;
   driverHistoryCount: number;
+  tiresCount: number;
+  tiresNearReplacement: number;
+}
+
+export interface VehicleTireSummaryEntity {
+  tireId: string;
+  fireNumber: string;
+  manufacturer: string;
+  model: string;
+  status: TireStatus;
+  position: string | null;
+  currentTreadDepthMm: number | null;
+  installedAt: string | null;
 }
 
 export interface VehicleOverviewEntity {
@@ -424,6 +447,7 @@ export interface VehicleOverviewEntity {
   driverHistory: VehicleDriverAssignmentEntity[];
   recentTrips: VehicleRecentTripEntity[];
   history: AuditLogEntity[];
+  tires: VehicleTireSummaryEntity[];
 }
 
 export interface TrailerEntity {
@@ -1112,6 +1136,16 @@ export interface FuelSupplyEntity {
   updatedAt: string;
 }
 
+export interface VehicleFuelHistoryEntity {
+  vehicleId: string;
+  items: FuelSupplyEntity[];
+  suppliesCount: number;
+  totalLiters: number;
+  totalAmount: number;
+  averageConsumptionKmL: number | null;
+  hasOdometerRegression: boolean;
+}
+
 export interface FuelDashboardTopEntryEntity {
   id: string;
   label: string;
@@ -1156,6 +1190,20 @@ export interface TireEntity {
   updaterName: string | null;
   createdAt: string;
   updatedAt: string;
+  lifecycle: TireLifecycleEntity | null;
+}
+
+export interface TireCostPerKmEntity {
+  value: number | null;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface TireLifecycleEntity {
+  totalCost: number;
+  interventionsCount: number;
+  daysInstalled: number | null;
+  costPerKm: TireCostPerKmEntity;
 }
 
 export interface TireMovementEntity {
@@ -1334,6 +1382,11 @@ export interface FleetOverviewEntity {
   vehiclesAvailable: number;
   activeDrivers: number;
   openAlerts: number;
+  // Fase 68 -- TripOccurrence (Fase 67).
+  openOccurrences: number;
+  criticalOpenOccurrences: number;
+  resolvedOccurrences: number;
+  cancelledOccurrences: number;
 }
 
 export interface FleetVehicleRankingEntryEntity {
@@ -1341,6 +1394,36 @@ export interface FleetVehicleRankingEntryEntity {
   plate: string;
   value: number;
   count: number;
+}
+
+// Fase 68 -- GET /fleet-operations/occurrences.
+export interface FleetOccurrenceTypeCountEntity {
+  type: TripOccurrenceType;
+  count: number;
+}
+
+export interface FleetOccurrenceSeverityCountEntity {
+  severity: TripOccurrenceSeverity;
+  count: number;
+}
+
+export interface FleetOccurrenceDriverRankingEntryEntity {
+  driverId: string;
+  driverName: string;
+  count: number;
+}
+
+export interface FleetOccurrencesDashboardEntity {
+  totalCount: number;
+  openCount: number;
+  criticalOpenCount: number;
+  resolvedCount: number;
+  cancelledCount: number;
+  byType: FleetOccurrenceTypeCountEntity[];
+  bySeverity: FleetOccurrenceSeverityCountEntity[];
+  byVehicle: FleetVehicleRankingEntryEntity[];
+  byDriver: FleetOccurrenceDriverRankingEntryEntity[];
+  monthlyTrend: DashboardChartPointEntity[];
 }
 
 export interface FleetCostCategoryEntity {
@@ -1567,6 +1650,13 @@ export interface FleetOperationalIndicatorsEntity {
   completedTrips: number;
   inProgressTrips: number;
   cancelledTrips: number;
+  plannedTrips: number;
+  waitingDriverTrips: number;
+  waitingDepartureTrips: number;
+  pausedTrips: number;
+  tripsWithoutDriver: number;
+  tripsWithoutVehicle: number;
+  delayedTrips: number;
   averageTripDurationMinutes: number | null;
   averageCostPerTrip: number | null;
   utilizationPercent: number | null;
@@ -1603,7 +1693,16 @@ export type FleetAlertType =
   | 'VEHICLE_DOCUMENT_EXPIRING_SOON'
   | 'VEHICLE_DRIVER_UNAVAILABLE'
   | 'VEHICLE_TRIP_DATA_INCONSISTENCY'
-  | 'VEHICLE_OPEN_MAINTENANCE';
+  | 'VEHICLE_OPEN_MAINTENANCE'
+  // Fase 63 -- granularidade dos alertas de manutencao do veiculo.
+  | 'VEHICLE_MAINTENANCE_IN_PROGRESS'
+  | 'VEHICLE_MAINTENANCE_SCHEDULED'
+  | 'VEHICLE_MAINTENANCE_OVERDUE'
+  | 'VEHICLE_UNAVAILABLE_MAINTENANCE'
+  // Fase 64 -- pneu(s) do veiculo proximo(s) da troca.
+  | 'VEHICLE_TIRE_NEAR_REPLACEMENT'
+  // Fase 65 -- hodometro regressivo entre abastecimentos deste veiculo.
+  | 'VEHICLE_FUEL_ODOMETER_REGRESSION';
 
 export type FleetAlertSeverity = 'INFO' | 'ATTENTION' | 'CRITICAL';
 
@@ -1816,6 +1915,11 @@ export interface FleetTireFleetBreakdownEntity {
   cost: number;
 }
 
+export interface FleetTirePositionBreakdownEntity {
+  position: string;
+  count: number;
+}
+
 export interface FleetTireWearEntity {
   tireId: string;
   fireNumber: string;
@@ -1839,7 +1943,9 @@ export interface FleetTiresOverviewEntity {
   retreadValue: number;
   averageLifespanKm: number | null;
   nearReplacementCount: number;
+  averageCostPerTire: number | null;
   byStatus: FleetTireStatusBreakdownEntity[];
+  byPosition: FleetTirePositionBreakdownEntity[];
   byFleet: FleetTireFleetBreakdownEntity[];
   monthlyTrendCost: DashboardChartPointEntity[];
   tireWear: FleetTireWearEntity[];
@@ -1988,6 +2094,73 @@ export interface TripStopListItemEntity extends TripStopEntity {
   vehiclePlate: string;
   driverName: string | null;
   tripReference: string | null;
+}
+
+// Fase 67 -- espelha apps/api/src/trip-operations/entities/trip-occurrence.entity.ts.
+// status e SEMPRE derivado pelo backend (resolvedAt/cancelledAt), nunca recalculado aqui.
+export interface TripOccurrenceEntity {
+  id: string;
+  tripId: string;
+  driverShiftId: string | null;
+  driverId: string | null;
+  vehicleId: string | null;
+  type: TripOccurrenceType;
+  severity: TripOccurrenceSeverity;
+  status: TripOccurrenceStatus;
+  description: string;
+  occurredAt: string;
+  latitude: number | null;
+  longitude: number | null;
+  locationLabel: string | null;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  cancelledAt: string | null;
+  attachmentId: string | null;
+  metadata: Record<string, unknown> | null;
+  deviceEventId: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 67 -- espelha apps/api/src/trip-operations/entities/driver-shift.entity.ts.
+// type reaproveita TripStopType (REST/MEAL/FUEL/MAINTENANCE/OTHER).
+export interface ShiftBreakEntity {
+  id: string;
+  driverShiftId: string;
+  type: TripStopType;
+  startedAt: string;
+  endedAt: string | null;
+  durationMinutes: number | null;
+  reason: string | null;
+}
+
+export interface DriverShiftEntity {
+  id: string;
+  driverId: string;
+  tripId: string | null;
+  status: DriverShiftStatus;
+  startedAt: string;
+  endedAt: string | null;
+  cancelledAt: string | null;
+  durationMinutes: number | null;
+  workedMinutes: number | null;
+  breaks: ShiftBreakEntity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 67 -- espelha apps/api/src/trips/entities/trip-timeline-event.entity.ts.
+// Projecao/agregacao de eventos ja existentes -- nunca uma segunda fonte de
+// verdade. occurredAt e sempre um timestamp real do registro de origem.
+export interface TripTimelineEventEntity {
+  id: string;
+  origin: TripTimelineOrigin;
+  type: string | null;
+  label: string;
+  description: string | null;
+  severity: TripOccurrenceSeverity | null;
+  occurredAt: string;
 }
 
 export interface AxleEventEntity {
@@ -2607,4 +2780,25 @@ export interface OperationalBillingDashboardEntity {
   topFleets: BillingTopFleetEntity[];
   topVehicles: BillingTopVehicleEntity[];
   commercialMargin: number;
+}
+
+// Fase 69 -- Centro de Alertas e Notificacoes. Nunca duplica dados da
+// origem: entityType/entityId apontam para ela, metadata so o minimo para
+// navegacao (ex: {tripId}/{vehicleId}).
+export interface NotificationEntity {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  severity: AlertSeverity;
+  entityType: string;
+  entityId: string;
+  metadata: Record<string, unknown> | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface UnreadNotificationCountEntity {
+  total: number;
+  critical: number;
 }

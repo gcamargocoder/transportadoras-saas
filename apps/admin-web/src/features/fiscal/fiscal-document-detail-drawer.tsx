@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, Trash2 } from 'lucide-react';
+import { Download, Eye, ExternalLink, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Badge } from '../../components/ui/badge';
@@ -13,7 +13,13 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { listDrivers } from '../../lib/api/drivers.api';
-import { deleteFiscalDocument, getFiscalDocument, getFiscalDocumentHistory, updateFiscalDocument } from '../../lib/api/fiscal.api';
+import {
+  deleteFiscalDocument,
+  getFiscalDocument,
+  getFiscalDocumentFile,
+  getFiscalDocumentHistory,
+  updateFiscalDocument,
+} from '../../lib/api/fiscal.api';
 import { listVehicles } from '../../lib/api/fleet.api';
 import { listCustomers } from '../../lib/api/trips.api';
 import {
@@ -37,6 +43,12 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'fiscal.delivery_proof_submitted': 'Comprovante de entrega registrado (app do motorista)',
 };
 
+// Fase 68 -- mesmo criterio do backend (FiscalDocumentsService.getFile):
+// imagem/PDF permitem preview inline; os demais formatos so download.
+function isInlinePreviewable(mimeType: string | null): boolean {
+  return mimeType !== null && (mimeType.startsWith('image/') || mimeType === 'application/pdf');
+}
+
 function formatBytes(bytes: number | null): string {
   if (bytes === null) return '—';
   if (bytes < 1024) return `${bytes} B`;
@@ -57,6 +69,7 @@ export function FiscalDocumentDetailDrawer({
   const [vehicleId, setVehicleId] = useState('');
   const [driverId, setDriverId] = useState('');
   const [customerId, setCustomerId] = useState('');
+  const [fileActionBusy, setFileActionBusy] = useState<'preview' | 'download' | null>(null);
 
   useEffect(() => {
     if (!document) return;
@@ -111,6 +124,47 @@ export function FiscalDocumentDetailDrawer({
     },
     onError: (error) => toast.error('Não foi possível remover o documento.', toFriendlyMessage(error)),
   });
+
+  // Fase 68 -- preview/download do arquivo original (GET /fiscal/documents/:id/file).
+  // mimeType/fileName vem da propria FiscalDocumentEntity, nunca do nome
+  // digitado pelo usuario. O object URL e revogado logo depois de usado
+  // (preview: quando a aba some do controle deste componente nao ha como
+  // saber, entao revoga so apos um tempo curto; download: revoga apos o
+  // clique sintetico).
+  async function handlePreview(): Promise<void> {
+    if (!document) return;
+    setFileActionBusy('preview');
+    try {
+      const blob = await getFiscalDocumentFile(document.id);
+      const typedBlob = document.mimeType ? new Blob([blob], { type: document.mimeType }) : blob;
+      const url = URL.createObjectURL(typedBlob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      toast.error('Não foi possível abrir o arquivo.', toFriendlyMessage(error));
+    } finally {
+      setFileActionBusy(null);
+    }
+  }
+
+  async function handleDownload(): Promise<void> {
+    if (!document) return;
+    setFileActionBusy('download');
+    try {
+      const blob = await getFiscalDocumentFile(document.id);
+      const typedBlob = document.mimeType ? new Blob([blob], { type: document.mimeType }) : blob;
+      const url = URL.createObjectURL(typedBlob);
+      const link = window.document.createElement('a');
+      link.href = url;
+      link.download = document.fileName ?? 'documento';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error('Não foi possível baixar o arquivo.', toFriendlyMessage(error));
+    } finally {
+      setFileActionBusy(null);
+    }
+  }
 
   return (
     <Drawer open={document !== null} onClose={onClose} title="Documento fiscal">
@@ -196,6 +250,20 @@ export function FiscalDocumentDetailDrawer({
                 {document.fileName ?? '—'} ({formatBytes(document.sizeBytes)})
               </dd>
             </div>
+            {document.attachmentId && (
+              <div className="flex justify-end gap-2">
+                {isInlinePreviewable(document.mimeType) && (
+                  <Button variant="outline" size="sm" onClick={handlePreview} loading={fileActionBusy === 'preview'}>
+                    <Eye size={14} />
+                    Visualizar
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={handleDownload} loading={fileActionBusy === 'download'}>
+                  <Download size={14} />
+                  Baixar
+                </Button>
+              </div>
+            )}
             {document.tripLabel && document.tripId && (
               <div className="flex justify-between gap-3">
                 <dt className="text-ink-muted">Viagem</dt>

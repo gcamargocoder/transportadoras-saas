@@ -12,8 +12,13 @@ import { RouteEventEntity } from '../entities/route-event.entity';
 import { toRouteEventEntity } from '../mappers/route-event.mapper';
 import { TripsService } from './trips.service';
 
-// CRUD administrativo -- nenhuma geracao automatica de evento nesta fase
-// (isso vira de integracoes/GPS em fases futuras).
+// CRUD administrativo (criacao/edicao/remocao manual de um evento de rota).
+// Este NAO e o unico ponto de criacao de RouteEvent: RoutingService.
+// checkDeviation() (disparado a cada lote de TrackingPoint recebido) ja
+// cria automaticamente um evento tipo DEVIATION quando a posicao real se
+// afasta da rota planejada por tempo/distancia suficientes -- comentario
+// corrigido na Fase 66 (estava desatualizado desde que essa deteccao
+// automatica foi implementada em fase posterior a este arquivo).
 @Injectable()
 export class RouteEventsService {
   constructor(

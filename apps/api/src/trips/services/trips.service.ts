@@ -6,12 +6,9 @@ import {
 } from '@nestjs/common';
 import { Alert, Prisma, RouteEventType, TrackingPoint, TripStatus, VehicleStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
-import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
-import { toAuditLogEntity } from '../../audit/mappers/audit-log.mapper';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
@@ -42,6 +39,7 @@ import {
 import { TollRoutesService } from '../../toll-routes/services/toll-routes.service';
 import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
 import { TollReconciliationResult } from '../../toll-routes/utils/toll-reconciliation.util';
+import { TripSettlementsService } from '../../trip-settlements/services/trip-settlements.service';
 import { CustomersService } from './customers.service';
 import { LocationsService } from './locations.service';
 
@@ -118,6 +116,7 @@ export class TripsService {
     private readonly customersService: CustomersService,
     private readonly tollRoutesService: TollRoutesService,
     private readonly tollReconciliationService: TollReconciliationService,
+    private readonly tripSettlementsService: TripSettlementsService,
   ) {}
 
   async findAll(tenantId: string, query: FindTripsQueryDto): Promise<PaginatedTripsEntity> {
@@ -179,23 +178,10 @@ export class TripsService {
     return toTripEntity(await this.findOwnedOrThrow(tenantId, id));
   }
 
-  // GET /trips/:id/timeline -- reaproveita o mesmo mecanismo generico de
-  // historico de auditoria ja usado em Vehicle (Fase 12): AuditLog ja
-  // registra quem/quando/IP/User-Agent/antes/depois para toda mutacao.
-  async getTimeline(
-    tenantId: string,
-    id: string,
-    pagination: PaginationQueryDto,
-  ): Promise<PaginatedAuditLogEntity> {
-    await this.findOwnedOrThrow(tenantId, id);
-
-    const { items, total } = await this.audit.findByEntity(tenantId, 'Trip', id, pagination);
-
-    const result = new PaginatedAuditLogEntity();
-    result.items = items.map(toAuditLogEntity);
-    result.meta = buildPaginationMeta(total, pagination.page, pagination.pageSize);
-    return result;
-  }
+  // GET /trips/:id/timeline -- evoluido na Fase 67 para TripTimelineService
+  // (agrega TripStop/RouteEvent/FuelSupply/TollTransaction/AxleEvent/
+  // ChecklistExecution/FiscalDocument/TripExpense/TripRevenue/
+  // TripOccurrence/AuditLog numa projecao unica, nunca so AuditLog).
 
   // GET /trips/:id/summary -- visao consolidada (motorista, veiculo, origem,
   // destino, tempo, status, distancia, pedagios, custos), agregando dados ja
@@ -687,9 +673,68 @@ export class TripsService {
         ipAddress: metadata.ipAddress,
         userAgent: metadata.userAgent,
       });
+      await this.updateActualTripMetrics(tenantId, id, before, dto, actor, metadata);
     }
 
     return this.findOne(tenantId, id);
+  }
+
+  // Fase 66 -- "resultado operacional": ate esta fase, TripMetrics.actual*
+  // (secao "executado" do modelo, ja existente desde a criacao da Trip)
+  // nunca era escrito, exceto actualDurationMin. Reaproveita integralmente
+  // TripSettlementsService.getFinancialDashboard (MESMOS agregados/MESMA
+  // regra de despesa APPROVED ja usados por GET /trips/:id/financial-dashboard
+  // e pelo fechamento -- nunca um segundo motor financeiro com numero
+  // divergente) para fuelCost/tollCost/totalCost; litros e a UNICA agregacao
+  // nova aqui (quantidade fisica, nao financeira). actualDistanceKm so e
+  // calculado quando o motorista/administrador informou finalOdometerKm
+  // nesta chamada E existe Trip.initialOdometerKm -- nunca uma distancia
+  // estimada (secao 6/11 do pedido).
+  private async updateActualTripMetrics(
+    tenantId: string,
+    tripId: string,
+    before: TripWithRelations,
+    dto: UpdateTripStatusDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<void> {
+    const initialOdometerKm = toNumberOrNull(before.initialOdometerKm);
+    const actualDistanceKm =
+      dto.finalOdometerKm !== undefined &&
+      initialOdometerKm !== null &&
+      dto.finalOdometerKm >= initialOdometerKm
+        ? dto.finalOdometerKm - initialOdometerKm
+        : null;
+
+    const beforeMetrics = await this.prisma.tripMetrics.findUnique({ where: { tripId } });
+    if (!beforeMetrics) return;
+
+    const [fuelAgg, financialDashboard] = await Promise.all([
+      this.prisma.fuelSupply.aggregate({ where: { tenantId, tripId }, _sum: { liters: true } }),
+      this.tripSettlementsService.getFinancialDashboard(tenantId, tripId),
+    ]);
+
+    const metrics = await this.prisma.tripMetrics.update({
+      where: { tripId },
+      data: {
+        actualDistanceKm,
+        actualFuelLiters: toNumberOrNull(fuelAgg._sum.liters),
+        actualTollAmount: financialDashboard.tollCost,
+        actualTotalCost: financialDashboard.totalCost,
+      },
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'trip_metrics.updated',
+      entityName: 'TripMetrics',
+      entityId: metrics.id,
+      previousValue: toJsonSafe(beforeMetrics),
+      newValue: toJsonSafe(metrics),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
   }
 
   cancel(

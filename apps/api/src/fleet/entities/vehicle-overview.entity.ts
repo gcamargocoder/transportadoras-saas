@@ -1,10 +1,43 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { DriverStatus, DriverType, TripStatus } from '@prisma/client';
+import { DriverStatus, DriverType, TireStatus, TripStatus } from '@prisma/client';
 import { AuditLogEntity } from '../../audit/entities/audit-log.entity';
 import { FleetAlertEntity } from '../../fleet-operations/entities/fleet-alert.entity';
 import { VehicleDocumentEntity } from './vehicle-document.entity';
 import { VehicleDriverAssignmentEntity } from './vehicle-driver-assignment.entity';
 import { VehicleEntity } from './vehicle.entity';
+
+// Fase 64 -- pneus ATUALMENTE montados neste veiculo (Tire.vehicleId),
+// nunca historico completo aqui (ver GET /tires/:id/history para isso).
+// Reaproveita Tire/TireStatus tal como ja existe desde a Fase 20 -- nenhum
+// model/enum novo.
+export class VehicleTireSummaryEntity {
+  @ApiProperty({ format: 'uuid' })
+  tireId!: string;
+
+  @ApiProperty()
+  fireNumber!: string;
+
+  @ApiProperty()
+  manufacturer!: string;
+
+  @ApiProperty()
+  model!: string;
+
+  @ApiProperty({ enum: TireStatus })
+  status!: TireStatus;
+
+  @ApiProperty({ nullable: true })
+  position!: string | null;
+
+  @ApiProperty({ nullable: true })
+  currentTreadDepthMm!: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Data da movimentacao mais recente que trouxe o pneu para este veiculo.',
+  })
+  installedAt!: Date | null;
+}
 
 export class VehicleCurrentDriverEntity {
   @ApiProperty({ format: 'uuid' })
@@ -130,8 +163,34 @@ export class VehicleMetricsEntity {
   @ApiProperty()
   fuelSuppliesCount!: number;
 
+  @ApiProperty({ nullable: true, description: 'Fase 65 -- litros do abastecimento mais recente deste veiculo.' })
+  lastFuelSupplyLiters!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'Fase 65 -- valor total do abastecimento mais recente deste veiculo.' })
+  lastFuelSupplyAmount!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'Fase 65 -- data do abastecimento mais recente deste veiculo.' })
+  lastFuelSupplyDate!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Fase 65 -- distancia total / litros entre o 1o e o ultimo odometro conhecido deste veiculo. ' +
+      'Null com menos de 2 abastecimentos (nunca estimado).',
+  })
+  averageFuelConsumptionKmL!: number | null;
+
   @ApiProperty()
   driverHistoryCount!: number;
+
+  @ApiProperty({ description: 'Fase 64 -- pneus atualmente montados neste veiculo (status != SCRAPPED).' })
+  tiresCount!: number;
+
+  @ApiProperty({ description: 'Fase 64 -- subconjunto de tiresCount com currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM.' })
+  tiresNearReplacement!: number;
+
+  @ApiProperty({ description: 'Fase 68 -- TripOccurrence deste veiculo com severity=CRITICAL e status=OPEN.' })
+  criticalOpenOccurrences!: number;
 }
 
 export class VehicleOverviewEntity {
@@ -168,4 +227,7 @@ export class VehicleOverviewEntity {
 
   @ApiProperty({ type: [AuditLogEntity], description: 'Ultimas entradas de auditoria do veiculo (limitado).' })
   history!: AuditLogEntity[];
+
+  @ApiProperty({ type: [VehicleTireSummaryEntity], description: 'Fase 64 -- pneus atualmente montados neste veiculo.' })
+  tires!: VehicleTireSummaryEntity[];
 }

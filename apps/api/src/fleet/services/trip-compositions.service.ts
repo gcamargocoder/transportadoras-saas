@@ -127,6 +127,7 @@ export class TripCompositionsService {
     metadata: RequestMetadata,
   ): Promise<TripCompositionEntity> {
     const before = await this.findOwnedOrThrow(tenantId, id);
+    await this.assertCompositionNotLocked(before);
 
     if (dto.vehicleId) {
       await this.assertVehicleBelongsToTenant(tenantId, dto.vehicleId);
@@ -222,6 +223,7 @@ export class TripCompositionsService {
     metadata: RequestMetadata,
   ): Promise<TripCompositionEntity> {
     const before = await this.findOwnedOrThrow(tenantId, id);
+    await this.assertCompositionNotLocked(before);
 
     if (before.axleConfiguration) {
       await this.prisma.axleConfiguration.update({
@@ -249,6 +251,32 @@ export class TripCompositionsService {
     });
 
     return this.findOne(tenantId, id);
+  }
+
+  // Fase 66 -- imutabilidade historica: uma vez que a viagem vinculada
+  // efetivamente partiu (Trip.actualDeparture setado -- o MESMO sinal ja
+  // usado por TripsService.updateStatus para so gravar actualDeparture na
+  // PRIMEIRA transicao para IN_PROGRESS, nunca sobrescrito depois, mesmo
+  // apos PAUSED/COMPLETED/CANCELLED), nem o veiculo/implementos nem a
+  // configuracao de eixos da composicao podem mais ser alterados -- trocar
+  // isso depois corromperia silenciosamente conciliacao de pedagio,
+  // relatorios e auditoria que ja se basearam no que realmente rodou.
+  // Composicoes ainda sem viagem (tripId null) ou vinculadas a uma viagem
+  // que nunca partiu (PLANNED/WAITING_DRIVER/WAITING_DEPARTURE/CANCELLED
+  // antes de iniciar) continuam livremente editaveis.
+  private async assertCompositionNotLocked(
+    composition: TripCompositionWithRelations,
+  ): Promise<void> {
+    if (!composition.tripId) return;
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: composition.tripId },
+      select: { actualDeparture: true },
+    });
+    if (trip?.actualDeparture) {
+      throw new ConflictException(
+        'Nao e possivel alterar veiculo/implementos/configuracao de eixos: a viagem vinculada ja partiu (composicao protegida historicamente).',
+      );
+    }
   }
 
   private async findOwnedOrThrow(

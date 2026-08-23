@@ -49,6 +49,12 @@ import {
   TripStopSource,
   TripStopStatus,
   TripStopType,
+  TripOccurrenceType,
+  TripOccurrenceSeverity,
+  TripOccurrenceStatus,
+  DriverShiftStatus,
+  TripTimelineOrigin,
+  NotificationType,
   UserRole,
   VehicleFuelType,
   VehicleMaintenancePriority,
@@ -96,6 +102,13 @@ export const ALERT_TYPE_LABELS: Record<AlertType, string> = {
   ROUTE_EVENT: 'Evento de rota',
   DOCUMENT_EXPIRING: 'Documento vencendo',
   OTHER: 'Outro',
+};
+
+export const ALERT_SEVERITY_TONE: Record<AlertSeverity, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  LOW: 'neutral',
+  MEDIUM: 'info',
+  HIGH: 'warning',
+  CRITICAL: 'danger',
 };
 
 export const ALERT_SEVERITY_LABELS: Record<AlertSeverity, string> = {
@@ -680,4 +693,68 @@ export const DRIVER_STATUS_TONE: Record<DriverStatus, 'success' | 'warning' | 'd
   ACTIVE: 'success',
   INACTIVE: 'neutral',
   SUSPENDED: 'warning',
+};
+
+// Fase 67 -- Timeline Operacional, Ocorrências e Jornada da Viagem.
+export const TRIP_OCCURRENCE_TYPE_LABELS: Record<TripOccurrenceType, string> = {
+  ACCIDENT: 'Acidente',
+  BREAKDOWN: 'Quebra/pane',
+  DELAY: 'Atraso',
+  ROUTE_DEVIATION: 'Desvio de rota',
+  DELIVERY_PROBLEM: 'Problema na entrega',
+  DOCUMENT_PROBLEM: 'Problema documental',
+  VEHICLE_PROBLEM: 'Problema no veículo',
+  FUEL_PROBLEM: 'Problema de combustível',
+  TIRE_PROBLEM: 'Problema de pneu',
+  OTHER: 'Outro',
+};
+
+export const TRIP_OCCURRENCE_SEVERITY_LABELS: Record<TripOccurrenceSeverity, string> = {
+  INFO: 'Informativa',
+  WARNING: 'Atenção',
+  CRITICAL: 'Crítica',
+};
+
+export const TRIP_OCCURRENCE_STATUS_LABELS: Record<TripOccurrenceStatus, string> = {
+  OPEN: 'Em aberto',
+  RESOLVED: 'Resolvida',
+  CANCELLED: 'Cancelada',
+};
+
+export const DRIVER_SHIFT_STATUS_LABELS: Record<DriverShiftStatus, string> = {
+  OPEN: 'Em andamento',
+  CLOSED: 'Encerrada',
+  CANCELLED: 'Cancelada',
+};
+
+export const TRIP_TIMELINE_ORIGIN_LABELS: Record<TripTimelineOrigin, string> = {
+  STOP: 'Parada',
+  ROUTE_EVENT: 'Evento de rota',
+  FUEL: 'Abastecimento',
+  TOLL: 'Pedágio',
+  AXLE: 'Exceção de eixos',
+  CHECKLIST: 'Checklist',
+  FISCAL: 'Documento fiscal',
+  DELIVERY_PROOF: 'Comprovante de entrega',
+  EXPENSE: 'Despesa',
+  REVENUE: 'Receita',
+  OCCURRENCE: 'Ocorrência',
+  AUDIT: 'Auditoria',
+};
+
+// Fase 69 -- Centro de Alertas e Notificacoes.
+export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
+  CRITICAL_OCCURRENCE: 'Ocorrência crítica',
+  VEHICLE_UNAVAILABLE: 'Veículo indisponível',
+  VEHICLE_MAINTENANCE: 'Manutenção atrasada',
+  TIRE_NEAR_REPLACEMENT: 'Pneu próximo da troca',
+  FUEL_ODOMETER_REGRESSION: 'Hodômetro regressivo',
+  FISCAL_DOCUMENT_PROBLEM: 'Documento fiscal com problema',
+  TRIP_DELAYED: 'Viagem atrasada',
+  DRIVER_SUSPENDED: 'Motorista suspenso',
+  DRIVER_INACTIVE: 'Motorista inativo',
+  BILLING_PENDING: 'Faturamento pendente',
+  // Fase 70.
+  DELIVERY_PROOF_PENDING: 'Comprovante de entrega aguardando revisão',
+  DELIVERY_PROOF_PROBLEM: 'Comprovante de entrega com problema',
 };

@@ -148,6 +148,10 @@ export default function FleetTiresOverviewPage(): JSX.Element {
             />
             <StatCard label="Valor investido" value={formatCurrency(query.data.investedValue)} icon={Wallet} />
             <StatCard label="Valor de recapagem" value={formatCurrency(query.data.retreadValue)} />
+            <StatCard
+              label="Custo médio por pneu"
+              value={query.data.averageCostPerTire !== null ? formatCurrency(query.data.averageCostPerTire) : 'Indisponível'}
+            />
             <StatCard label="Vida útil média planejada" value={nullableMetric(query.data.averageLifespanKm, ' km')} />
           </div>
 
@@ -179,6 +183,13 @@ export default function FleetTiresOverviewPage(): JSX.Element {
               <DataTable columns={fleetColumns} data={query.data.byFleet} emptyTitle="Nenhum pneu montado no filtro selecionado." />
             </Card>
           </div>
+
+          <BarRankingChart
+            title="Por posição"
+            data={query.data.byPosition.map((p) => ({ label: p.position, value: p.count }))}
+            valueFormatter={(v) => formatNumber(v)}
+            emptyMessage="Nenhum pneu montado com posição informada no filtro selecionado."
+          />
 
           <MonthlyChartCard
             title="Evolução mensal do custo (compra + recapagem)"
