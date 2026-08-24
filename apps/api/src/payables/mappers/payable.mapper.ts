@@ -4,7 +4,10 @@ import { PayablePaymentEntity } from '../entities/payable-payment.entity';
 import { PayableEntity } from '../entities/payable.entity';
 import { computeBalance, computeEffectiveStatus } from '../utils/payable-status.util';
 
-export type PayablePaymentWithRelations = PayablePayment & { creator: UserAccount | null };
+export type PayablePaymentWithRelations = PayablePayment & {
+  creator: UserAccount | null;
+  financialAccount?: { name: string } | null;
+};
 
 export type PayableWithRelations = Payable & {
   trip: { origin: { name: string }; destination: { name: string } };
@@ -22,6 +25,9 @@ export function toPayablePaymentEntity(row: PayablePaymentWithRelations): Payabl
   entity.paymentMethod = row.paymentMethod;
   entity.reference = row.reference;
   entity.notes = row.notes;
+  entity.financialAccountId = row.financialAccountId;
+  entity.financialAccountName = row.financialAccount?.name ?? null;
+  entity.financialTransactionId = row.financialTransactionId;
   entity.createdBy = row.createdBy;
   entity.creatorName = row.creator?.name ?? null;
   entity.createdAt = row.createdAt;

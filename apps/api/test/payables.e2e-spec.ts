@@ -177,6 +177,17 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
     return res.body.data.id as string;
   }
 
+  // Fase 79 -- todo POST /payables/:id/payments agora exige
+  // financialAccountId.
+  async function createFinancialAccount(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/finance/accounts')
+      .set('Authorization', auth)
+      .send({ name: `Conta Teste ${randomUUID().slice(0, 8)}`, type: 'BANK', initialBalance: 1000000 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function generatePayable(auth: string, expenseId: string, dueDate: string, description?: string) {
     return request(app.getHttpServer())
       .post(`/api/v1/payables/from-expense/${expenseId}`)
@@ -232,6 +243,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
   describe('pagamentos', () => {
     it('pagamento parcial e depois total -- saldo e status corretos, sem exceder', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Payments');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
       const expenseId = await createApprovedExpense(adminAuth, tripId, 1000);
       const payable = await generatePayable(adminAuth, expenseId, '2026-09-30').expect(201);
@@ -240,7 +252,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       const partial = await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 300, paymentDate: '2026-09-10', paymentMethod: 'PIX', reference: 'TXN-1' })
+        .send({ amount: 300, paymentDate: '2026-09-10', paymentMethod: 'PIX', reference: 'TXN-1', financialAccountId })
         .expect(201);
       expect(partial.body.data.paidAmount).toBe(300);
       expect(partial.body.data.balance).toBe(700);
@@ -250,13 +262,13 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 701, paymentDate: '2026-09-15', paymentMethod: 'PIX' })
+        .send({ amount: 701, paymentDate: '2026-09-15', paymentMethod: 'PIX', financialAccountId })
         .expect(400);
 
       const full = await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 700, paymentDate: '2026-09-20', paymentMethod: 'BANK_TRANSFER' })
+        .send({ amount: 700, paymentDate: '2026-09-20', paymentMethod: 'BANK_TRANSFER', financialAccountId })
         .expect(201);
       expect(full.body.data.paidAmount).toBe(1000);
       expect(full.body.data.balance).toBe(0);
@@ -266,12 +278,13 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 1, paymentDate: '2026-09-21', paymentMethod: 'PIX' })
+        .send({ amount: 1, paymentDate: '2026-09-21', paymentMethod: 'PIX', financialAccountId })
         .expect(409);
     });
 
     it('vencimento: titulo com dueDate no passado fica OVERDUE, mas nunca apos quitado', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Overdue');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
       const expenseId = await createApprovedExpense(adminAuth, tripId, 500);
       const payable = await generatePayable(adminAuth, expenseId, '2020-01-01').expect(201);
@@ -286,7 +299,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 500, paymentDate: '2026-01-01', paymentMethod: 'PIX' })
+        .send({ amount: 500, paymentDate: '2026-01-01', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       const paidRes = await request(app.getHttpServer())
@@ -300,6 +313,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
   describe('cancelamento', () => {
     it('cancela, preserva pagamentos ja feitos e bloqueia novos pagamentos', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Cancel');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
       const expenseId = await createApprovedExpense(adminAuth, tripId, 900);
       const payable = await generatePayable(adminAuth, expenseId, '2026-09-30').expect(201);
@@ -308,7 +322,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 200, paymentDate: '2026-09-05', paymentMethod: 'PIX' })
+        .send({ amount: 200, paymentDate: '2026-09-05', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       const cancelRes = await request(app.getHttpServer())
@@ -322,7 +336,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 100, paymentDate: '2026-09-06', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2026-09-06', paymentMethod: 'PIX', financialAccountId })
         .expect(409);
 
       await request(app.getHttpServer())
@@ -348,7 +362,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', tenantB.adminAuth)
-        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX', financialAccountId: randomUUID() })
         .expect(404);
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/cancel`)
@@ -385,7 +399,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', auditorAuth)
-        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX', financialAccountId: randomUUID() })
         .expect(403);
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/cancel`)
@@ -397,6 +411,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
   describe('dashboard e aging', () => {
     it('resumo/aging/por-categoria consistentes com titulos aberto/vencido/pago/cancelado', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Dashboard');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
 
       // 1) Em aberto, a vencer.
@@ -414,7 +429,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${paidPayable.body.data.id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 300, paymentDate: '2026-01-05', paymentMethod: 'PIX' })
+        .send({ amount: 300, paymentDate: '2026-01-05', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       // 4) Cancelado -- nunca compoe os totais.
@@ -501,6 +516,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
   describe('auditoria', () => {
     it('registra criacao, pagamento e cancelamento com ator/tenant/IP', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('Audit');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
       const expenseId = await createApprovedExpense(adminAuth, tripId, 700);
       const payable = await generatePayable(adminAuth, expenseId, '2026-09-30').expect(201);
@@ -509,7 +525,7 @@ describe('Contas a Pagar (Fase 73, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 700, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 700, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${id}/cancel`)

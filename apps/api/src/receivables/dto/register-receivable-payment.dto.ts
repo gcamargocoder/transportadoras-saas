@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ReceivablePaymentMethod } from '@prisma/client';
-import { IsDateString, IsEnum, IsNumber, IsOptional, IsPositive, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsPositive, IsString, IsUUID, MaxLength } from 'class-validator';
 
 // POST /receivables/:id/payments -- amount sempre validado no backend
 // contra o saldo em aberto (nunca receivedAmount > originalAmount, secao
@@ -18,6 +18,12 @@ export class RegisterReceivablePaymentDto {
   @ApiProperty({ enum: ReceivablePaymentMethod })
   @IsEnum(ReceivablePaymentMethod, { message: 'paymentMethod invalido.' })
   paymentMethod!: ReceivablePaymentMethod;
+
+  // Fase 79, secao 3 -- exigido, sempre explicito: nunca escolhido
+  // automaticamente (primeira conta, conta BANK/CASH arbitraria etc).
+  @ApiProperty({ format: 'uuid', description: 'Conta financeira (FinancialAccount) onde o recebimento efetivamente entrou.' })
+  @IsUUID()
+  financialAccountId!: string;
 
   @ApiPropertyOptional({ description: 'Numero do comprovante/transacao.' })
   @IsOptional()

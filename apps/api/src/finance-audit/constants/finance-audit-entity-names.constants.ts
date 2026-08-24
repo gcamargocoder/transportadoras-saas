@@ -4,6 +4,21 @@
 // Mantido como allow-list explicita -- GET /finance/audit nunca vira um
 // backdoor generico para AuditLog de qualquer outro modulo (frota,
 // usuarios, tenants etc).
-export const FINANCE_AUDIT_ENTITY_NAMES = ['Receivable', 'ReceivablePayment', 'Payable', 'PayablePayment', 'FinancialPeriod'] as const;
+// Fase 78 -- FinancialAccount/FinancialTransaction/FinancialTransfer
+// adicionados pelo mesmo motivo: sao os entityName gravados por
+// FinancialAccountsService/FinancialTransactionsService/FinancialTransfersService.
+// Fase 80 -- FinancialBankTransaction, gravado por
+// BankTransactionsImportService/BankTransactionsService.
+export const FINANCE_AUDIT_ENTITY_NAMES = [
+  'Receivable',
+  'ReceivablePayment',
+  'Payable',
+  'PayablePayment',
+  'FinancialPeriod',
+  'FinancialAccount',
+  'FinancialTransaction',
+  'FinancialTransfer',
+  'FinancialBankTransaction',
+] as const;
 
 export type FinanceAuditEntityName = (typeof FINANCE_AUDIT_ENTITY_NAMES)[number];

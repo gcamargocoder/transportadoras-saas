@@ -201,11 +201,24 @@ describe('Fluxo de Caixa Consolidado (Fase 74, e2e)', () => {
     return receivableRes.body.data.id as string;
   }
 
+  // Fase 79 -- POST /receivables|payables/:id/payments agora exige
+  // financialAccountId; cada chamada cria sua propria conta (simplicidade
+  // > reuso, o custo extra em requests e desprezivel nesta suite).
+  async function createFinancialAccount(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/finance/accounts')
+      .set('Authorization', auth)
+      .send({ name: `Conta Teste ${randomUUID().slice(0, 8)}`, type: 'BANK', initialBalance: 1000000 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   async function payReceivable(auth: string, receivableId: string, amount: number, paymentDate: string) {
+    const financialAccountId = await createFinancialAccount(auth);
     await request(app.getHttpServer())
       .post(`/api/v1/receivables/${receivableId}/payments`)
       .set('Authorization', auth)
-      .send({ amount, paymentDate, paymentMethod: 'PIX' })
+      .send({ amount, paymentDate, paymentMethod: 'PIX', financialAccountId })
       .expect(201);
   }
 
@@ -230,10 +243,11 @@ describe('Fluxo de Caixa Consolidado (Fase 74, e2e)', () => {
   }
 
   async function payPayable(auth: string, payableId: string, amount: number, paymentDate: string) {
+    const financialAccountId = await createFinancialAccount(auth);
     await request(app.getHttpServer())
       .post(`/api/v1/payables/${payableId}/payments`)
       .set('Authorization', auth)
-      .send({ amount, paymentDate, paymentMethod: 'PIX' })
+      .send({ amount, paymentDate, paymentMethod: 'PIX', financialAccountId })
       .expect(201);
   }
 

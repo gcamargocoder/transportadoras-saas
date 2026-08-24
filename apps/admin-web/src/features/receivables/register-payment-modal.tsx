@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { Button } from '../../components/ui/button';
@@ -11,13 +11,18 @@ import { Modal } from '../../components/ui/modal';
 import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
+import { listFinancialAccounts } from '../../lib/api/finance-accounts.api';
 import { registerReceivablePayment } from '../../lib/api/receivables.api';
 import { RECEIVABLE_PAYMENT_METHOD_LABELS } from '../../lib/labels';
+import { formatCurrency, formatDate } from '../../utils/format';
 
 const schema = z.object({
   amount: z.coerce.number().positive('Informe um valor maior que zero.'),
   paymentDate: z.string().min(1, 'Informe a data do recebimento.'),
   paymentMethod: z.enum(['PIX', 'BANK_TRANSFER', 'BOLETO', 'CASH', 'CHECK', 'CARD', 'OTHER']),
+  // Fase 79 -- sempre obrigatorio, sempre escolhido explicitamente pelo
+  // usuario (nunca uma conta padrao inventada na UI).
+  financialAccountId: z.string().min(1, 'Selecione a conta financeira.'),
   reference: z.string().optional(),
   notes: z.string().optional(),
 });
@@ -49,6 +54,14 @@ export function RegisterPaymentModal({
     defaultValues: { paymentMethod: 'PIX' },
   });
 
+  // Fase 79, secao 14 -- somente contas ATIVAS do tenant atual.
+  const accountsQuery = useQuery({
+    queryKey: ['finance-accounts', 'list', 'active-for-select'],
+    queryFn: () => listFinancialAccounts({ isActive: true, pageSize: 100 }),
+    enabled: open,
+  });
+  const accounts = accountsQuery.data?.items ?? [];
+
   const mutation = useMutation({
     mutationFn: (values: FormValues) =>
       registerReceivablePayment(receivableId, {
@@ -57,9 +70,11 @@ export function RegisterPaymentModal({
         reference: values.reference || undefined,
         notes: values.notes || undefined,
       }),
-    onSuccess: () => {
-      toast.success('Recebimento registrado.');
+    onSuccess: (_, values) => {
+      const accountName = accounts.find((a) => a.id === values.financialAccountId)?.name ?? '';
+      toast.success('Recebimento registrado.', `${formatCurrency(values.amount)} · ${accountName} · ${formatDate(values.paymentDate)}`);
       queryClient.invalidateQueries({ queryKey: ['receivables'] });
+      queryClient.invalidateQueries({ queryKey: ['finance-accounts'] });
       reset({ paymentMethod: 'PIX' });
       onClose();
     },
@@ -108,6 +123,22 @@ export function RegisterPaymentModal({
             {Object.entries(RECEIVABLE_PAYMENT_METHOD_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField
+          label="Conta financeira"
+          htmlFor="payment-financial-account"
+          required
+          error={errors.financialAccountId?.message}
+          className="sm:col-span-2"
+        >
+          <Select id="payment-financial-account" invalid={Boolean(errors.financialAccountId)} {...register('financialAccountId')}>
+            <option value="">Selecione a conta que recebeu o valor</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
               </option>
             ))}
           </Select>

@@ -720,6 +720,11 @@ model Tenant {
   driverVehicleAssignments DriverVehicleAssignment[]
   /// Fase 76 -- controle de periodo financeiro (fechamento/competencia).
   financialPeriods         FinancialPeriod[]
+  /// Fase 78 -- contas financeiras (bancarias/caixa) e suas movimentacoes.
+  financialAccounts        FinancialAccount[]
+  financialTransactions    FinancialTransaction[]
+  /// Fase 80 -- conciliacao bancaria (movimentacoes externas importadas).
+  financialBankTransactions FinancialBankTransaction[]
 
   @@map("tenants")
 }
@@ -956,6 +961,8 @@ model UserAccount {
   payablePaymentsCreated          PayablePayment[]          @relation("PayablePaymentCreator")
   financialPeriodsOpened          FinancialPeriod[]         @relation("FinancialPeriodOpener")
   financialPeriodsClosed          FinancialPeriod[]         @relation("FinancialPeriodCloser")
+  financialAccountsCreated        FinancialAccount[]        @relation("FinancialAccountCreator")
+  financialTransactionsCreated    FinancialTransaction[]    @relation("FinancialTransactionCreator")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -4029,12 +4036,24 @@ model ReceivablePayment {
   paymentMethod ReceivablePaymentMethod @map("payment_method")
   reference     String?
   notes         String?                 @db.Text
+  /// Fase 79 -- conta financeira onde o recebimento efetivamente entrou.
+  /// Nullable so por compatibilidade com pagamentos registrados ANTES desta
+  /// fase (nunca preenchido retroativamente) -- toda escrita nova exige o
+  /// campo (RegisterReceivablePaymentDto.financialAccountId).
+  financialAccountId     String? @map("financial_account_id") @db.Uuid
+  /// Fase 79 -- a UNICA FinancialTransaction (CREDIT) gerada por este
+  /// recebimento. @unique e a barreira de unicidade no banco (secao 8 do
+  /// pedido): nenhum outro ReceivablePayment pode apontar para a mesma
+  /// FinancialTransaction.
+  financialTransactionId String? @unique @map("financial_transaction_id") @db.Uuid
   createdBy     String                  @map("created_by") @db.Uuid
   createdAt     DateTime                @default(now()) @map("created_at")
 
-  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  receivable Receivable   @relation(fields: [receivableId], references: [id], onDelete: Cascade)
-  creator    UserAccount  @relation("ReceivablePaymentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receivable           Receivable            @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  creator              UserAccount           @relation("ReceivablePaymentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  financialAccount     FinancialAccount?     @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  financialTransaction FinancialTransaction? @relation(fields: [financialTransactionId], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([tenantId, receivableId])
@@ -4125,12 +4144,21 @@ model PayablePayment {
   paymentMethod ExpensePaymentMethod  @map("payment_method")
   reference     String?
   notes         String?               @db.Text
+  /// Fase 79 -- conta financeira de onde o pagamento efetivamente saiu.
+  /// Nullable pelo mesmo motivo de ReceivablePayment.financialAccountId
+  /// (compatibilidade retroativa, nunca preenchido para pagamentos antigos).
+  financialAccountId     String? @map("financial_account_id") @db.Uuid
+  /// Fase 79 -- a UNICA FinancialTransaction (DEBIT) gerada por este
+  /// pagamento. @unique = barreira de unicidade no banco (secao 8).
+  financialTransactionId String? @unique @map("financial_transaction_id") @db.Uuid
   createdBy     String                @map("created_by") @db.Uuid
   createdAt     DateTime              @default(now()) @map("created_at")
 
-  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  payable Payable     @relation(fields: [payableId], references: [id], onDelete: Cascade)
-  creator UserAccount @relation("PayablePaymentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payable              Payable               @relation(fields: [payableId], references: [id], onDelete: Cascade)
+  creator              UserAccount           @relation("PayablePaymentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  financialAccount     FinancialAccount?     @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  financialTransaction FinancialTransaction? @relation(fields: [financialTransactionId], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([tenantId, payableId])
@@ -4178,6 +4206,158 @@ model FinancialPeriod {
   @@unique([tenantId, year, month])
   @@index([tenantId, status])
   @@map("financial_periods")
+}
+
+// ============================================================================
+// CONTAS FINANCEIRAS / SALDOS / MOVIMENTACOES MANUAIS (Fase 78) — primeira
+// camada estrutural de contas bancarias/caixa da transportadora. NAO e
+// integracao bancaria (sem OFX/CNAB/PIX/Open Finance) e NAO sincroniza
+// automaticamente com ReceivablePayment/PayablePayment (ver secao 12 do
+// pedido e docs/financial-accounts.md) -- e um livro-caixa manual.
+// ============================================================================
+
+enum FinancialAccountType {
+  BANK
+  CASH
+
+  @@map("financial_account_type")
+}
+
+enum FinancialTransactionType {
+  CREDIT
+  DEBIT
+
+  @@map("financial_transaction_type")
+}
+
+/// Conta bancaria/caixa da transportadora. initialBalance e fixado na
+/// criacao e nunca alterado depois (secao 5 do pedido) -- qualquer correcao
+/// vira uma FinancialTransaction de ajuste. NUNCA armazenar credencial
+/// bancaria (senha, token, chave de API) -- apenas identificacao (nome do
+/// banco/codigo/numero mascarado), sempre opcional.
+model FinancialAccount {
+  id                  String               @id @default(uuid()) @db.Uuid
+  tenantId            String               @map("tenant_id") @db.Uuid
+  name                String
+  type                FinancialAccountType
+  initialBalance      Decimal              @default(0) @map("initial_balance") @db.Decimal(12, 2)
+  bankName            String?              @map("bank_name")
+  bankCode            String?              @map("bank_code")
+  accountNumberMasked String?              @map("account_number_masked")
+  isActive            Boolean              @default(true) @map("is_active")
+  createdBy           String               @map("created_by") @db.Uuid
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator      UserAccount            @relation("FinancialAccountCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  transactions FinancialTransaction[]
+  /// Fase 79 -- recebimentos/pagamentos que usaram esta conta.
+  receivablePayments ReceivablePayment[]
+  payablePayments    PayablePayment[]
+  /// Fase 80 -- extrato importado desta conta.
+  bankTransactions   FinancialBankTransaction[]
+
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, isActive])
+  @@map("financial_accounts")
+}
+
+/// Movimentacao IMUTAVEL (ledger append-only, mesmo espirito de
+/// ReceivablePayment/PayablePayment) -- nunca ha UPDATE/DELETE pela API. O
+/// saldo NUNCA e materializado aqui: sempre calculado como
+/// initialBalance + SUM(CREDIT) - SUM(DEBIT) no momento da consulta (secao 3
+/// do pedido), o que evita duas fontes de verdade divergentes. Uma
+/// transferencia entre contas vira DUAS linhas (uma CREDIT, uma DEBIT)
+/// vinculadas pelo mesmo referenceType='FinancialTransfer' +
+/// referenceId=<uuid gerado na hora> -- reaproveita os campos genericos de
+/// referencia (pensados para vinculo futuro com Receivable/Payable, secao
+/// 12) em vez de criar uma tabela FinancialTransfer/coluna dedicada so para
+/// isso (secao 4 do pedido: preferir a solucao mais simples).
+model FinancialTransaction {
+  id              String                    @id @default(uuid()) @db.Uuid
+  tenantId        String                    @map("tenant_id") @db.Uuid
+  accountId       String                    @map("account_id") @db.Uuid
+  type            FinancialTransactionType
+  amount          Decimal                   @db.Decimal(12, 2)
+  transactionDate DateTime                  @map("transaction_date")
+  description     String
+  referenceType   String?                   @map("reference_type")
+  referenceId     String?                   @map("reference_id") @db.Uuid
+  createdBy       String                    @map("created_by") @db.Uuid
+  createdAt       DateTime                  @default(now()) @map("created_at")
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  creator UserAccount      @relation("FinancialTransactionCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  /// Fase 79 -- lado inverso de ReceivablePayment/PayablePayment.financialTransactionId
+  /// (no maximo um dos dois, nunca ambos, para uma FinancialTransaction
+  /// originada de pagamento -- transferencias/ajustes manuais nao tem nenhum).
+  receivablePayment ReceivablePayment?
+  payablePayment    PayablePayment?
+  /// Fase 80 -- lado inverso de FinancialBankTransaction.financialTransactionId
+  /// (no maximo uma BankTransaction conciliada por FinancialTransaction).
+  bankTransaction   FinancialBankTransaction?
+
+  @@index([tenantId])
+  @@index([accountId, transactionDate])
+  @@index([tenantId, type])
+  @@map("financial_transactions")
+}
+
+// ============================================================================
+// CONCILIACAO BANCARIA (Fase 80) — representa movimentacoes EXTERNAS
+// (importadas de um extrato CSV), nunca outro ledger financeiro.
+// FinancialTransaction continua sendo a UNICA fonte de verdade do saldo
+// (ver docs/bank-reconciliation.md). Importar uma FinancialBankTransaction
+// NUNCA cria uma FinancialTransaction automaticamente -- a conciliacao so
+// VINCULA uma linha existente de cada lado, sempre por acao manual.
+// ============================================================================
+
+enum FinancialBankTransactionStatus {
+  PENDING
+  MATCHED
+  DIVERGENT
+
+  @@map("financial_bank_transaction_status")
+}
+
+/// Uma linha de extrato bancario importada. NAO copia todos os campos de
+/// FinancialTransaction -- e uma representacao externa mais simples
+/// (secao 2 do pedido). externalId identifica a movimentacao no banco
+/// quando o extrato fornece (ex: FITID do OFX/CSV do banco); quando
+/// ausente, rowHash e um hash best-effort da linha original, usado so como
+/// sinal defensivo de duplicidade -- NUNCA uma garantia de identidade
+/// (documentado em docs/bank-reconciliation.md).
+model FinancialBankTransaction {
+  id                  String                          @id @default(uuid()) @db.Uuid
+  tenantId            String                          @map("tenant_id") @db.Uuid
+  financialAccountId  String                          @map("financial_account_id") @db.Uuid
+  date                DateTime
+  description         String
+  amount              Decimal                         @db.Decimal(12, 2)
+  type                FinancialTransactionType
+  externalId          String?                         @map("external_id")
+  rowHash             String?                         @map("row_hash")
+  status              FinancialBankTransactionStatus   @default(PENDING)
+  /// @unique -- no maximo uma BankTransaction aponta para cada
+  /// FinancialTransaction (secao 3 do pedido).
+  financialTransactionId String?                       @unique @map("financial_transaction_id") @db.Uuid
+  metadata            Json?
+  importedAt          DateTime                        @default(now()) @map("imported_at")
+  updatedAt           DateTime                        @updatedAt @map("updated_at")
+
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  financialAccount     FinancialAccount      @relation(fields: [financialAccountId], references: [id], onDelete: Restrict)
+  financialTransaction FinancialTransaction? @relation(fields: [financialTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, financialAccountId, externalId])
+  @@index([tenantId])
+  @@index([tenantId, financialAccountId])
+  @@index([tenantId, status])
+  @@index([financialAccountId, date])
+  @@map("financial_bank_transactions")
 }
 
 // ============================================================================

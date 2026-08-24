@@ -19,6 +19,9 @@ import type {
   ExpenseCategory,
   ExpensePaymentMethod,
   ExpenseStatus,
+  FinancialAccountType,
+  FinancialBankTransactionStatus,
+  FinancialTransactionType,
   FiscalDocumentSource,
   FiscalDocumentStatus,
   FiscalDocumentType,
@@ -2843,6 +2846,10 @@ export interface ReceivablePaymentEntity {
   paymentMethod: ReceivablePaymentMethod;
   reference: string | null;
   notes: string | null;
+  /** Fase 79 -- nulo apenas para recebimentos registrados antes desta fase. */
+  financialAccountId: string | null;
+  financialAccountName: string | null;
+  financialTransactionId: string | null;
   createdBy: string;
   creatorName: string | null;
   createdAt: string;
@@ -2916,6 +2923,10 @@ export interface PayablePaymentEntity {
   paymentMethod: ExpensePaymentMethod;
   reference: string | null;
   notes: string | null;
+  /** Fase 79 -- nulo apenas para pagamentos registrados antes desta fase. */
+  financialAccountId: string | null;
+  financialAccountName: string | null;
+  financialTransactionId: string | null;
   createdBy: string;
   creatorName: string | null;
   createdAt: string;
@@ -3109,4 +3120,99 @@ export interface FinancialPeriodEntity {
    * Fase 77, unico vinculo estruturalmente seguro com AuditLog.
    */
   auditHistory?: AuditLogEntity[];
+}
+
+// Fase 78 -- Contas Financeiras, Saldos e Movimentacoes Manuais. Espelha
+// apps/api/src/finance-accounts/entities/*.ts. currentBalance e SEMPRE
+// calculado (initialBalance + creditos - debitos), nunca uma coluna real.
+export interface FinancialAccountEntity {
+  id: string;
+  name: string;
+  type: FinancialAccountType;
+  initialBalance: number;
+  currentBalance: number;
+  bankName: string | null;
+  bankCode: string | null;
+  accountNumberMasked: string | null;
+  isActive: boolean;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FinancialTransactionEntity {
+  id: string;
+  accountId: string;
+  type: FinancialTransactionType;
+  amount: number;
+  transactionDate: string;
+  description: string;
+  referenceType: string | null;
+  referenceId: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+}
+
+export interface FinancialAccountsDashboardEntity {
+  totalBalance: number;
+  totalBankBalance: number;
+  totalCashBalance: number;
+  activeAccounts: number;
+  inactiveAccounts: number;
+}
+
+export interface FinancialTransferResultEntity {
+  transferId: string;
+  debit: FinancialTransactionEntity;
+  credit: FinancialTransactionEntity;
+}
+
+// Fase 80 -- Conciliacao Bancaria. Espelha
+// apps/api/src/bank-reconciliation/entities/*.ts.
+export interface BankTransactionEntity {
+  id: string;
+  financialAccountId: string;
+  financialAccountName: string | null;
+  date: string;
+  description: string;
+  amount: number;
+  type: FinancialTransactionType;
+  externalId: string | null;
+  status: FinancialBankTransactionStatus;
+  financialTransactionId: string | null;
+  financialTransaction?: FinancialTransactionEntity | null;
+  dateDifferenceDays?: number | null;
+  importedAt: string;
+  updatedAt: string;
+}
+
+export interface BankTransactionCandidateEntity {
+  financialTransaction: FinancialTransactionEntity;
+  exactMatch: boolean;
+  dateDifferenceDays: number;
+}
+
+export interface BankReconciliationDashboardEntity {
+  totalCount: number;
+  matchedCount: number;
+  pendingCount: number;
+  divergentCount: number;
+  matchedAmount: number;
+  pendingAmount: number;
+  divergentAmount: number;
+}
+
+export interface ImportBankTransactionRowErrorEntity {
+  row: number;
+  message: string;
+}
+
+export interface ImportBankTransactionsResultEntity {
+  rowsRead: number;
+  imported: number;
+  duplicates: number;
+  invalid: number;
+  errors: ImportBankTransactionRowErrorEntity[];
 }

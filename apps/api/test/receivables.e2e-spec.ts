@@ -207,6 +207,19 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
     return { tripId, billingId: invoiceRes.body.data.id as string };
   }
 
+  // Fase 79 -- todo POST /receivables/:id/payments agora exige
+  // financialAccountId; os testes desta suite criam uma conta BANK com
+  // saldo alto o bastante para nunca interferir nos cenarios de negocio
+  // que ja existiam antes desta fase.
+  async function createFinancialAccount(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/finance/accounts')
+      .set('Authorization', auth)
+      .send({ name: `Conta Teste ${randomUUID().slice(0, 8)}`, type: 'BANK', initialBalance: 1000000 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function generateReceivable(auth: string, billingId: string, dueDate: string, description?: string) {
     return request(app.getHttpServer())
       .post(`/api/v1/receivables/from-billing/${billingId}`)
@@ -268,6 +281,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
   describe('recebimentos', () => {
     it('recebimento parcial e depois total -- saldo e status corretos, sem exceder', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Payments');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerId = await createCustomer(adminAuth);
       const { billingId } = await setupInvoicedTrip(adminAuth, customerId, 1000);
       const receivable = await generateReceivable(adminAuth, billingId, '2026-09-30').expect(201);
@@ -276,7 +290,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       const partial = await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 300, paymentDate: '2026-09-10', paymentMethod: 'PIX', reference: 'TXN-1' })
+        .send({ amount: 300, paymentDate: '2026-09-10', paymentMethod: 'PIX', reference: 'TXN-1', financialAccountId })
         .expect(201);
       expect(partial.body.data.receivedAmount).toBe(300);
       expect(partial.body.data.balance).toBe(700);
@@ -287,13 +301,13 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 701, paymentDate: '2026-09-15', paymentMethod: 'PIX' })
+        .send({ amount: 701, paymentDate: '2026-09-15', paymentMethod: 'PIX', financialAccountId })
         .expect(400);
 
       const full = await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 700, paymentDate: '2026-09-20', paymentMethod: 'BANK_TRANSFER' })
+        .send({ amount: 700, paymentDate: '2026-09-20', paymentMethod: 'BANK_TRANSFER', financialAccountId })
         .expect(201);
       expect(full.body.data.receivedAmount).toBe(1000);
       expect(full.body.data.balance).toBe(0);
@@ -304,12 +318,13 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 1, paymentDate: '2026-09-21', paymentMethod: 'PIX' })
+        .send({ amount: 1, paymentDate: '2026-09-21', paymentMethod: 'PIX', financialAccountId })
         .expect(409);
     });
 
     it('vencimento: titulo com dueDate no passado fica OVERDUE, mas nunca apos quitado', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Overdue');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerId = await createCustomer(adminAuth);
       const { billingId } = await setupInvoicedTrip(adminAuth, customerId, 500);
       const receivable = await generateReceivable(adminAuth, billingId, '2020-01-01').expect(201);
@@ -324,7 +339,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 500, paymentDate: '2026-01-01', paymentMethod: 'PIX' })
+        .send({ amount: 500, paymentDate: '2026-01-01', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       const paidRes = await request(app.getHttpServer())
@@ -338,6 +353,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
   describe('cancelamento', () => {
     it('cancela, preserva pagamentos ja feitos e bloqueia novos recebimentos', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Cancel');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerId = await createCustomer(adminAuth);
       const { billingId } = await setupInvoicedTrip(adminAuth, customerId, 900);
       const receivable = await generateReceivable(adminAuth, billingId, '2026-09-30').expect(201);
@@ -346,7 +362,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 200, paymentDate: '2026-09-05', paymentMethod: 'PIX' })
+        .send({ amount: 200, paymentDate: '2026-09-05', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       const cancelRes = await request(app.getHttpServer())
@@ -360,7 +376,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 100, paymentDate: '2026-09-06', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2026-09-06', paymentMethod: 'PIX', financialAccountId })
         .expect(409);
 
       await request(app.getHttpServer())
@@ -386,7 +402,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', tenantB.adminAuth)
-        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX', financialAccountId: randomUUID() })
         .expect(404);
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/cancel`)
@@ -424,7 +440,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', auditorAuth)
-        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2026-09-05', paymentMethod: 'PIX', financialAccountId: randomUUID() })
         .expect(403);
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/cancel`)
@@ -436,6 +452,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
   describe('dashboard e aging', () => {
     it('resumo/aging/por-cliente consistentes com titulos aberto/vencido/pago/cancelado', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Dashboard');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerId = await createCustomer(adminAuth, 'Cliente Dashboard');
 
       // 1) Em aberto, a vencer.
@@ -453,7 +470,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${paidReceivable.body.data.id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 300, paymentDate: '2026-01-05', paymentMethod: 'PIX' })
+        .send({ amount: 300, paymentDate: '2026-01-05', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       // 4) Cancelado -- nunca compoe os totais.
@@ -507,7 +524,9 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
         .set('Authorization', adminAuth)
         .expect(200);
       expect(paidList.body.data.items).toHaveLength(1);
-    });
+      },
+      15000, // Fase 79 -- +1 request (createFinancialAccount) empurrou este teste acima do timeout padrao de 5s.
+    );
 
     it(
       'N+1: numero de queries do dashboard nao cresce com a quantidade de titulos',
@@ -551,6 +570,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
   describe('auditoria', () => {
     it('registra criacao, pagamento e cancelamento com ator/tenant/IP', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('Audit');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerId = await createCustomer(adminAuth);
       const { billingId } = await setupInvoicedTrip(adminAuth, customerId, 700);
       const receivable = await generateReceivable(adminAuth, billingId, '2026-09-30').expect(201);
@@ -559,7 +579,7 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 700, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 700, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${id}/cancel`)

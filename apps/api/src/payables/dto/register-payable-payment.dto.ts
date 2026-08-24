@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ExpensePaymentMethod } from '@prisma/client';
-import { IsDateString, IsEnum, IsNumber, IsOptional, IsPositive, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsPositive, IsString, IsUUID, MaxLength } from 'class-validator';
 
 // POST /payables/:id/payments -- amount sempre validado no backend contra
 // o saldo em aberto (nunca paidAmount > originalAmount). paymentMethod
@@ -19,6 +19,12 @@ export class RegisterPayablePaymentDto {
   @ApiProperty({ enum: ExpensePaymentMethod })
   @IsEnum(ExpensePaymentMethod, { message: 'paymentMethod invalido.' })
   paymentMethod!: ExpensePaymentMethod;
+
+  // Fase 79, secao 3 -- exigido, sempre explicito: nunca escolhido
+  // automaticamente.
+  @ApiProperty({ format: 'uuid', description: 'Conta financeira (FinancialAccount) de onde o pagamento efetivamente saiu.' })
+  @IsUUID()
+  financialAccountId!: string;
 
   @ApiPropertyOptional({ description: 'Numero do comprovante/transacao.' })
   @IsOptional()

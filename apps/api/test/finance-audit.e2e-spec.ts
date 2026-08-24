@@ -183,6 +183,17 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
       .send({ dueDate });
   }
 
+  // Fase 79 -- todo POST /payables|receivables/:id/payments agora exige
+  // financialAccountId.
+  async function createFinancialAccount(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/finance/accounts')
+      .set('Authorization', auth)
+      .send({ name: `Conta Teste ${randomUUID().slice(0, 8)}`, type: 'BANK', initialBalance: 1000000 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function getFinanceAudit(auth: string, qs = '') {
     return request(app.getHttpServer()).get(`/api/v1/finance/audit${qs}`).set('Authorization', auth);
   }
@@ -190,6 +201,7 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
   describe('eventos -- Payable', () => {
     it('criacao/pagamento/cancelamento de Payable geram payable.created/payment_created/cancelled com metadata objetiva', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PayableEvents');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
       const expenseId = await createApprovedExpense(adminAuth, tripId, 500);
 
@@ -199,7 +211,7 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${payableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 500, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 500, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       await request(app.getHttpServer()).post(`/api/v1/payables/${payableId}/cancel`).set('Authorization', adminAuth).expect(201);
@@ -220,6 +232,7 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
 
     it('pagamento rejeitado (saldo insuficiente) nao deixa auditoria fantasma', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PayableRollback');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
       const expenseId = await createApprovedExpense(adminAuth, tripId, 100);
       const payable = await generatePayable(adminAuth, expenseId).expect(201);
@@ -229,7 +242,7 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${payableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 999, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 999, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(400);
       const after = await prisma.auditLog.count({ where: { tenantId, entityName: 'PayablePayment' } });
       expect(after).toBe(before);
@@ -239,6 +252,7 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
   describe('eventos -- Receivable', () => {
     it('criacao/pagamento/cancelamento de Receivable geram receivable.created/payment_created/cancelled', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('ReceivableEvents');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerRes = await request(app.getHttpServer())
         .post('/api/v1/customers')
         .set('Authorization', adminAuth)
@@ -285,7 +299,7 @@ describe('Auditoria Financeira (Fase 77, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${receivableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 1000, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 1000, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
       await request(app.getHttpServer()).post(`/api/v1/receivables/${receivableId}/cancel`).set('Authorization', adminAuth).expect(201);
 

@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { ExpenseStatus, PayableStatus, Prisma } from '@prisma/client';
+import { ExpenseStatus, FinancialTransactionType, PayableStatus, Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { FinancialAccountsService } from '../../finance-accounts/services/financial-accounts.service';
 import { FinancialPeriodGuardService } from '../../financial-periods/services/financial-period-guard.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FindPayablesQueryDto } from '../dto/find-payables-query.dto';
@@ -20,7 +21,9 @@ const DETAIL_INCLUDE = {
   trip: { select: { origin: { select: { name: true } }, destination: { select: { name: true } } } },
   creator: true,
   canceller: true,
-  payments: { include: { creator: true }, orderBy: { createdAt: 'asc' } },
+  // Fase 79, secao 18 -- mesmo principio de ReceivablesService: financialAccount
+  // no MESMO include (sem N+1) para expor "conta financeira utilizada".
+  payments: { include: { creator: true, financialAccount: { select: { name: true } } }, orderBy: { createdAt: 'asc' } },
 } satisfies Prisma.PayableInclude;
 
 const LIST_INCLUDE = {
@@ -35,6 +38,7 @@ export class PayablesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly periodGuard: FinancialPeriodGuardService,
+    private readonly financialAccounts: FinancialAccountsService,
   ) {}
 
   // POST /payables/from-expense/:expenseId -- secao 7: 1 titulo por
@@ -168,9 +172,11 @@ export class PayablesService {
     return toPayableEntity(row as unknown as PayableWithRelations);
   }
 
-  // POST /payables/:id/payments -- secao 8: nunca permite
-  // paidAmount > originalAmount. Atualiza o saldo materializado dentro da
-  // MESMA transacao que cria a linha do ledger.
+  // POST /payables/:id/payments -- secao 8 (Fase 73): nunca permite
+  // paidAmount > originalAmount. Fase 79: agora TAMBEM cria, na MESMA
+  // transacao Prisma, a FinancialTransaction (DEBIT) na conta financeira
+  // informada -- espelho exato de ReceivablesService.registerPayment (ver
+  // docs/financial-payment-integration.md).
   async registerPayment(
     tenantId: string,
     id: string,
@@ -182,6 +188,10 @@ export class PayablesService {
     if (payable.cancelledAt) {
       throw new ConflictException('Este titulo foi cancelado -- nao e possivel registrar pagamento.');
     }
+
+    // Fase 79, secao 6 -- mesma checagem reaproveitada de
+    // FinancialTransactionsService.create (Fase 78).
+    await this.financialAccounts.assertActiveAndTenant(tenantId, dto.financialAccountId);
 
     const originalAmount = toNumberOrNull(payable.originalAmount) ?? 0;
     const paidAmount = toNumberOrNull(payable.paidAmount) ?? 0;
@@ -196,14 +206,28 @@ export class PayablesService {
     }
 
     // Fase 76, secao 9/10 -- competencia do pagamento = paymentDate (data
-    // informada pelo usuario, secao 10 do pedido).
+    // informada pelo usuario, secao 10 do pedido). Fase 79, secao 10 --
+    // MESMA data usada como transactionDate da FinancialTransaction.
     const paymentDate = new Date(dto.paymentDate);
     await this.periodGuard.assertPeriodOpenForDate(tenantId, paymentDate);
 
     const newPaidAmount = paidAmount + dto.amount;
     const newStatus = computeWrittenStatus(originalAmount, newPaidAmount, null);
 
-    const { paymentId } = await this.prisma.$transaction(async (tx) => {
+    const { paymentId, transactionId } = await this.prisma.$transaction(async (tx) => {
+      // Fase 79, secao 20 -- CAS no valor lido antes da transacao (mesmo
+      // mecanismo de ReceivablesService.registerPayment): duas requisicoes
+      // concorrentes nunca ultrapassam o saldo juntas, sem lock distribuido.
+      const cas = await tx.payable.updateMany({
+        where: { id, tenantId, paidAmount: payable.paidAmount },
+        data: { paidAmount: newPaidAmount, status: newStatus },
+      });
+      if (cas.count === 0) {
+        throw new ConflictException(
+          'O saldo deste titulo foi alterado por outra operacao simultanea -- verifique o saldo atual e tente novamente.',
+        );
+      }
+
       const payment = await tx.payablePayment.create({
         data: {
           tenantId,
@@ -211,16 +235,33 @@ export class PayablesService {
           amount: dto.amount,
           paymentDate,
           paymentMethod: dto.paymentMethod,
+          financialAccountId: dto.financialAccountId,
           createdBy: actor.userId,
           ...(dto.reference ? { reference: dto.reference } : {}),
           ...(dto.notes ? { notes: dto.notes } : {}),
         },
       });
-      await tx.payable.update({
-        where: { id },
-        data: { paidAmount: newPaidAmount, status: newStatus },
+
+      const transaction = await tx.financialTransaction.create({
+        data: {
+          tenantId,
+          accountId: dto.financialAccountId,
+          type: FinancialTransactionType.DEBIT,
+          amount: dto.amount,
+          transactionDate: paymentDate,
+          description: `Pagamento -- ${payable.description}`,
+          referenceType: 'PayablePayment',
+          referenceId: payment.id,
+          createdBy: actor.userId,
+        },
       });
-      return { paymentId: payment.id };
+
+      await tx.payablePayment.update({
+        where: { id: payment.id },
+        data: { financialTransactionId: transaction.id },
+      });
+
+      return { paymentId: payment.id, transactionId: transaction.id };
     });
 
     await this.audit.log({
@@ -236,6 +277,8 @@ export class PayablesService {
         paymentMethod: dto.paymentMethod,
         newPaidAmount,
         newStatus,
+        financialAccountId: dto.financialAccountId,
+        financialTransactionId: transactionId,
       }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,

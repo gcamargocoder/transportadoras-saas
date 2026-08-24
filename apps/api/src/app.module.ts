@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { BankReconciliationModule } from './bank-reconciliation/bank-reconciliation.module';
 import { BillingModule } from './billing/billing.module';
 import { BillingOperationalModule } from './billing-operational/billing-operational.module';
 import { ChecklistsModule } from './checklists/checklists.module';
@@ -18,6 +19,7 @@ import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
 import { FleetOperationsModule } from './fleet-operations/fleet-operations.module';
 import { FinanceModule } from './finance/finance.module';
+import { FinanceAccountsModule } from './finance-accounts/finance-accounts.module';
 import { FinanceReconciliationModule } from './finance-reconciliation/finance-reconciliation.module';
 import { FinanceAuditModule } from './finance-audit/finance-audit.module';
 import { FinancialPeriodsModule } from './financial-periods/financial-periods.module';
@@ -102,6 +104,8 @@ import { UsersModule } from './users/users.module';
     FinanceReconciliationModule,
     FinancialPeriodsModule,
     FinanceAuditModule,
+    FinanceAccountsModule,
+    BankReconciliationModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

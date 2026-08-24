@@ -45,6 +45,8 @@ export interface RegisterReceivablePaymentPayload {
   amount: number;
   paymentDate: string;
   paymentMethod: ReceivablePaymentMethod;
+  // Fase 79 -- sempre obrigatorio, nunca escolhido automaticamente.
+  financialAccountId: string;
   reference?: string | undefined;
   notes?: string | undefined;
 }

@@ -25,6 +25,17 @@ export class ReceivablePaymentEntity {
   @ApiPropertyOptional({ nullable: true })
   notes!: string | null;
 
+  // Fase 79 -- nullable pois recebimentos anteriores a esta fase nunca
+  // tiveram conta financeira vinculada (ver docs/financial-payment-integration.md).
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  financialAccountId!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  financialAccountName!: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'FinancialTransaction (CREDIT) gerada por este recebimento.' })
+  financialTransactionId!: string | null;
+
   @ApiProperty({ format: 'uuid' })
   createdBy!: string;
 

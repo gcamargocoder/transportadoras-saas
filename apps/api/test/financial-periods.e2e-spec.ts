@@ -179,6 +179,17 @@ describe('Fechamento Financeiro / Periodos (Fase 76, e2e)', () => {
       .send({ dueDate });
   }
 
+  // Fase 79 -- todo POST /payables|receivables/:id/payments agora exige
+  // financialAccountId.
+  async function createFinancialAccount(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/finance/accounts')
+      .set('Authorization', auth)
+      .send({ name: `Conta Teste ${randomUUID().slice(0, 8)}`, type: 'BANK', initialBalance: 1000000 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function openPeriod(auth: string, year: number, month: number) {
     return request(app.getHttpServer()).post('/api/v1/finance/periods').set('Authorization', auth).send({ year, month });
   }
@@ -233,6 +244,7 @@ describe('Fechamento Financeiro / Periodos (Fase 76, e2e)', () => {
   describe('protecao de mutacoes -- Payable', () => {
     it('bloqueia criacao/pagamento/cancelamento com competencia em periodo fechado; permite em aberto/inexistente', async () => {
       const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('PayableGuard');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const tripId = await setupTrip(adminAuth);
 
       // Periodo 2025-05 fechado; 2025-06 nunca criado (inexistente).
@@ -252,14 +264,14 @@ describe('Fechamento Financeiro / Periodos (Fase 76, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${payableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 100, paymentDate: '2025-05-15', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2025-05-15', paymentMethod: 'PIX', financialAccountId })
         .expect(409);
 
       // 4) Pagamento permitido -- paymentDate em periodo inexistente (2025-06).
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${payableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 100, paymentDate: '2025-06-15', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2025-06-15', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       // 5) Cancelamento bloqueado -- o titulo em si tem issueDate em periodo
@@ -295,6 +307,7 @@ describe('Fechamento Financeiro / Periodos (Fase 76, e2e)', () => {
   describe('protecao de mutacoes -- Receivable', () => {
     it('bloqueia ReceivablePayment com paymentDate em periodo fechado; permite fora dele', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('ReceivableGuard');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerRes = await request(app.getHttpServer())
         .post('/api/v1/customers')
         .set('Authorization', adminAuth)
@@ -363,13 +376,13 @@ describe('Fechamento Financeiro / Periodos (Fase 76, e2e)', () => {
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${receivableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 100, paymentDate: '2025-07-10', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2025-07-10', paymentMethod: 'PIX', financialAccountId })
         .expect(409);
 
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${receivableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 100, paymentDate: '2025-08-10', paymentMethod: 'PIX' })
+        .send({ amount: 100, paymentDate: '2025-08-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
     });
   });

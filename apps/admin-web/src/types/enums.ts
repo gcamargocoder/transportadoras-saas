@@ -766,6 +766,27 @@ export const FinancialPeriodStatus = {
 } as const;
 export type FinancialPeriodStatus = (typeof FinancialPeriodStatus)[keyof typeof FinancialPeriodStatus];
 
+// Fase 78 -- Contas Financeiras, Saldos e Movimentacoes Manuais.
+export const FinancialAccountType = {
+  BANK: 'BANK',
+  CASH: 'CASH',
+} as const;
+export type FinancialAccountType = (typeof FinancialAccountType)[keyof typeof FinancialAccountType];
+
+export const FinancialTransactionType = {
+  CREDIT: 'CREDIT',
+  DEBIT: 'DEBIT',
+} as const;
+export type FinancialTransactionType = (typeof FinancialTransactionType)[keyof typeof FinancialTransactionType];
+
+// Fase 80 -- Conciliacao Bancaria.
+export const FinancialBankTransactionStatus = {
+  PENDING: 'PENDING',
+  MATCHED: 'MATCHED',
+  DIVERGENT: 'DIVERGENT',
+} as const;
+export type FinancialBankTransactionStatus = (typeof FinancialBankTransactionStatus)[keyof typeof FinancialBankTransactionStatus];
+
 export const ReceivablePaymentMethod = {
   PIX: 'PIX',
   BANK_TRANSFER: 'BANK_TRANSFER',

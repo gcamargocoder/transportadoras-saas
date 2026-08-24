@@ -12,7 +12,10 @@ import {
   ExpenseCategory,
   ExpensePaymentMethod,
   ExpenseStatus,
+  FinancialAccountType,
+  FinancialBankTransactionStatus,
   FinancialPeriodStatus,
+  FinancialTransactionType,
   FiscalDocumentSource,
   FiscalDocumentStatus,
   FiscalDocumentType,
@@ -867,12 +870,19 @@ export const FINANCIAL_PERIOD_STATUS_TONE: Record<FinancialPeriodStatus, 'succes
 // AuditLog (nunca enums Prisma) -- os labels cobrem exatamente os valores
 // ja gravados por ReceivablesService/PayablesService/FinancialPeriodsService
 // (Fases 72/73/76), reaproveitados aqui, nunca renomeados.
+// Fase 78 -- FinancialAccount/FinancialTransaction/FinancialTransfer
+// adicionados ao mesmo mapa (sao os entityName agora aceitos por
+// GET /finance/audit, ver FINANCE_AUDIT_ENTITY_NAMES no backend).
 export const FINANCE_AUDIT_ENTITY_NAME_LABELS: Record<string, string> = {
   Receivable: 'Conta a receber',
   ReceivablePayment: 'Recebimento',
   Payable: 'Conta a pagar',
   PayablePayment: 'Pagamento',
   FinancialPeriod: 'Período financeiro',
+  FinancialAccount: 'Conta financeira',
+  FinancialTransaction: 'Movimentação financeira',
+  FinancialTransfer: 'Transferência entre contas',
+  FinancialBankTransaction: 'Movimentação bancária (extrato)',
 };
 
 export const FINANCE_AUDIT_ACTION_LABELS: Record<string, string> = {
@@ -884,6 +894,39 @@ export const FINANCE_AUDIT_ACTION_LABELS: Record<string, string> = {
   'payable.cancelled': 'Conta a pagar cancelada',
   'financial_period.created': 'Período aberto',
   'financial_period.closed': 'Período fechado',
+  'financial_account.created': 'Conta financeira criada',
+  'financial_account.updated': 'Conta financeira atualizada',
+  'financial_account.activated': 'Conta financeira ativada',
+  'financial_account.deactivated': 'Conta financeira desativada',
+  'financial_transaction.created': 'Movimentação registrada',
+  'financial_transfer.created': 'Transferência realizada',
+  'financial_bank_transaction.imported': 'Movimentação bancária importada',
+  'financial_bank_transaction.reconciled': 'Movimentação bancária conciliada',
+  'financial_bank_transaction.unreconciled': 'Movimentação bancária desconciliada',
+};
+
+// Fase 78 -- Contas Financeiras.
+export const FINANCIAL_ACCOUNT_TYPE_LABELS: Record<FinancialAccountType, string> = {
+  BANK: 'Bancária',
+  CASH: 'Caixa',
+};
+
+export const FINANCIAL_TRANSACTION_TYPE_LABELS: Record<FinancialTransactionType, string> = {
+  CREDIT: 'Crédito',
+  DEBIT: 'Débito',
+};
+
+// Fase 80 -- Conciliação Bancária.
+export const FINANCIAL_BANK_TRANSACTION_STATUS_LABELS: Record<FinancialBankTransactionStatus, string> = {
+  PENDING: 'Pendente',
+  MATCHED: 'Conciliada',
+  DIVERGENT: 'Divergente',
+};
+
+export const FINANCIAL_BANK_TRANSACTION_STATUS_TONE: Record<FinancialBankTransactionStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  PENDING: 'neutral',
+  MATCHED: 'success',
+  DIVERGENT: 'warning',
 };
 
 export const MONTH_LABELS: Record<number, string> = {

@@ -4,7 +4,10 @@ import { ReceivablePaymentEntity } from '../entities/receivable-payment.entity';
 import { ReceivableEntity } from '../entities/receivable.entity';
 import { computeBalance, computeEffectiveStatus } from '../utils/receivable-status.util';
 
-export type ReceivablePaymentWithRelations = ReceivablePayment & { creator: UserAccount | null };
+export type ReceivablePaymentWithRelations = ReceivablePayment & {
+  creator: UserAccount | null;
+  financialAccount?: { name: string } | null;
+};
 
 export type ReceivableWithRelations = Receivable & {
   customer: { name: string } | null;
@@ -23,6 +26,9 @@ export function toReceivablePaymentEntity(row: ReceivablePaymentWithRelations): 
   entity.paymentMethod = row.paymentMethod;
   entity.reference = row.reference;
   entity.notes = row.notes;
+  entity.financialAccountId = row.financialAccountId;
+  entity.financialAccountName = row.financialAccount?.name ?? null;
+  entity.financialTransactionId = row.financialTransactionId;
   entity.createdBy = row.createdBy;
   entity.creatorName = row.creator?.name ?? null;
   entity.createdAt = row.createdAt;

@@ -124,6 +124,18 @@ export function PayableDetailModal({
                         <span className="block text-xs text-ink-subtle">
                           {p.creatorName ?? '—'} em {formatDateTime(p.createdAt)}
                         </span>
+                        {/* Fase 79 -- ja vem no MESMO payload (sem consulta extra); nulo so para
+                            pagamentos anteriores a esta fase. */}
+                        {p.financialAccountId ? (
+                          <a
+                            href={`/operations/finance/accounts/${p.financialAccountId}`}
+                            className="mt-0.5 block text-xs text-brand-700 hover:underline"
+                          >
+                            {p.financialAccountName ?? 'Conta financeira'}
+                          </a>
+                        ) : (
+                          <span className="mt-0.5 block text-xs text-ink-subtle">Sem conta financeira vinculada</span>
+                        )}
                       </span>
                       <span className="shrink-0 font-medium">{formatCurrency(p.amount)}</span>
                     </li>

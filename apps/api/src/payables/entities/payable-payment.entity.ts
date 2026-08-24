@@ -25,6 +25,17 @@ export class PayablePaymentEntity {
   @ApiPropertyOptional({ nullable: true })
   notes!: string | null;
 
+  // Fase 79 -- nullable pois pagamentos anteriores a esta fase nunca
+  // tiveram conta financeira vinculada (ver docs/financial-payment-integration.md).
+  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  financialAccountId!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  financialAccountName!: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'FinancialTransaction (DEBIT) gerada por este pagamento.' })
+  financialTransactionId!: string | null;
+
   @ApiProperty({ format: 'uuid' })
   createdBy!: string;
 

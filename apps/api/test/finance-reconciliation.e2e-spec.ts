@@ -205,6 +205,17 @@ describe('Conciliacao Financeira (Fase 75, e2e)', () => {
     return res.body.data.id as string;
   }
 
+  // Fase 79 -- POST /receivables|payables/:id/payments agora exige
+  // financialAccountId.
+  async function createFinancialAccount(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/finance/accounts')
+      .set('Authorization', auth)
+      .send({ name: `Conta Teste ${randomUUID().slice(0, 8)}`, type: 'BANK', initialBalance: 1000000 })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function findIssue(issues: { type: string; entityId: string }[], type: string, entityId: string) {
     return issues.find((i) => i.type === type && i.entityId === entityId);
   }
@@ -212,13 +223,14 @@ describe('Conciliacao Financeira (Fase 75, e2e)', () => {
   describe('detectores de Receivable', () => {
     it('RECEIVABLE_BALANCE_INCONSISTENT: receivedAmount divergente da soma real de ReceivablePayment', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('RecBalance');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const customerId = await createCustomer(adminAuth);
       const { billingId } = await setupBilling(adminAuth, customerId, 1000);
       const receivableId = await generateReceivable(adminAuth, billingId);
       await request(app.getHttpServer())
         .post(`/api/v1/receivables/${receivableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 300, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 300, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
 
       // Corrompe o campo materializado diretamente (nunca alcancavel via API) para
@@ -294,12 +306,13 @@ describe('Conciliacao Financeira (Fase 75, e2e)', () => {
 
     it('PAYABLE_BALANCE_INCONSISTENT e PAYABLE_PAYMENT_EXCEEDS_EXPENSE', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('PayBalance');
+      const financialAccountId = await createFinancialAccount(adminAuth);
       const { expenseId } = await setupApprovedExpense(adminAuth, 1000);
       const payableId = await generatePayable(adminAuth, expenseId);
       await request(app.getHttpServer())
         .post(`/api/v1/payables/${payableId}/payments`)
         .set('Authorization', adminAuth)
-        .send({ amount: 200, paymentDate: '2026-09-10', paymentMethod: 'PIX' })
+        .send({ amount: 200, paymentDate: '2026-09-10', paymentMethod: 'PIX', financialAccountId })
         .expect(201);
       await prisma.payable.update({ where: { id: payableId }, data: { paidAmount: 1500 } });
 
