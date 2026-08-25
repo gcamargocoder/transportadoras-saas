@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNumber, IsString, Min, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from 'class-validator';
 
 // Fase 45 -- item de uma lista de pecas enviada em CreateMaintenanceDto/
 // UpdateMaintenanceDto. Quando presente, MaintenancesService substitui TODA
@@ -7,6 +7,17 @@ import { IsNumber, IsString, Min, MaxLength } from 'class-validator';
 // -- nunca mescla item a item (evita duplicar/perder linha por reenvio
 // parcial).
 export class MaintenancePartInputDto {
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Fase 83 -- vinculo opcional com o catalogo de pecas (Part). Quando informado, a conclusao da OS ' +
+      'gera uma saida de estoque automatica para esta peca. Ausente = item de custo em texto livre, sem ' +
+      'efeito no estoque (comportamento identico ao pre-Fase 83).',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'partId deve ser um UUID valido.' })
+  partId?: string;
+
   @ApiProperty({ example: 'Filtro de óleo' })
   @IsString()
   @MaxLength(150)

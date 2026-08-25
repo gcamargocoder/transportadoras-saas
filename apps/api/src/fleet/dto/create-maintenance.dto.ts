@@ -56,17 +56,33 @@ export class CreateMaintenanceDto {
   @Min(0, { message: 'odometerKm deve ser maior ou igual a zero.' })
   odometerKm?: number;
 
-  @ApiPropertyOptional({ example: 'Oficina Central Diesel' })
+  @ApiPropertyOptional({ example: 'Oficina Central Diesel', description: 'Texto livre (Fase 13). Ver workshopId para vinculo com o catalogo.' })
   @IsOptional()
   @IsString()
   @MaxLength(150)
   workshop?: string;
 
-  @ApiPropertyOptional({ example: 'Volvo Pecas e Servicos' })
+  @ApiPropertyOptional({ example: 'Volvo Pecas e Servicos', description: 'Texto livre (Fase 13). Ver supplierId para vinculo com o catalogo.' })
   @IsOptional()
   @IsString()
   @MaxLength(150)
   supplier?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Fase 84 -- oficina do catalogo (MaintenanceProvider, type=WORKSHOP). Deve estar ativa.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'workshopId deve ser um UUID valido.' })
+  workshopId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Fase 84 -- fornecedor do catalogo (MaintenanceProvider, type=SUPPLIER). Deve estar ativo.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'supplierId deve ser um UUID valido.' })
+  supplierId?: string;
 
   @ApiPropertyOptional({ example: 'Joao Mecanico' })
   @IsOptional()
@@ -84,6 +100,12 @@ export class CreateMaintenanceDto {
   @IsString()
   @MaxLength(1000)
   description?: string;
+
+  @ApiPropertyOptional({ maxLength: 2000, description: 'Texto de diagnostico tecnico (distinto de description/notes).' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  diagnosis?: string;
 
   @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()

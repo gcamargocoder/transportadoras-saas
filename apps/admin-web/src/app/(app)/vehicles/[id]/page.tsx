@@ -38,12 +38,12 @@ import {
   DOCUMENT_TYPE_LABELS,
   FISCAL_DOCUMENT_TYPE_LABELS,
   FLEET_ALERT_SEVERITY_TONE,
+  FLEET_AVAILABILITY_STATUS_LABELS,
+  FLEET_AVAILABILITY_STATUS_TONE,
   MAINTENANCE_STATUS_LABELS,
   MAINTENANCE_TYPE_LABELS,
   TIRE_STATUS_LABELS,
   TRIP_STATUS_LABELS,
-  VEHICLE_AVAILABILITY_LABELS,
-  VEHICLE_AVAILABILITY_TONE,
   VEHICLE_FUEL_TYPE_LABELS,
   VEHICLE_OWNERSHIP_TYPE_LABELS,
   VEHICLE_OWNERSHIP_TYPE_TONE,
@@ -191,7 +191,7 @@ export default function VehicleDetailPage(): JSX.Element {
     <div>
       <PageHeader
         title={vehicle.plate}
-        description={`${vehicle.brand} ${vehicle.model} · ${VEHICLE_TYPE_LABELS[vehicle.type]}`}
+        description={`${vehicle.brand} ${vehicle.model} · ${VEHICLE_TYPE_LABELS[vehicle.type]}${vehicle.unavailabilityReason ? ` · ${vehicle.unavailabilityReason}` : ''}`}
         breadcrumb={[{ label: 'Veículos', href: '/vehicles' }, { label: vehicle.plate }]}
         actions={
           <>
@@ -199,8 +199,8 @@ export default function VehicleDetailPage(): JSX.Element {
               {VEHICLE_OWNERSHIP_TYPE_LABELS[vehicle.ownershipType]}
             </Badge>
             <Badge tone={VEHICLE_STATUS_TONE[vehicle.status]}>{VEHICLE_STATUS_LABELS[vehicle.status]}</Badge>
-            <Badge tone={VEHICLE_AVAILABILITY_TONE[vehicle.availability]}>
-              {VEHICLE_AVAILABILITY_LABELS[vehicle.availability]}
+            <Badge tone={FLEET_AVAILABILITY_STATUS_TONE[vehicle.fleetAvailabilityStatus]}>
+              {FLEET_AVAILABILITY_STATUS_LABELS[vehicle.fleetAvailabilityStatus]}
             </Badge>
             {canWrite && (
               <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
@@ -500,6 +500,7 @@ export default function VehicleDetailPage(): JSX.Element {
                 data={maintenancesQuery.data?.items ?? []}
                 isLoading={maintenancesQuery.isLoading}
                 isError={maintenancesQuery.isError}
+                onRowClick={(m) => router.push(`/maintenances/${m.id}`)}
                 emptyTitle="Nenhuma manutenção registrada"
               />
             </div>

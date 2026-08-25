@@ -1,5 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { MaintenancePart, Prisma, VehicleMaintenance, VehicleMaintenanceStatus } from '@prisma/client';
+import { MaintenancePart, MaintenanceProviderType, Prisma, VehicleMaintenance, VehicleMaintenanceStatus } from '@prisma/client';
+import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
+import { toAuditLogEntity } from '../../audit/mappers/audit-log.mapper';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
@@ -8,7 +10,9 @@ import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CompleteMaintenanceDto } from '../dto/complete-maintenance.dto';
 import { CreateMaintenanceDto } from '../dto/create-maintenance.dto';
+import { DiagnoseMaintenanceDto } from '../dto/diagnose-maintenance.dto';
 import { FindMaintenancesQueryDto } from '../dto/find-maintenances-query.dto';
 import { MaintenancePartInputDto } from '../dto/maintenance-part-input.dto';
 import { UpdateMaintenanceStatusDto } from '../dto/update-maintenance-status.dto';
@@ -18,19 +22,37 @@ import { PaginatedMaintenancesEntity } from '../entities/paginated-maintenances.
 import { toMaintenanceEntity } from '../mappers/maintenance.mapper';
 import {
   assertValidMaintenanceStatusTransition,
+  assertWorkOrderActionAllowed,
   resolveMaintenanceStatusChangeAction,
 } from '../utils/maintenance-status-transition.util';
 import { normalizePlate } from '../utils/normalize-plate.util';
+import { VehicleAvailabilityService } from './vehicle-availability.service';
 import { VehiclesService } from './vehicles.service';
+import { PartsService } from '../../parts/services/parts.service';
+import { MaintenanceProvidersService } from '../../maintenance-providers/services/maintenance-providers.service';
+import { runSerializable } from '../../tenants/utils/plan-limit.util';
 
 // Reutiliza VehiclesService.findActiveOrThrow para validar "veiculo
 // inexistente"/"veiculo de outro tenant" -- nao duplica essa checagem aqui.
+//
+// Fase 82 -- "Ordem de Servico" (OS) NAO e uma entidade nova: e o proprio
+// VehicleMaintenance, evoluido (ver docs/work-orders.md). As acoes
+// diagnose/submitForApproval/approve/start/complete/cancel sao a camada de
+// workflow sobre o mesmo registro/tabela que ja existia desde a Fase 13.
+//
+// Fase 83 -- PartsService injetado para consumir estoque (PEÇA -> ESTOQUE ->
+// OS) no unico momento em que uma peca vinculada e considerada efetivamente
+// usada: a conclusao da OS (ver applyStatusChange/consumePartsForMaintenance,
+// docs/parts-inventory.md secao 6).
 @Injectable()
 export class MaintenancesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly vehiclesService: VehiclesService,
+    private readonly vehicleAvailability: VehicleAvailabilityService,
+    private readonly partsService: PartsService,
+    private readonly maintenanceProvidersService: MaintenanceProvidersService,
   ) {}
 
   async findAll(
@@ -87,7 +109,7 @@ export class MaintenancesService {
     const [items, total] = await Promise.all([
       this.prisma.vehicleMaintenance.findMany({
         where,
-        include: { parts: true },
+        include: { parts: true, vehicle: { select: { plate: true } }, workshopProvider: { select: { name: true } }, supplierProvider: { select: { name: true } } },
         orderBy: { [query.sortBy]: query.sortOrder },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -135,6 +157,26 @@ export class MaintenancesService {
     if (dto.maintenancePlanId) {
       await this.assertMaintenancePlanBelongsToTenant(tenantId, dto.maintenancePlanId);
     }
+    if (dto.parts?.length) {
+      await this.partsService.assertPartsBelongToTenant(
+        tenantId,
+        dto.parts.flatMap((p) => (p.partId ? [p.partId] : [])),
+      );
+    }
+    if (dto.workshopId) {
+      await this.maintenanceProvidersService.assertActiveProviderOfType(
+        tenantId,
+        dto.workshopId,
+        MaintenanceProviderType.WORKSHOP,
+      );
+    }
+    if (dto.supplierId) {
+      await this.maintenanceProvidersService.assertActiveProviderOfType(
+        tenantId,
+        dto.supplierId,
+        MaintenanceProviderType.SUPPLIER,
+      );
+    }
 
     const { partsCost, partsItems } = this.resolvePartsCost(dto.parts, dto.partsCost);
     const totalCost = this.computeTotalCost(dto.laborCost, partsCost);
@@ -152,8 +194,11 @@ export class MaintenancesService {
           workshop: dto.workshop,
           supplier: dto.supplier,
           mechanic: dto.mechanic,
+          workshopId: dto.workshopId,
+          supplierId: dto.supplierId,
           responsibleUserId: dto.responsibleUserId,
           description: dto.description,
+          diagnosis: dto.diagnosis,
           notes: dto.notes,
           laborCost: dto.laborCost,
           partsCost,
@@ -169,7 +214,7 @@ export class MaintenancesService {
         }),
         ...(partsItems ? { parts: { create: partsItems } } : {}),
       },
-      include: { parts: true },
+      include: { parts: true, vehicle: { select: { plate: true } }, workshopProvider: { select: { name: true } }, supplierProvider: { select: { name: true } } },
     });
 
     await this.audit.log({
@@ -208,6 +253,39 @@ export class MaintenancesService {
     if (dto.maintenancePlanId && dto.maintenancePlanId !== before.maintenancePlanId) {
       await this.assertMaintenancePlanBelongsToTenant(tenantId, dto.maintenancePlanId);
     }
+    // Fase 83 -- uma vez COMPLETED, a conclusao ja gerou saidas de estoque
+    // para as pecas vinculadas (ver consumePartsForMaintenance); reenviar
+    // `parts` substituiria a lista inteira (Fase 45) e divergiria do que ja
+    // foi baixado no estoque, sem nenhuma movimentacao correspondente.
+    // CANCELLED e terminal por definicao -- editar pecas de uma OS encerrada
+    // nao tem efeito operacional real. Bloqueado para ambos.
+    const isTerminal =
+      before.status === VehicleMaintenanceStatus.COMPLETED || before.status === VehicleMaintenanceStatus.CANCELLED;
+    if (dto.parts !== undefined && isTerminal) {
+      throw new ConflictException(
+        'Nao e possivel alterar as pecas de uma OS encerrada (concluida ou cancelada).',
+      );
+    }
+    if (dto.parts?.length) {
+      await this.partsService.assertPartsBelongToTenant(
+        tenantId,
+        dto.parts.flatMap((p) => (p.partId ? [p.partId] : [])),
+      );
+    }
+    if (dto.workshopId && dto.workshopId !== before.workshopId) {
+      await this.maintenanceProvidersService.assertActiveProviderOfType(
+        tenantId,
+        dto.workshopId,
+        MaintenanceProviderType.WORKSHOP,
+      );
+    }
+    if (dto.supplierId && dto.supplierId !== before.supplierId) {
+      await this.maintenanceProvidersService.assertActiveProviderOfType(
+        tenantId,
+        dto.supplierId,
+        MaintenanceProviderType.SUPPLIER,
+      );
+    }
 
     const effectiveOpenedAt = dto.openedAt ? new Date(dto.openedAt) : before.openedAt;
     this.assertDatesConsistent(effectiveOpenedAt, before.completedAt);
@@ -231,8 +309,11 @@ export class MaintenancesService {
           workshop: dto.workshop,
           supplier: dto.supplier,
           mechanic: dto.mechanic,
+          workshopId: dto.workshopId,
+          supplierId: dto.supplierId,
           responsibleUserId: dto.responsibleUserId,
           description: dto.description,
+          diagnosis: dto.diagnosis,
           notes: dto.notes,
           laborCost: dto.laborCost,
           partsCost,
@@ -251,7 +332,7 @@ export class MaintenancesService {
         // existia (reenvio parcial nunca deve deixar itens orfaos).
         ...(partsItems ? { parts: { deleteMany: {}, create: partsItems } } : {}),
       },
-      include: { parts: true },
+      include: { parts: true, vehicle: { select: { plate: true } }, workshopProvider: { select: { name: true } }, supplierProvider: { select: { name: true } } },
     });
 
     await this.audit.log({
@@ -279,31 +360,203 @@ export class MaintenancesService {
     const before = await this.findOwnedOrThrow(tenantId, id);
     assertValidMaintenanceStatusTransition(before.status, dto.status);
 
-    const data: Prisma.VehicleMaintenanceUpdateInput = { status: dto.status };
+    const data: Prisma.VehicleMaintenanceUpdateInput =
+      dto.status === VehicleMaintenanceStatus.COMPLETED
+        ? this.buildCompletedData(before, dto.completedAt)
+        : { status: dto.status };
 
-    if (dto.status === VehicleMaintenanceStatus.COMPLETED) {
-      const effectiveCompletedAt = dto.completedAt ? new Date(dto.completedAt) : before.completedAt;
-      if (!effectiveCompletedAt) {
-        throw new ConflictException(
-          'Nao e possivel concluir a manutencao sem informar a data de conclusao.',
-        );
-      }
-      this.assertDatesConsistent(before.openedAt, effectiveCompletedAt);
+    const maintenance = await this.applyStatusChange(tenantId, id, before, data, actor, metadata);
+    return toMaintenanceEntity(maintenance);
+  }
 
-      const effectiveTotalCost = toNumberOrNull(before.totalCost);
-      if (effectiveTotalCost === null || effectiveTotalCost <= 0) {
-        throw new ConflictException(
-          'Nao e possivel concluir a manutencao sem valor total (informe mao de obra e/ou pecas antes).',
-        );
-      }
-      data.completedAt = effectiveCompletedAt;
+  // ==========================================================================
+  // Fase 82 -- acoes dedicadas do ciclo de vida da OS (secao 4 do pedido).
+  // PATCH /:id/status acima permanece inalterado (permissivo, compatibilidade
+  // retroativa); as acoes abaixo aplicam o guard mais estrito
+  // assertWorkOrderActionAllowed, com precondicoes proprias por acao.
+  // ==========================================================================
+
+  async diagnose(
+    tenantId: string,
+    id: string,
+    dto: DiagnoseMaintenanceDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenanceEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+    assertWorkOrderActionAllowed('diagnose', before.status);
+    const maintenance = await this.applyStatusChange(
+      tenantId,
+      id,
+      before,
+      { status: VehicleMaintenanceStatus.DIAGNOSING, diagnosis: dto.diagnosis },
+      actor,
+      metadata,
+    );
+    return toMaintenanceEntity(maintenance);
+  }
+
+  async submitForApproval(
+    tenantId: string,
+    id: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenanceEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+    assertWorkOrderActionAllowed('submitForApproval', before.status);
+    const maintenance = await this.applyStatusChange(
+      tenantId,
+      id,
+      before,
+      { status: VehicleMaintenanceStatus.AWAITING_APPROVAL },
+      actor,
+      metadata,
+    );
+    return toMaintenanceEntity(maintenance);
+  }
+
+  async approve(
+    tenantId: string,
+    id: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenanceEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+    assertWorkOrderActionAllowed('approve', before.status);
+    const maintenance = await this.applyStatusChange(
+      tenantId,
+      id,
+      before,
+      { status: VehicleMaintenanceStatus.APPROVED },
+      actor,
+      metadata,
+    );
+    return toMaintenanceEntity(maintenance);
+  }
+
+  async start(
+    tenantId: string,
+    id: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenanceEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+    assertWorkOrderActionAllowed('start', before.status);
+
+    // Fase 82, secao 6 -- conflito com viagem: iniciar a execucao
+    // indisponibiliza o veiculo (via VehiclesService.syncStatusForMaintenance,
+    // que promove Vehicle.status para MAINTENANCE quando ha uma OS
+    // IN_PROGRESS). Nao permitir isso se o veiculo ja estiver fisicamente em
+    // viagem agora -- reutiliza VehicleAvailabilityService da Fase 81, nenhuma
+    // funcao de disponibilidade nova.
+    const onTrip = await this.vehicleAvailability.isOnTrip(tenantId, before.vehicleId);
+    if (onTrip) {
+      throw new ConflictException(
+        'Nao e possivel iniciar a execucao: o veiculo esta em viagem no momento.',
+      );
     }
 
-    // Fase 63 -- atualiza a manutencao e sincroniza Vehicle.status (ver
-    // VehiclesService.syncStatusForMaintenance) na MESMA transacao: nunca um
-    // estado intermediario onde a manutencao ja esta IN_PROGRESS mas o
-    // veiculo ainda aparece disponivel (ou vice-versa).
-    const maintenance = await this.prisma.$transaction(async (tx) => {
+    // Fase 82, secao 6/18 -- conflito com outra OS incompativel: nunca 2 OS
+    // simultaneamente IN_PROGRESS para o mesmo veiculo (duas equipes
+    // "executando" o mesmo veiculo fisicamente ao mesmo tempo seria uma
+    // inconsistencia operacional).
+    const concurrentInProgress = await this.prisma.vehicleMaintenance.findFirst({
+      where: {
+        tenantId,
+        vehicleId: before.vehicleId,
+        id: { not: id },
+        status: VehicleMaintenanceStatus.IN_PROGRESS,
+      },
+    });
+    if (concurrentInProgress) {
+      throw new ConflictException(
+        'Nao e possivel iniciar a execucao: ja existe outra OS em execucao para este veiculo.',
+      );
+    }
+
+    const maintenance = await this.applyStatusChange(
+      tenantId,
+      id,
+      before,
+      { status: VehicleMaintenanceStatus.IN_PROGRESS, startedAt: before.startedAt ?? new Date() },
+      actor,
+      metadata,
+    );
+    return toMaintenanceEntity(maintenance);
+  }
+
+  async complete(
+    tenantId: string,
+    id: string,
+    dto: CompleteMaintenanceDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenanceEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+    assertWorkOrderActionAllowed('complete', before.status);
+    const data = this.buildCompletedData(before, dto.completedAt);
+    if (dto.completionOdometerKm !== undefined) {
+      data.completionOdometerKm = dto.completionOdometerKm;
+    }
+    const maintenance = await this.applyStatusChange(tenantId, id, before, data, actor, metadata);
+    return toMaintenanceEntity(maintenance);
+  }
+
+  async cancel(
+    tenantId: string,
+    id: string,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenanceEntity> {
+    const before = await this.findOwnedOrThrow(tenantId, id);
+    assertWorkOrderActionAllowed('cancel', before.status);
+    const maintenance = await this.applyStatusChange(
+      tenantId,
+      id,
+      before,
+      { status: VehicleMaintenanceStatus.CANCELLED },
+      actor,
+      metadata,
+    );
+    return toMaintenanceEntity(maintenance);
+  }
+
+  // GET /maintenances/:id/history -- mesmo padrao de VehiclesService.getHistory
+  // (AuditService.findByEntity generico, so filtramos entityName).
+  async getHistory(
+    tenantId: string,
+    id: string,
+    pagination: { page: number; pageSize: number },
+  ): Promise<PaginatedAuditLogEntity> {
+    await this.findOwnedOrThrow(tenantId, id);
+
+    const { items, total } = await this.audit.findByEntity(tenantId, 'VehicleMaintenance', id, pagination);
+
+    const result = new PaginatedAuditLogEntity();
+    result.items = items.map(toAuditLogEntity);
+    result.meta = buildPaginationMeta(total, pagination.page, pagination.pageSize);
+    return result;
+  }
+
+  // Fase 63 -- atualiza a manutencao e sincroniza Vehicle.status (ver
+  // VehiclesService.syncStatusForMaintenance) na MESMA transacao: nunca um
+  // estado intermediario onde a manutencao ja esta IN_PROGRESS mas o veiculo
+  // ainda aparece disponivel (ou vice-versa). Fase 82 -- extraido para ser
+  // reaproveitado por updateStatus (generico) e por todas as acoes dedicadas
+  // do ciclo de vida da OS, nunca duplicado.
+  private async applyStatusChange(
+    tenantId: string,
+    id: string,
+    before: VehicleMaintenance,
+    data: Prisma.VehicleMaintenanceUpdateInput,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<VehicleMaintenance> {
+    const isCompleting = data.status === VehicleMaintenanceStatus.COMPLETED;
+
+    const runTransaction = async (
+      tx: Prisma.TransactionClient,
+    ): Promise<VehicleMaintenance> => {
       const updated = await tx.vehicleMaintenance.update({ where: { id }, data });
       await this.vehiclesService.syncStatusForMaintenance(
         tenantId,
@@ -312,8 +565,21 @@ export class MaintenancesService {
         metadata,
         tx,
       );
+      // Fase 83 -- consumo de pecas do catalogo vinculadas a esta OS
+      // (MaintenancePart.partId) SOMENTE ao concluir, na MESMA transacao: se
+      // o estoque for insuficiente, a conclusao inteira e abortada (a OS nao
+      // fica COMPLETED). Isolamento Serializable (mesmo utilitario da Fase
+      // 48) evita 2 conclusoes concorrentes consumindo a mesma peca alem do
+      // saldo disponivel.
+      if (isCompleting) {
+        await this.partsService.consumePartsForMaintenance(tenantId, id, actor, metadata, tx);
+      }
       return updated;
-    });
+    };
+
+    const maintenance = isCompleting
+      ? await runSerializable(this.prisma, runTransaction)
+      : await this.prisma.$transaction(runTransaction);
 
     await this.audit.log({
       tenantId,
@@ -327,7 +593,31 @@ export class MaintenancesService {
       userAgent: metadata.userAgent,
     });
 
-    return toMaintenanceEntity(maintenance);
+    return maintenance;
+  }
+
+  // Extraido de updateStatus (Fase 63) para ser reaproveitado pela acao
+  // dedicada complete() (Fase 82) -- mesma validacao exata (data de conclusao
+  // obrigatoria + custo total > 0), nunca duplicada.
+  private buildCompletedData(
+    before: VehicleMaintenance,
+    completedAt?: string,
+  ): Prisma.VehicleMaintenanceUpdateInput {
+    const effectiveCompletedAt = completedAt ? new Date(completedAt) : before.completedAt;
+    if (!effectiveCompletedAt) {
+      throw new ConflictException(
+        'Nao e possivel concluir a manutencao sem informar a data de conclusao.',
+      );
+    }
+    this.assertDatesConsistent(before.openedAt, effectiveCompletedAt);
+
+    const effectiveTotalCost = toNumberOrNull(before.totalCost);
+    if (effectiveTotalCost === null || effectiveTotalCost <= 0) {
+      throw new ConflictException(
+        'Nao e possivel concluir a manutencao sem valor total (informe mao de obra e/ou pecas antes).',
+      );
+    }
+    return { status: VehicleMaintenanceStatus.COMPLETED, completedAt: effectiveCompletedAt };
   }
 
   async remove(
@@ -381,10 +671,17 @@ export class MaintenancesService {
   private async findOwnedOrThrow(
     tenantId: string,
     id: string,
-  ): Promise<VehicleMaintenance & { parts: MaintenancePart[] }> {
+  ): Promise<
+    VehicleMaintenance & {
+      parts: MaintenancePart[];
+      vehicle: { plate: string };
+      workshopProvider: { name: string } | null;
+      supplierProvider: { name: string } | null;
+    }
+  > {
     const maintenance = await this.prisma.vehicleMaintenance.findFirst({
       where: { id, tenantId },
-      include: { parts: true },
+      include: { parts: true, vehicle: { select: { plate: true } }, workshopProvider: { select: { name: true } }, supplierProvider: { select: { name: true } } },
     });
     if (!maintenance) {
       throw new NotFoundException('Manutencao nao encontrada.');
@@ -425,6 +722,7 @@ export class MaintenancesService {
       return { partsCost: fallbackPartsCost, partsItems: undefined };
     }
     const partsItems = parts.map((part) => ({
+      partId: part.partId,
       name: part.name,
       quantity: part.quantity,
       unitPrice: part.unitPrice,

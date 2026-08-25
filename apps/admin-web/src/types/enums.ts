@@ -75,6 +75,9 @@ export type PaymentType = (typeof PaymentType)[keyof typeof PaymentType];
 
 export const VehicleMaintenanceStatus = {
   OPEN: 'OPEN',
+  DIAGNOSING: 'DIAGNOSING',
+  AWAITING_APPROVAL: 'AWAITING_APPROVAL',
+  APPROVED: 'APPROVED',
   IN_PROGRESS: 'IN_PROGRESS',
   WAITING_PARTS: 'WAITING_PARTS',
   COMPLETED: 'COMPLETED',
@@ -129,6 +132,21 @@ export const MaintenanceComponent = {
   OTHER: 'OTHER',
 } as const;
 export type MaintenanceComponent = (typeof MaintenanceComponent)[keyof typeof MaintenanceComponent];
+
+// Fase 84 -- oficina/fornecedor de manutencao.
+export const MaintenanceProviderType = {
+  WORKSHOP: 'WORKSHOP',
+  SUPPLIER: 'SUPPLIER',
+} as const;
+export type MaintenanceProviderType = (typeof MaintenanceProviderType)[keyof typeof MaintenanceProviderType];
+
+// Fase 83 -- ledger de estoque de pecas.
+export const PartStockMovementType = {
+  IN: 'IN',
+  OUT: 'OUT',
+  ADJUSTMENT: 'ADJUSTMENT',
+} as const;
+export type PartStockMovementType = (typeof PartStockMovementType)[keyof typeof PartStockMovementType];
 
 export const TireStatus = {
   NEW: 'NEW',
@@ -654,6 +672,18 @@ export const VehicleAvailability = {
   UNAVAILABLE: 'UNAVAILABLE',
 } as const;
 export type VehicleAvailability = (typeof VehicleAvailability)[keyof typeof VehicleAvailability];
+
+// Fase 86 -- visao operacional detalhada, distinta de VehicleAvailability
+// (3 valores, usada em filtros/regras existentes, nunca alterada). Ver
+// VehicleEntity.fleetAvailabilityStatus no backend.
+export const FleetAvailabilityStatus = {
+  AVAILABLE: 'AVAILABLE',
+  ON_TRIP: 'ON_TRIP',
+  MAINTENANCE: 'MAINTENANCE',
+  INACTIVE: 'INACTIVE',
+  UNAVAILABLE: 'UNAVAILABLE',
+} as const;
+export type FleetAvailabilityStatus = (typeof FleetAvailabilityStatus)[keyof typeof FleetAvailabilityStatus];
 
 export const DocumentExpiryStatus = {
   VALID: 'VALID',

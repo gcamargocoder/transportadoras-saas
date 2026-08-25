@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { VehicleMaintenanceStatus } from '@prisma/client';
 import {
   assertValidMaintenanceStatusTransition,
+  assertWorkOrderActionAllowed,
   isMaintenanceOpenStatus,
   resolveMaintenanceStatusChangeAction,
 } from './maintenance-status-transition.util';
@@ -92,5 +93,53 @@ describe('isMaintenanceOpenStatus', () => {
     expect(isMaintenanceOpenStatus(VehicleMaintenanceStatus.IN_PROGRESS)).toBe(true);
     expect(isMaintenanceOpenStatus(VehicleMaintenanceStatus.COMPLETED)).toBe(false);
     expect(isMaintenanceOpenStatus(VehicleMaintenanceStatus.CANCELLED)).toBe(false);
+  });
+
+  it('Fase 82 -- DIAGNOSING/AWAITING_APPROVAL/APPROVED tambem sao abertas', () => {
+    expect(isMaintenanceOpenStatus(VehicleMaintenanceStatus.DIAGNOSING)).toBe(true);
+    expect(isMaintenanceOpenStatus(VehicleMaintenanceStatus.AWAITING_APPROVAL)).toBe(true);
+    expect(isMaintenanceOpenStatus(VehicleMaintenanceStatus.APPROVED)).toBe(true);
+  });
+});
+
+describe('assertWorkOrderActionAllowed (Fase 82 -- ciclo de vida da OS)', () => {
+  it('diagnose: so a partir de OPEN', () => {
+    expect(() => assertWorkOrderActionAllowed('diagnose', VehicleMaintenanceStatus.OPEN)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('diagnose', VehicleMaintenanceStatus.DIAGNOSING)).toThrow(ConflictException);
+    expect(() => assertWorkOrderActionAllowed('diagnose', VehicleMaintenanceStatus.IN_PROGRESS)).toThrow(ConflictException);
+  });
+
+  it('submitForApproval: a partir de OPEN ou DIAGNOSING', () => {
+    expect(() => assertWorkOrderActionAllowed('submitForApproval', VehicleMaintenanceStatus.OPEN)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('submitForApproval', VehicleMaintenanceStatus.DIAGNOSING)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('submitForApproval', VehicleMaintenanceStatus.APPROVED)).toThrow(ConflictException);
+  });
+
+  it('approve: somente a partir de AWAITING_APPROVAL', () => {
+    expect(() => assertWorkOrderActionAllowed('approve', VehicleMaintenanceStatus.AWAITING_APPROVAL)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('approve', VehicleMaintenanceStatus.OPEN)).toThrow(ConflictException);
+    expect(() => assertWorkOrderActionAllowed('approve', VehicleMaintenanceStatus.DIAGNOSING)).toThrow(ConflictException);
+  });
+
+  it('start: a partir de OPEN/DIAGNOSING/APPROVED/WAITING_PARTS, nunca de AWAITING_APPROVAL', () => {
+    expect(() => assertWorkOrderActionAllowed('start', VehicleMaintenanceStatus.OPEN)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('start', VehicleMaintenanceStatus.DIAGNOSING)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('start', VehicleMaintenanceStatus.APPROVED)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('start', VehicleMaintenanceStatus.WAITING_PARTS)).not.toThrow();
+    expect(() => assertWorkOrderActionAllowed('start', VehicleMaintenanceStatus.AWAITING_APPROVAL)).toThrow(ConflictException);
+  });
+
+  it('complete/cancel: a partir de qualquer estado nao-terminal, incluindo os novos', () => {
+    for (const status of [
+      VehicleMaintenanceStatus.OPEN,
+      VehicleMaintenanceStatus.DIAGNOSING,
+      VehicleMaintenanceStatus.AWAITING_APPROVAL,
+      VehicleMaintenanceStatus.APPROVED,
+      VehicleMaintenanceStatus.IN_PROGRESS,
+      VehicleMaintenanceStatus.WAITING_PARTS,
+    ]) {
+      expect(() => assertWorkOrderActionAllowed('complete', status)).not.toThrow();
+      expect(() => assertWorkOrderActionAllowed('cancel', status)).not.toThrow();
+    }
   });
 });

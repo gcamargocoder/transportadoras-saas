@@ -295,6 +295,43 @@ describe('Trips (e2e)', () => {
         )
         .expect(409);
     });
+
+    // Fase 87 -- planejamento nunca pode assumir um veiculo indisponivel
+    // (reaproveita resolveVehicleAvailability, Fase 81/86): antes desta
+    // fase, so o INICIO da viagem (assertCanStart) checava o status do
+    // veiculo -- o CREATE aceitava qualquer composicao livre, mesmo com o
+    // veiculo INACTIVE/SUSPENDED/MAINTENANCE/SOLD.
+    it('rejeita planejamento com veiculo indisponivel (status != ACTIVE) com 409', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehicleUnavailable');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      for (const status of ['INACTIVE', 'SUSPENDED', 'MAINTENANCE', 'SOLD']) {
+        const prereqs = await setupTripPrerequisites(auth);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/vehicles/${prereqs.vehicleId}/status`)
+          .set('Authorization', auth)
+          .send({ status })
+          .expect(200);
+
+        await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs))
+          .expect(409);
+      }
+    });
+
+    it('permite planejamento com veiculo ACTIVE normalmente (regressao do teste acima)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('VehicleActiveOk');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+    });
   });
 
   describe('CRUD completo', () => {
@@ -343,6 +380,33 @@ describe('Trips (e2e)', () => {
         .get(`/api/v1/trips/${trip.id}`)
         .set('Authorization', auth)
         .expect(404);
+    });
+
+    // Fase 87 -- a mesma checagem de disponibilidade do veiculo (create) se
+    // aplica ao trocar a composicao de uma viagem PLANNED via PATCH.
+    it('rejeita trocar para uma composicao com veiculo indisponivel (409)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('UpdateVehicleUnavailable');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+
+      const otherVehicleId = await createVehicle(auth);
+      const otherCompositionId = await createComposition(auth, otherVehicleId);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${otherVehicleId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'MAINTENANCE' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${createRes.body.data.id}`)
+        .set('Authorization', auth)
+        .send({ compositionId: otherCompositionId })
+        .expect(409);
     });
 
     it('viagem inexistente retorna 404 em GET, PATCH e DELETE', async () => {
@@ -859,5 +923,147 @@ describe('Trips (e2e)', () => {
         .send(buildTripPayload(prereqs))
         .expect(403);
     });
+  });
+
+  // Fase 87 -- GET /trips (visualizacao das viagens planejadas) ja
+  // reaproveitava TRIP_INCLUDE numa unica query + count em paralelo (nunca 1
+  // consulta por viagem); confirma que isso continua valendo apos a checagem
+  // de disponibilidade adicionada nesta fase (que so roda em create/update,
+  // nunca em list).
+  describe('performance / N+1', () => {
+    let countingApp: INestApplication;
+    let basePrisma: PrismaService;
+    let queryCount = 0;
+
+    beforeAll(async () => {
+      basePrisma = new PrismaService();
+      await basePrisma.$connect();
+      const extendedPrisma = basePrisma.$extends({
+        name: 'query-counter',
+        query: {
+          $allModels: {
+            async $allOperations({ args, query }) {
+              queryCount += 1;
+              return query(args);
+            },
+          },
+        },
+      });
+
+      const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+        .overrideProvider(PrismaService)
+        .useValue(extendedPrisma)
+        .compile();
+      countingApp = moduleRef.createNestApplication();
+      countingApp.setGlobalPrefix('api');
+      countingApp.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+      countingApp.useGlobalPipes(
+        new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+      );
+      await countingApp.init();
+    });
+
+    afterAll(async () => {
+      await countingApp.close();
+      await basePrisma.$disconnect();
+    });
+
+    async function createTenantAndLoginOnCountingApp(label: string) {
+      const unique = randomUUID().replace(/-/g, '').slice(0, 12);
+      const payload = {
+        name: `Transportadora ${label} ${unique}`,
+        document: randomCnpj(),
+        slug: `trip-n1-${label.toLowerCase()}-${unique}`,
+        admin: {
+          name: `Admin ${label}`,
+          email: `admin-${label.toLowerCase()}-${unique}@teste.com`,
+          password: 'SenhaForte123!',
+        },
+      };
+      const createRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/tenants')
+        .send(payload)
+        .expect(201);
+      const tenantId: string = createRes.body.data.id;
+      createdTenantIds.push(tenantId);
+      const loginRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: payload.admin.email, password: payload.admin.password })
+        .expect(200);
+      return `Bearer ${loginRes.body.data.accessToken as string}`;
+    }
+
+    let seedTripCounter = 0;
+
+    async function seedTrip(auth: string) {
+      seedTripCounter += 1;
+      const day = String(seedTripCounter).padStart(2, '0');
+      const vehicleId = await request(countingApp.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send({ plate: randomPlate(), brand: 'Volvo', model: 'FH 540', type: 'TRACTOR_UNIT' })
+        .expect(201)
+        .then((res) => res.body.data.id as string);
+      const driverId = await request(countingApp.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send({
+          name: 'Motorista',
+          cpf: randomValidCpf(),
+          cnhNumber: String(Math.floor(10000000000 + Math.random() * 89999999999)),
+          cnhCategory: 'AE',
+          cnhExpiresAt: '2027-06-30',
+        })
+        .expect(201)
+        .then((res) => res.body.data.id as string);
+      const compositionId = await request(countingApp.getHttpServer())
+        .post('/api/v1/trip-compositions')
+        .set('Authorization', auth)
+        .send({ vehicleId, trailers: [] })
+        .expect(201)
+        .then((res) => res.body.data.id as string);
+      const originId = await request(countingApp.getHttpServer())
+        .post('/api/v1/locations')
+        .set('Authorization', auth)
+        .send({ name: `Origem ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+        .expect(201)
+        .then((res) => res.body.data.id as string);
+      const destinationId = await request(countingApp.getHttpServer())
+        .post('/api/v1/locations')
+        .set('Authorization', auth)
+        .send({ name: `Destino ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+        .expect(201)
+        .then((res) => res.body.data.id as string);
+
+      await request(countingApp.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send({
+          driverId,
+          compositionId,
+          originLocationId: originId,
+          destinationLocationId: destinationId,
+          plannedDeparture: `2026-01-${day}T08:00:00.000Z`,
+          plannedArrival: `2026-02-${day}T18:00:00.000Z`,
+        })
+        .expect(201);
+    }
+
+    it('a contagem de queries de GET /trips nao cresce entre 3 e 15 viagens planejadas', async () => {
+      const auth = await createTenantAndLoginOnCountingApp('N1Check');
+
+      for (let i = 0; i < 3; i += 1) await seedTrip(auth);
+      queryCount = 0;
+      await request(countingApp.getHttpServer()).get('/api/v1/trips').set('Authorization', auth).expect(200);
+      const queriesFor3 = queryCount;
+      expect(queriesFor3).toBeGreaterThan(0);
+
+      for (let i = 0; i < 12; i += 1) await seedTrip(auth);
+      queryCount = 0;
+      await request(countingApp.getHttpServer()).get('/api/v1/trips').set('Authorization', auth).expect(200);
+      const queriesFor15 = queryCount;
+
+      expect(queriesFor15).toBeLessThanOrEqual(queriesFor3 + 2);
+    }, 120000);
   });
 });

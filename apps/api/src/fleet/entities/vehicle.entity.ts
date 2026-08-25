@@ -4,6 +4,21 @@ import { VehicleFuelType, VehicleOwnershipType, VehicleStatus, VehicleType } fro
 export const VEHICLE_AVAILABILITY_VALUES = ['AVAILABLE', 'ON_TRIP', 'UNAVAILABLE'] as const;
 export type VehicleAvailabilityValue = (typeof VEHICLE_AVAILABILITY_VALUES)[number];
 
+// Fase 86 -- visao operacional detalhada da frota, distinta de
+// VehicleAvailabilityValue (Fase 62, 3 valores, usada em regras/filtros
+// existentes e NUNCA alterada). Aqui MAINTENANCE e INACTIVE ganham valor
+// proprio em vez de caírem em UNAVAILABLE -- ver resolveFleetAvailabilityStatus
+// em vehicle-availability.service.ts (mesma fonte central da Fase 81, mesma
+// precedencia: qualquer status != ACTIVE vence onTrip).
+export const FLEET_AVAILABILITY_STATUS_VALUES = [
+  'AVAILABLE',
+  'ON_TRIP',
+  'MAINTENANCE',
+  'INACTIVE',
+  'UNAVAILABLE',
+] as const;
+export type FleetAvailabilityStatus = (typeof FLEET_AVAILABILITY_STATUS_VALUES)[number];
+
 export class VehicleEntity {
   @ApiProperty({ format: 'uuid' })
   id!: string;
@@ -94,6 +109,21 @@ export class VehicleEntity {
       'viagem) ou UNAVAILABLE (INACTIVE/SUSPENDED/MAINTENANCE/SOLD).',
   })
   availability!: VehicleAvailabilityValue;
+
+  @ApiProperty({
+    enum: FLEET_AVAILABILITY_STATUS_VALUES,
+    description:
+      'Fase 86 -- visao operacional detalhada da disponibilidade da frota: AVAILABLE, ON_TRIP, ' +
+      'MAINTENANCE (status MAINTENANCE), INACTIVE (status INACTIVE) ou UNAVAILABLE (SUSPENDED/SOLD). ' +
+      'Nao substitui `availability`, apenas detalha para exibicao.',
+  })
+  fleetAvailabilityStatus!: FleetAvailabilityStatus;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'Motivo da indisponibilidade quando houver (null quando AVAILABLE ou ON_TRIP).',
+  })
+  unavailabilityReason!: string | null;
 
   @ApiProperty()
   createdAt!: Date;

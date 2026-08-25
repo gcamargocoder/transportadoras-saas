@@ -8,6 +8,7 @@ import MaintenancesPage from './page';
 const listMaintenancesMock = vi.fn();
 const createMaintenanceMock = vi.fn();
 const useAuthMock = vi.fn();
+const pushMock = vi.fn();
 
 vi.mock('../../../lib/api/fleet.api', () => ({
   listMaintenances: (...args: unknown[]) => listMaintenancesMock(...args),
@@ -16,8 +17,16 @@ vi.mock('../../../lib/api/fleet.api', () => ({
     Promise.resolve({ items: [{ id: '11111111-1111-1111-1111-111111111111', plate: 'ABC1D23', brand: 'Volvo', model: 'FH' }] }),
 }));
 
+vi.mock('../../../lib/api/maintenance-providers.api', () => ({
+  listMaintenanceProviders: () => Promise.resolve({ items: [], meta: { total: 0, page: 1, pageSize: 100, totalPages: 0 } }),
+}));
+
 vi.mock('../../../hooks/use-auth', () => ({
   useAuth: () => useAuthMock(),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: pushMock }),
 }));
 
 function renderPage() {
@@ -39,6 +48,7 @@ describe('MaintenancesPage', () => {
     createMaintenanceMock.mockReset();
     useAuthMock.mockReset();
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN' } });
+    pushMock.mockReset();
   });
 
   it('mostra estado vazio quando nao ha manutencoes', async () => {

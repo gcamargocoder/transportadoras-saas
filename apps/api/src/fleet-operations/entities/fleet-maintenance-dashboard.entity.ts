@@ -124,6 +124,13 @@ export class FleetMaintenanceDashboardEntity {
   @ApiProperty({ description: 'Fase 45 -- registros com scheduledAt preenchido, ainda nao concluidos/cancelados.' })
   scheduledCount!: number;
 
+  @ApiProperty({
+    description:
+      'Fase 82 -- OS ("Ordens de Servico", ver docs/work-orders.md) com scheduledAt JA vencido, ainda em aberto ' +
+      '(subconjunto de scheduledCount). Distinto de overdueCount abaixo (planos preventivos vencidos via MaintenancePlan).',
+  })
+  lateWorkOrdersCount!: number;
+
   @ApiProperty({ description: 'Fase 45 -- type = PREVENTIVE.' })
   preventiveCount!: number;
 

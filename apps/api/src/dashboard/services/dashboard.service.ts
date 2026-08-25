@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { aggregateMonthlySeries, buildMonthlyRange } from '../../common/utils/monthly-series.util';
+import { OPEN_MAINTENANCE_STATUSES } from '../../fleet/utils/maintenance-status-transition.util';
 import { FindFuelSuppliesQueryDto } from '../../fuel-supplies/dto/find-fuel-supplies-query.dto';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -22,12 +23,9 @@ import { DashboardOverviewEntity } from '../entities/dashboard-overview.entity';
 const MONTHS_BACK = 12;
 
 // Manutencoes "em aberto" vs "encerradas" -- unica divisao binaria possivel
-// dos 5 status de VehicleMaintenanceStatus sem inventar uma categoria nova.
-const OPEN_MAINTENANCE_STATUSES: VehicleMaintenanceStatus[] = [
-  VehicleMaintenanceStatus.OPEN,
-  VehicleMaintenanceStatus.IN_PROGRESS,
-  VehicleMaintenanceStatus.WAITING_PARTS,
-];
+// dos status de VehicleMaintenanceStatus sem inventar uma categoria nova.
+// Fase 82 -- OPEN_MAINTENANCE_STATUSES agora importado da fonte central
+// (inclui os 3 novos estados do ciclo de vida da OS).
 const CLOSED_MAINTENANCE_STATUSES: VehicleMaintenanceStatus[] = [
   VehicleMaintenanceStatus.COMPLETED,
   VehicleMaintenanceStatus.CANCELLED,

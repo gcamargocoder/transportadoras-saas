@@ -48,6 +48,20 @@ function buildCosts(overrides: Partial<FleetCostsEntity> = {}): FleetCostsEntity
     costByFleet: [],
     monthlyTrend: Array.from({ length: 12 }, (_, i) => ({ month: `M${i}`, value: 0 })),
     previousPeriod: null,
+    costPerKm: {
+      available: true,
+      reason: null,
+      distanceKm: 5000,
+      value: 0.7,
+      fuelCostPerKm: 0.15,
+      maintenanceCostPerKm: 0.03,
+      tireCostPerKm: 0.49,
+      tollCostPerKm: 0.01,
+      otherCostPerKm: 0.02,
+      periodStart: null,
+      periodEnd: null,
+    },
+    topVehiclesByCostPerKm: [{ vehicleId: 'v1', plate: 'ABC1D23', value: 0.7, count: 5000 }],
     ...overrides,
   };
 }
@@ -123,5 +137,42 @@ describe('FleetCostsPage', () => {
 
     expect(await screen.findByText('Vs período anterior')).toBeInTheDocument();
     expect(screen.getByText('+50%')).toBeInTheDocument();
+  });
+
+  it('mostra distância e custo/km quando disponível', async () => {
+    getFleetOperationsCostsMock.mockResolvedValue(buildCosts());
+    renderPage();
+
+    expect(await screen.findByText('Custo por km')).toBeInTheDocument();
+    expect(screen.getByText('5.000 km')).toBeInTheDocument();
+    expect(screen.getByText('R$ 0,70/km')).toBeInTheDocument();
+    expect(screen.getByText('Top 5 veículos por custo/km')).toBeInTheDocument();
+  });
+
+  it('mostra o motivo (nunca custo/km inventado) quando indisponível', async () => {
+    getFleetOperationsCostsMock.mockResolvedValue(
+      buildCosts({
+        costPerKm: {
+          available: false,
+          reason: 'Nenhum veículo do escopo possui pelo menos 2 leituras de odômetro no período.',
+          distanceKm: null,
+          value: null,
+          fuelCostPerKm: null,
+          maintenanceCostPerKm: null,
+          tireCostPerKm: null,
+          tollCostPerKm: null,
+          otherCostPerKm: null,
+          periodStart: null,
+          periodEnd: null,
+        },
+        topVehiclesByCostPerKm: [],
+      }),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText('Nenhum veículo do escopo possui pelo menos 2 leituras de odômetro no período.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Top 5 veículos por custo/km')).not.toBeInTheDocument();
   });
 });

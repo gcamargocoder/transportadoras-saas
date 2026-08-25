@@ -24,18 +24,27 @@ import { FLEET_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { CreateVehicleModal } from '../../../features/fleet/create-vehicle-modal';
 import { VEHICLE_STATUS_TONE } from '../../../features/fleet/status';
 import {
+  FLEET_AVAILABILITY_STATUS_LABELS,
+  FLEET_AVAILABILITY_STATUS_TONE,
   VEHICLE_AVAILABILITY_LABELS,
-  VEHICLE_AVAILABILITY_TONE,
   VEHICLE_OWNERSHIP_TYPE_LABELS,
   VEHICLE_OWNERSHIP_TYPE_TONE,
   VEHICLE_STATUS_LABELS,
   VEHICLE_TYPE_LABELS,
 } from '../../../lib/labels';
-import type { VehicleEntity } from '../../../types/entities';
-import type { VehicleAvailability, VehicleOwnershipType, VehicleStatus } from '../../../types/enums';
-import { formatNumber } from '../../../utils/format';
+import type { VehicleAvailabilityBreakdownEntity, VehicleEntity } from '../../../types/entities';
+import type { VehicleAvailability, VehicleOwnershipType, VehicleStatus, VehicleType } from '../../../types/enums';
+import { formatNumber, formatPercent } from '../../../utils/format';
 
 const PAGE_SIZE = 20;
+
+// Fase 86 -- "count (percent%)" a partir de VehicleSummaryEntity.availabilityBreakdown
+// (nunca divide por zero -- percent ja vem calculado com essa guarda pelo backend).
+function breakdownLabel(breakdown: VehicleAvailabilityBreakdownEntity[] | undefined, status: string): string {
+  const entry = breakdown?.find((e) => e.status === status);
+  if (!entry) return '—';
+  return `${entry.count} (${formatPercent(entry.percent)})`;
+}
 
 export default function VehiclesPage(): JSX.Element {
   const router = useRouter();
@@ -44,11 +53,12 @@ export default function VehiclesPage(): JSX.Element {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<VehicleStatus | ''>('');
+  const [type, setType] = useState<VehicleType | ''>('');
   const [ownershipType, setOwnershipType] = useState<VehicleOwnershipType | ''>('');
   const [availability, setAvailability] = useState<VehicleAvailability | ''>('');
   const [createOpen, setCreateOpen] = useState(false);
   const debouncedSearch = useDebounce(search);
-  const hasActiveFilters = Boolean(search || status || ownershipType || availability);
+  const hasActiveFilters = Boolean(search || status || type || ownershipType || availability);
 
   const summaryQuery = useQuery({
     queryKey: ['vehicles', 'summary'],
@@ -56,7 +66,7 @@ export default function VehiclesPage(): JSX.Element {
   });
 
   const query = useQuery({
-    queryKey: ['vehicles', { page, search: debouncedSearch, status, ownershipType, availability }],
+    queryKey: ['vehicles', { page, search: debouncedSearch, status, type, ownershipType, availability }],
     queryFn: ({ signal }) =>
       listVehicles(
         {
@@ -64,6 +74,7 @@ export default function VehiclesPage(): JSX.Element {
           pageSize: PAGE_SIZE,
           search: debouncedSearch || undefined,
           status: status || undefined,
+          type: type || undefined,
           ownershipType: ownershipType || undefined,
           availability: availability || undefined,
         },
@@ -106,9 +117,14 @@ export default function VehiclesPage(): JSX.Element {
       {
         header: 'Disponibilidade',
         cell: ({ row }) => (
-          <Badge tone={VEHICLE_AVAILABILITY_TONE[row.original.availability]}>
-            {VEHICLE_AVAILABILITY_LABELS[row.original.availability]}
-          </Badge>
+          <div>
+            <Badge tone={FLEET_AVAILABILITY_STATUS_TONE[row.original.fleetAvailabilityStatus]}>
+              {FLEET_AVAILABILITY_STATUS_LABELS[row.original.fleetAvailabilityStatus]}
+            </Badge>
+            {row.original.unavailabilityReason && (
+              <p className="mt-1 text-xs text-ink-subtle">{row.original.unavailabilityReason}</p>
+            )}
+          </div>
         ),
       },
     ],
@@ -136,18 +152,27 @@ export default function VehiclesPage(): JSX.Element {
       />
 
       {summaryQuery.data && (
-        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          <StatCard label="Ativos" value={String(summaryQuery.data.totalActive)} icon={CheckCircle2} tone="success" />
-          <StatCard label="Disponíveis" value={String(summaryQuery.data.totalAvailable)} icon={Truck} tone="info" />
-          <StatCard label="Em viagem" value={String(summaryQuery.data.totalOnTrip)} />
+        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard
-            label="Suspensos"
-            value={String(summaryQuery.data.totalSuspended)}
+            label="Disponíveis"
+            value={breakdownLabel(summaryQuery.data.availabilityBreakdown, 'AVAILABLE')}
+            icon={CheckCircle2}
+            tone="success"
+          />
+          <StatCard
+            label="Em viagem"
+            value={breakdownLabel(summaryQuery.data.availabilityBreakdown, 'ON_TRIP')}
+            icon={Truck}
+            tone="info"
+          />
+          <StatCard label="Em manutenção" value={breakdownLabel(summaryQuery.data.availabilityBreakdown, 'MAINTENANCE')} />
+          <StatCard
+            label="Indisponíveis"
+            value={breakdownLabel(summaryQuery.data.availabilityBreakdown, 'UNAVAILABLE')}
             icon={AlertTriangle}
             tone={summaryQuery.data.totalSuspended > 0 ? 'warning' : 'success'}
           />
-          <StatCard label="Em manutenção" value={String(summaryQuery.data.totalMaintenance)} />
-          <StatCard label="Inativos" value={String(summaryQuery.data.totalInactive)} />
+          <StatCard label="Inativos" value={breakdownLabel(summaryQuery.data.availabilityBreakdown, 'INACTIVE')} />
         </div>
       )}
 
@@ -156,6 +181,7 @@ export default function VehiclesPage(): JSX.Element {
         onClear={() => {
           setSearch('');
           setStatus('');
+          setType('');
           setOwnershipType('');
           setAvailability('');
           setPage(1);
@@ -184,6 +210,23 @@ export default function VehiclesPage(): JSX.Element {
             {(Object.keys(VEHICLE_STATUS_LABELS) as VehicleStatus[]).map((s) => (
               <option key={s} value={s}>
                 {VEHICLE_STATUS_LABELS[s]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Tipo" htmlFor="vehicle-type" className="w-full sm:w-44">
+          <Select
+            id="vehicle-type"
+            value={type}
+            onChange={(e) => {
+              setType(e.target.value as VehicleType | '');
+              setPage(1);
+            }}
+          >
+            <option value="">Todos</option>
+            {(Object.keys(VEHICLE_TYPE_LABELS) as VehicleType[]).map((t) => (
+              <option key={t} value={t}>
+                {VEHICLE_TYPE_LABELS[t]}
               </option>
             ))}
           </Select>

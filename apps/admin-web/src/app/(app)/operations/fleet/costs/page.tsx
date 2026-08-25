@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Fuel, Ticket, Wallet, Wrench } from 'lucide-react';
+import { Fuel, Gauge, Ticket, Wallet, Wrench } from 'lucide-react';
 import { Card, CardHeader } from '../../../../../components/ui/card';
 import { ErrorState } from '../../../../../components/ui/error-state';
 import { PageHeader } from '../../../../../components/ui/page-header';
@@ -18,6 +18,12 @@ import { formatCurrency, formatNumber } from '../../../../../utils/format';
 // 'TOLL' nao e um ExpenseCategory real (pedagio vem de TollTransaction, nao
 // de TripExpense) -- rotulo adicional so para exibicao deste breakdown.
 const COST_CATEGORY_LABELS: Record<string, string> = { ...EXPENSE_CATEGORY_LABELS, TOLL: 'Pedágio' };
+
+// Fase 85 -- nunca "R$ 0,00/km" quando o valor e null (sem distancia real
+// qualificada) -- ver FleetCostPerKmEntity.available/reason.
+function formatCostPerKm(value: number | null): string {
+  return value === null ? '—' : `${formatCurrency(value)}/km`;
+}
 
 export default function FleetCostsPage(): JSX.Element {
   const { startDate, setStartDate, endDate, setEndDate, vehicleId, setVehicleId, fleetId, setFleetId, filters, hasActiveFilters, clear } =
@@ -118,6 +124,37 @@ export default function FleetCostsPage(): JSX.Element {
               </ul>
             )}
           </Card>
+
+          <Card>
+            <CardHeader
+              title="Custo por km"
+              description="Custo operacional por km rodado (distância real via odômetro). Não representa pagamento financeiro."
+            />
+            {!query.data.costPerKm.available ? (
+              <p className="p-5 text-sm text-ink-muted">
+                {query.data.costPerKm.reason ?? 'Custo/km indisponível para o período/filtro selecionado.'}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                <StatCard label="Distância considerada" value={`${formatNumber(query.data.costPerKm.distanceKm)} km`} icon={Gauge} />
+                <StatCard label="Custo/km" value={formatCostPerKm(query.data.costPerKm.value)} icon={Wallet} />
+                <StatCard label="Combustível/km" value={formatCostPerKm(query.data.costPerKm.fuelCostPerKm)} icon={Fuel} />
+                <StatCard label="Manutenção/km" value={formatCostPerKm(query.data.costPerKm.maintenanceCostPerKm)} icon={Wrench} />
+                <StatCard label="Pedágio/km" value={formatCostPerKm(query.data.costPerKm.tollCostPerKm)} icon={Ticket} />
+                <StatCard label="Pneus/km" value={formatCostPerKm(query.data.costPerKm.tireCostPerKm)} />
+                <StatCard label="Outras despesas/km" value={formatCostPerKm(query.data.costPerKm.otherCostPerKm)} />
+              </div>
+            )}
+          </Card>
+
+          {query.data.costPerKm.available && (
+            <BarRankingChart
+              title="Top 5 veículos por custo/km"
+              data={query.data.topVehiclesByCostPerKm.map((v) => ({ label: v.plate, value: v.value }))}
+              color="#0891b2"
+              emptyMessage="Nenhum veículo com custo/km apurável no período/filtro selecionado."
+            />
+          )}
         </div>
       )}
     </div>

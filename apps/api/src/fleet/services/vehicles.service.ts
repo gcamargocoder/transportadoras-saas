@@ -25,14 +25,13 @@ import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto';
 import { PaginatedVehiclesEntity } from '../entities/paginated-vehicles.entity';
 import { VehicleDriverAssignmentEntity } from '../entities/vehicle-driver-assignment.entity';
-import { VehicleSummaryEntity } from '../entities/vehicle-summary.entity';
-import { VehicleEntity } from '../entities/vehicle.entity';
+import { VehicleAvailabilityBreakdownEntity, VehicleSummaryEntity } from '../entities/vehicle-summary.entity';
+import { FleetAvailabilityStatus, VehicleEntity } from '../entities/vehicle.entity';
 import { hasActiveRelationship } from '../interfaces/vehicle-relationship-counts.interface';
 import { VehicleDerivedContext, toVehicleEntity } from '../mappers/vehicle.mapper';
 import { normalizePlate } from '../utils/normalize-plate.util';
 import { resolveVehicleStatusChangeAction } from '../utils/vehicle-status-transition.util';
-
-const ACTIVE_TRIP_STATUSES: TripStatus[] = [TripStatus.IN_PROGRESS, TripStatus.PAUSED];
+import { ACTIVE_TRIP_STATUSES, onTripWhereFragment } from './vehicle-availability.service';
 
 const CURRENT_DRIVER_ASSIGNMENT_INCLUDE = {
   driver: { select: { id: true, name: true } },
@@ -136,6 +135,7 @@ export class VehiclesService {
     ): number => rows.filter(predicate).reduce((sum, row) => sum + row._count._all, 0);
 
     const totalActive = findCount(byStatus, (row) => (row as { status: VehicleStatus }).status === VehicleStatus.ACTIVE);
+    const totalSold = findCount(byStatus, (row) => (row as { status: VehicleStatus }).status === VehicleStatus.SOLD);
 
     const entity = new VehicleSummaryEntity();
     entity.total = total;
@@ -149,6 +149,25 @@ export class VehiclesService {
     entity.totalOwn = findCount(byOwnership, (row) => (row as { ownershipType: VehicleOwnershipType }).ownershipType === VehicleOwnershipType.OWN);
     entity.totalAggregated = findCount(byOwnership, (row) => (row as { ownershipType: VehicleOwnershipType }).ownershipType === VehicleOwnershipType.AGGREGATED);
     entity.totalThirdParty = findCount(byOwnership, (row) => (row as { ownershipType: VehicleOwnershipType }).ownershipType === VehicleOwnershipType.THIRD_PARTY);
+
+    // Fase 86 -- 5 categorias (AVAILABLE/ON_TRIP/MAINTENANCE/INACTIVE/UNAVAILABLE),
+    // reaproveitando as contagens acima (nenhuma query adicional). UNAVAILABLE
+    // agrupa SUSPENDED+SOLD -- mesma taxonomia de resolveFleetAvailabilityStatus.
+    const buildBreakdown = (status: FleetAvailabilityStatus, count: number): VehicleAvailabilityBreakdownEntity => {
+      const breakdownEntry = new VehicleAvailabilityBreakdownEntity();
+      breakdownEntry.status = status;
+      breakdownEntry.count = count;
+      breakdownEntry.percent = total > 0 ? Math.round((count / total) * 1000) / 10 : 0;
+      return breakdownEntry;
+    };
+    entity.availabilityBreakdown = [
+      buildBreakdown('AVAILABLE', entity.totalAvailable),
+      buildBreakdown('ON_TRIP', entity.totalOnTrip),
+      buildBreakdown('MAINTENANCE', entity.totalMaintenance),
+      buildBreakdown('INACTIVE', entity.totalInactive),
+      buildBreakdown('UNAVAILABLE', entity.totalSuspended + totalSold),
+    ];
+
     return entity;
   }
 
@@ -529,16 +548,14 @@ export class VehiclesService {
   // do veiculo vinculada a um Trip IN_PROGRESS/PAUSED.
   private countVehiclesOnTrip(vehicleWhere: Prisma.VehicleWhereInput): Promise<number> {
     return this.prisma.vehicle.count({
-      where: { ...vehicleWhere, tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } } },
+      where: { ...vehicleWhere, ...onTripWhereFragment() },
     });
   }
 
   private buildAvailabilityWhere(
     availability: 'AVAILABLE' | 'ON_TRIP' | 'UNAVAILABLE',
   ): Prisma.VehicleWhereInput {
-    const onTripFilter: Prisma.VehicleWhereInput = {
-      tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } },
-    };
+    const onTripFilter: Prisma.VehicleWhereInput = onTripWhereFragment();
     if (availability === 'ON_TRIP') {
       return { status: VehicleStatus.ACTIVE, ...onTripFilter };
     }
@@ -566,11 +583,7 @@ export class VehiclesService {
         include: CURRENT_DRIVER_ASSIGNMENT_INCLUDE,
       }),
       this.prisma.vehicle.findMany({
-        where: {
-          tenantId,
-          id: { in: vehicleIds },
-          tripCompositions: { some: { trip: { status: { in: ACTIVE_TRIP_STATUSES } } } },
-        },
+        where: { tenantId, id: { in: vehicleIds }, ...onTripWhereFragment() },
         select: { id: true },
       }),
     ]);

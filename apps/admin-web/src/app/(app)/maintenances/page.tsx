@@ -3,29 +3,43 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Ban, CheckCircle2, Pencil, Play, Plus } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
 import { ConfirmDialog } from '../../../components/ui/confirm-dialog';
 import { DataTable } from '../../../components/ui/data-table';
+import { DatePicker } from '../../../components/ui/date-picker';
 import { FilterBar } from '../../../components/ui/filter-bar';
 import { FormField } from '../../../components/ui/form-field';
 import { Input } from '../../../components/ui/input';
 import { Modal } from '../../../components/ui/modal';
 import { PageHeader } from '../../../components/ui/page-header';
 import { Pagination } from '../../../components/ui/pagination';
+import { SearchInput } from '../../../components/ui/search-input';
 import { Select } from '../../../components/ui/select';
 import { useToast } from '../../../components/ui/toast';
 import { useAuth } from '../../../hooks/use-auth';
+import { useDebounce } from '../../../hooks/use-debounce';
 import { CreateMaintenanceModal } from '../../../features/fleet/create-maintenance-modal';
 import { UpdateMaintenanceModal } from '../../../features/fleet/update-maintenance-modal';
 import { MAINTENANCE_STATUS_TONE } from '../../../features/fleet/status';
 import { toFriendlyMessage } from '../../../lib/api/errors';
 import { listMaintenances, updateMaintenanceStatus } from '../../../lib/api/fleet.api';
 import { FLEET_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
-import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_STATUS_LABELS, MAINTENANCE_TYPE_LABELS } from '../../../lib/labels';
+import {
+  MAINTENANCE_COMPONENT_LABELS,
+  MAINTENANCE_PRIORITY_LABELS,
+  MAINTENANCE_STATUS_LABELS,
+  MAINTENANCE_TYPE_LABELS,
+} from '../../../lib/labels';
 import type { MaintenanceEntity } from '../../../types/entities';
-import type { MaintenanceComponent, VehicleMaintenanceStatus } from '../../../types/enums';
+import type {
+  MaintenanceComponent,
+  VehicleMaintenancePriority,
+  VehicleMaintenanceStatus,
+  VehicleMaintenanceType,
+} from '../../../types/enums';
 import { formatCurrency, formatDate } from '../../../utils/format';
 
 const PAGE_SIZE = 20;
@@ -38,23 +52,52 @@ const PAGE_SIZE = 20;
 const NON_TERMINAL_STATUSES: VehicleMaintenanceStatus[] = ['OPEN', 'WAITING_PARTS', 'IN_PROGRESS'];
 
 export default function MaintenancesPage(): JSX.Element {
+  const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [plate, setPlate] = useState('');
   const [status, setStatus] = useState<VehicleMaintenanceStatus | ''>('');
+  const [type, setType] = useState<VehicleMaintenanceType | ''>('');
+  const [priority, setPriority] = useState<VehicleMaintenancePriority | ''>('');
   const [component, setComponent] = useState<MaintenanceComponent | ''>('');
+  const [openedFrom, setOpenedFrom] = useState('');
+  const [openedTo, setOpenedTo] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<MaintenanceEntity | null>(null);
   const [cancelTarget, setCancelTarget] = useState<MaintenanceEntity | null>(null);
   const [completeTarget, setCompleteTarget] = useState<MaintenanceEntity | null>(null);
   const [completeDate, setCompleteDate] = useState('');
   const canWrite = hasRole(user?.role, FLEET_WRITE_ROLES);
+  const debouncedSearch = useDebounce(search);
+  const debouncedPlate = useDebounce(plate);
+  const hasActiveFilters = Boolean(
+    search || plate || status || type || priority || component || openedFrom || openedTo,
+  );
 
   const query = useQuery({
-    queryKey: ['maintenances', { page, status, component }],
+    queryKey: [
+      'maintenances',
+      { page, search: debouncedSearch, plate: debouncedPlate, status, type, priority, component, openedFrom, openedTo },
+    ],
     queryFn: ({ signal }) =>
-      listMaintenances({ page, pageSize: PAGE_SIZE, status: status || undefined, component: component || undefined }, signal),
+      listMaintenances(
+        {
+          page,
+          pageSize: PAGE_SIZE,
+          search: debouncedSearch || undefined,
+          plate: debouncedPlate || undefined,
+          status: status || undefined,
+          type: type || undefined,
+          priority: priority || undefined,
+          component: component || undefined,
+          openedFrom: openedFrom || undefined,
+          openedTo: openedTo || undefined,
+        },
+        signal,
+      ),
   });
 
   const statusMutation = useMutation({
@@ -72,8 +115,27 @@ export default function MaintenancesPage(): JSX.Element {
 
   const columns = useMemo<ColumnDef<MaintenanceEntity, unknown>[]>(
     () => [
+      {
+        header: 'OS',
+        cell: ({ row }) => (
+          <div>
+            <p className="font-medium text-ink">{row.original.serviceOrderNumber ?? '—'}</p>
+            <p className="text-xs text-ink-subtle">{row.original.vehiclePlate ?? '—'}</p>
+          </div>
+        ),
+      },
       { header: 'Tipo', accessorFn: (row) => MAINTENANCE_TYPE_LABELS[row.type] },
+      {
+        header: 'Prioridade',
+        cell: ({ row }) => (
+          <Badge tone={row.original.priority === 'CRITICAL' ? 'danger' : 'neutral'}>
+            {MAINTENANCE_PRIORITY_LABELS[row.original.priority]}
+          </Badge>
+        ),
+      },
       { header: 'Abertura', cell: ({ row }) => formatDate(row.original.openedAt) },
+      { header: 'Previsão', cell: ({ row }) => (row.original.scheduledAt ? formatDate(row.original.scheduledAt) : '—') },
+      { header: 'Conclusão', cell: ({ row }) => (row.original.completedAt ? formatDate(row.original.completedAt) : '—') },
       { header: 'Componente', accessorFn: (row) => (row.component ? MAINTENANCE_COMPONENT_LABELS[row.component] : '-') },
       { header: 'Oficina', accessorFn: (row) => row.workshop ?? '-' },
       { header: 'Custo total', cell: ({ row }) => formatCurrency(row.original.totalCost) },
@@ -95,7 +157,15 @@ export default function MaintenancesPage(): JSX.Element {
                 const editable = NON_TERMINAL_STATUSES.includes(m.status);
                 return (
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="sm" title="Editar" onClick={() => setEditTarget(m)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Editar"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditTarget(m);
+                      }}
+                    >
                       <Pencil size={14} />
                     </Button>
                     {m.status === 'OPEN' || m.status === 'WAITING_PARTS' ? (
@@ -104,7 +174,10 @@ export default function MaintenancesPage(): JSX.Element {
                         size="sm"
                         title="Iniciar"
                         disabled={statusMutation.isPending}
-                        onClick={() => statusMutation.mutate({ id: m.id, next: 'IN_PROGRESS' })}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          statusMutation.mutate({ id: m.id, next: 'IN_PROGRESS' });
+                        }}
                       >
                         <Play size={14} />
                       </Button>
@@ -114,7 +187,8 @@ export default function MaintenancesPage(): JSX.Element {
                         variant="ghost"
                         size="sm"
                         title="Concluir"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setCompleteDate(new Date().toISOString().slice(0, 10));
                           setCompleteTarget(m);
                         }}
@@ -123,7 +197,15 @@ export default function MaintenancesPage(): JSX.Element {
                       </Button>
                     ) : null}
                     {editable ? (
-                      <Button variant="ghost" size="sm" title="Cancelar" onClick={() => setCancelTarget(m)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Cancelar"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCancelTarget(m);
+                        }}
+                      >
                         <Ban size={14} />
                       </Button>
                     ) : null}
@@ -153,13 +235,40 @@ export default function MaintenancesPage(): JSX.Element {
       />
 
       <FilterBar
-        hasActiveFilters={Boolean(status || component)}
+        hasActiveFilters={hasActiveFilters}
         onClear={() => {
+          setSearch('');
+          setPlate('');
           setStatus('');
+          setType('');
+          setPriority('');
           setComponent('');
+          setOpenedFrom('');
+          setOpenedTo('');
           setPage(1);
         }}
       >
+        <FormField label="Buscar" htmlFor="maint-search" className="w-full sm:w-56">
+          <SearchInput
+            value={search}
+            onChange={(v) => {
+              setSearch(v);
+              setPage(1);
+            }}
+            placeholder="Nº OS, descrição, oficina..."
+          />
+        </FormField>
+        <FormField label="Placa" htmlFor="maint-plate" className="w-full sm:w-32">
+          <Input
+            id="maint-plate"
+            value={plate}
+            onChange={(e) => {
+              setPlate(e.target.value);
+              setPage(1);
+            }}
+            placeholder="ABC1D23"
+          />
+        </FormField>
         <FormField label="Status" htmlFor="maint-status" className="w-full sm:w-48">
           <Select
             id="maint-status"
@@ -173,6 +282,40 @@ export default function MaintenancesPage(): JSX.Element {
             {(Object.keys(MAINTENANCE_STATUS_LABELS) as VehicleMaintenanceStatus[]).map((s) => (
               <option key={s} value={s}>
                 {MAINTENANCE_STATUS_LABELS[s]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Tipo" htmlFor="maint-type" className="w-full sm:w-40">
+          <Select
+            id="maint-type"
+            value={type}
+            onChange={(e) => {
+              setType(e.target.value as VehicleMaintenanceType | '');
+              setPage(1);
+            }}
+          >
+            <option value="">Todos</option>
+            {(Object.keys(MAINTENANCE_TYPE_LABELS) as VehicleMaintenanceType[]).map((t) => (
+              <option key={t} value={t}>
+                {MAINTENANCE_TYPE_LABELS[t]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Prioridade" htmlFor="maint-priority" className="w-full sm:w-40">
+          <Select
+            id="maint-priority"
+            value={priority}
+            onChange={(e) => {
+              setPriority(e.target.value as VehicleMaintenancePriority | '');
+              setPage(1);
+            }}
+          >
+            <option value="">Todas</option>
+            {(Object.keys(MAINTENANCE_PRIORITY_LABELS) as VehicleMaintenancePriority[]).map((p) => (
+              <option key={p} value={p}>
+                {MAINTENANCE_PRIORITY_LABELS[p]}
               </option>
             ))}
           </Select>
@@ -194,12 +337,33 @@ export default function MaintenancesPage(): JSX.Element {
             ))}
           </Select>
         </FormField>
+        <FormField label="Aberta de" htmlFor="maint-opened-from" className="w-full sm:w-40">
+          <DatePicker
+            id="maint-opened-from"
+            value={openedFrom}
+            onChange={(e) => {
+              setOpenedFrom(e.target.value);
+              setPage(1);
+            }}
+          />
+        </FormField>
+        <FormField label="Aberta até" htmlFor="maint-opened-to" className="w-full sm:w-40">
+          <DatePicker
+            id="maint-opened-to"
+            value={openedTo}
+            onChange={(e) => {
+              setOpenedTo(e.target.value);
+              setPage(1);
+            }}
+          />
+        </FormField>
       </FilterBar>
 
       <div className="overflow-hidden rounded-lg border border-border bg-white">
         <DataTable
           columns={columns}
           data={query.data?.items ?? []}
+          onRowClick={(m) => router.push(`/maintenances/${m.id}`)}
           isLoading={query.isLoading}
           isError={query.isError}
           onRetry={() => query.refetch()}

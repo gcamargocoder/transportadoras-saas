@@ -6,6 +6,7 @@ import { MaintenancePartEntity } from '../entities/maintenance-part.entity';
 function toMaintenancePartEntity(part: MaintenancePart): MaintenancePartEntity {
   const entity = new MaintenancePartEntity();
   entity.id = part.id;
+  entity.partId = part.partId;
   entity.name = part.name;
   entity.quantity = toNumberOrNull(part.quantity) ?? 0;
   entity.unitPrice = toNumberOrNull(part.unitPrice) ?? 0;
@@ -13,21 +14,36 @@ function toMaintenancePartEntity(part: MaintenancePart): MaintenancePartEntity {
   return entity;
 }
 
-export function toMaintenanceEntity(maintenance: VehicleMaintenance & { parts?: MaintenancePart[] }): MaintenanceEntity {
+export function toMaintenanceEntity(
+  maintenance: VehicleMaintenance & {
+    parts?: MaintenancePart[];
+    vehicle?: { plate: string };
+    workshopProvider?: { name: string } | null;
+    supplierProvider?: { name: string } | null;
+  },
+): MaintenanceEntity {
   const entity = new MaintenanceEntity();
   entity.id = maintenance.id;
   entity.tenantId = maintenance.tenantId;
   entity.vehicleId = maintenance.vehicleId;
+  entity.vehiclePlate = maintenance.vehicle?.plate ?? null;
   entity.type = maintenance.type;
   entity.status = maintenance.status;
   entity.priority = maintenance.priority;
   entity.openedAt = maintenance.openedAt;
   entity.scheduledAt = maintenance.scheduledAt;
+  entity.startedAt = maintenance.startedAt;
   entity.completedAt = maintenance.completedAt;
+  entity.diagnosis = maintenance.diagnosis;
   entity.odometerKm = toNumberOrNull(maintenance.odometerKm);
+  entity.completionOdometerKm = toNumberOrNull(maintenance.completionOdometerKm);
   entity.workshop = maintenance.workshop;
   entity.supplier = maintenance.supplier;
   entity.mechanic = maintenance.mechanic;
+  entity.workshopId = maintenance.workshopId;
+  entity.workshopName = maintenance.workshopProvider?.name ?? null;
+  entity.supplierId = maintenance.supplierId;
+  entity.supplierName = maintenance.supplierProvider?.name ?? null;
   entity.responsibleUserId = maintenance.responsibleUserId;
   entity.description = maintenance.description;
   entity.notes = maintenance.notes;

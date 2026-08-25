@@ -47,6 +47,7 @@ function buildMaintenance(overrides: Partial<FleetMaintenanceDashboardEntity> = 
     completedCount: 1,
     cancelledCount: 0,
     scheduledCount: 0,
+    lateWorkOrdersCount: 0,
     preventiveCount: 1,
     correctiveCount: 1,
     totalCost: 400,

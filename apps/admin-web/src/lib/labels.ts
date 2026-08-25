@@ -31,6 +31,8 @@ import {
   ImportJobStatus,
   LocationType,
   MaintenanceComponent,
+  MaintenanceProviderType,
+  PartStockMovementType,
   PayableStatus,
   PaymentType,
   ReceivablePaymentMethod,
@@ -71,6 +73,7 @@ import {
   VehicleType,
   VehicleOwnershipType,
   VehicleAvailability,
+  FleetAvailabilityStatus,
   DocumentExpiryStatus,
   FleetAlertSeverity,
 } from '../types/enums';
@@ -239,6 +242,24 @@ export const VEHICLE_AVAILABILITY_TONE: Record<VehicleAvailability, 'success' | 
   UNAVAILABLE: 'neutral',
 };
 
+// Fase 86 -- visao operacional detalhada (5 categorias), distinta de
+// VEHICLE_AVAILABILITY_LABELS/TONE acima (3 categorias, nunca alterada).
+export const FLEET_AVAILABILITY_STATUS_LABELS: Record<FleetAvailabilityStatus, string> = {
+  AVAILABLE: 'Disponível',
+  ON_TRIP: 'Em viagem',
+  MAINTENANCE: 'Em manutenção',
+  INACTIVE: 'Inativo',
+  UNAVAILABLE: 'Indisponível',
+};
+
+export const FLEET_AVAILABILITY_STATUS_TONE: Record<FleetAvailabilityStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  AVAILABLE: 'success',
+  ON_TRIP: 'info',
+  MAINTENANCE: 'warning',
+  INACTIVE: 'neutral',
+  UNAVAILABLE: 'danger',
+};
+
 export const DOCUMENT_EXPIRY_STATUS_LABELS: Record<DocumentExpiryStatus, string> = {
   VALID: 'Válido',
   EXPIRING_SOON: 'Vencendo em breve',
@@ -299,7 +320,10 @@ export const PAYMENT_TYPE_LABELS: Record<PaymentType, string> = {
 
 export const MAINTENANCE_STATUS_LABELS: Record<VehicleMaintenanceStatus, string> = {
   OPEN: 'Aberta',
-  IN_PROGRESS: 'Em andamento',
+  DIAGNOSING: 'Em diagnóstico',
+  AWAITING_APPROVAL: 'Aguardando aprovação',
+  APPROVED: 'Aprovada',
+  IN_PROGRESS: 'Em execução',
   WAITING_PARTS: 'Aguardando peças',
   COMPLETED: 'Concluída',
   CANCELLED: 'Cancelada',
@@ -344,6 +368,19 @@ export const MAINTENANCE_COMPONENT_LABELS: Record<MaintenanceComponent, string> 
   SIDER: 'Sider',
   TRAILER: 'Carreta',
   OTHER: 'Outro',
+};
+
+// Fase 84 -- oficina/fornecedor de manutencao.
+export const MAINTENANCE_PROVIDER_TYPE_LABELS: Record<MaintenanceProviderType, string> = {
+  WORKSHOP: 'Oficina',
+  SUPPLIER: 'Fornecedor',
+};
+
+// Fase 83 -- ledger de estoque de pecas.
+export const PART_STOCK_MOVEMENT_TYPE_LABELS: Record<PartStockMovementType, string> = {
+  IN: 'Entrada',
+  OUT: 'Saída',
+  ADJUSTMENT: 'Ajuste',
 };
 
 export const TIRE_STATUS_LABELS: Record<TireStatus, string> = {

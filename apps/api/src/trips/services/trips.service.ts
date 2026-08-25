@@ -13,6 +13,7 @@ import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { resolveVehicleAvailability } from '../../fleet/services/vehicle-availability.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTripDto } from '../dto/create-trip.dto';
 import { FindTripsQueryDto } from '../dto/find-trips-query.dto';
@@ -895,6 +896,24 @@ export class TripsService {
     arrival: Date,
     excludeTripId?: string,
   ): Promise<void> {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id: vehicleId, tenantId, deletedAt: null },
+    });
+    if (!vehicle) {
+      throw new NotFoundException('Veiculo (via compositionId) nao encontrado nesta empresa.');
+    }
+    // Fase 87 -- reaproveita a MESMA regra central de disponibilidade da
+    // Fase 81/86 (resolveVehicleAvailability, nunca uma segunda checagem de
+    // status). onTrip e forcado a false de proposito: "em viagem AGORA" nao
+    // impede planejar uma viagem FUTURA (isso e responsabilidade exclusiva
+    // da checagem de conflito de agenda abaixo) -- so o STATUS do veiculo
+    // (inativo/suspenso/em manutencao/vendido) bloqueia o planejamento em si.
+    if (resolveVehicleAvailability(vehicle.status, false) === 'UNAVAILABLE') {
+      throw new ConflictException(
+        'Veiculo indisponivel para planejamento (status diferente de ativo).',
+      );
+    }
+
     const overlapping = await this.prisma.trip.findFirst({
       where: {
         tenantId,

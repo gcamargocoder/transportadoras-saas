@@ -3,9 +3,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { Button } from '../../components/ui/button';
+import { EntitySelect } from '../../components/ui/entity-select';
 import { FormField } from '../../components/ui/form-field';
 import { Input } from '../../components/ui/input';
 import { Modal } from '../../components/ui/modal';
@@ -13,6 +14,7 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { updateMaintenance } from '../../lib/api/fleet.api';
+import { listMaintenanceProviders } from '../../lib/api/maintenance-providers.api';
 import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_TYPE_LABELS } from '../../lib/labels';
 import type { MaintenanceEntity } from '../../types/entities';
 import type { MaintenanceComponent } from '../../types/enums';
@@ -26,6 +28,8 @@ const schema = z.object({
   workshop: z.string().optional(),
   supplier: z.string().optional(),
   mechanic: z.string().optional(),
+  workshopId: z.string().uuid().optional().or(z.literal('')),
+  supplierId: z.string().uuid().optional().or(z.literal('')),
   description: z.string().optional(),
   laborCost: z.coerce.number().optional(),
   partsCost: z.coerce.number().optional(),
@@ -54,6 +58,7 @@ export function UpdateMaintenanceModal({
   const {
     register,
     handleSubmit,
+    control,
     reset,
     formState: { isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
@@ -67,6 +72,8 @@ export function UpdateMaintenanceModal({
         workshop: maintenance.workshop ?? '',
         supplier: maintenance.supplier ?? '',
         mechanic: maintenance.mechanic ?? '',
+        workshopId: maintenance.workshopId ?? '',
+        supplierId: maintenance.supplierId ?? '',
         description: maintenance.description ?? '',
         laborCost: maintenance.laborCost ?? undefined,
         partsCost: maintenance.partsCost ?? undefined,
@@ -80,6 +87,8 @@ export function UpdateMaintenanceModal({
         ...values,
         component: values.component ? (values.component as MaintenanceComponent) : undefined,
         scheduledAt: values.scheduledAt ? values.scheduledAt : undefined,
+        workshopId: values.workshopId || undefined,
+        supplierId: values.supplierId || undefined,
       }),
     onSuccess: () => {
       toast.success('Manutenção atualizada com sucesso.');
@@ -131,10 +140,44 @@ export function UpdateMaintenanceModal({
         <FormField label="Data programada" htmlFor="scheduledAt" hint="Opcional">
           <Input id="scheduledAt" type="date" {...register('scheduledAt')} />
         </FormField>
-        <FormField label="Oficina" htmlFor="workshop" hint="Opcional">
+        <FormField label="Oficina (catálogo)" htmlFor="workshopId" hint="Opcional">
+          <Controller
+            control={control}
+            name="workshopId"
+            render={({ field }) => (
+              <EntitySelect
+                id="workshopId"
+                queryKey={['maintenance-providers', 'select', 'WORKSHOP']}
+                queryFn={() => listMaintenanceProviders({ type: 'WORKSHOP', isActive: true, pageSize: 100 })}
+                getOptionValue={(p) => p.id}
+                getOptionLabel={(p) => p.name}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+              />
+            )}
+          />
+        </FormField>
+        <FormField label="Fornecedor (catálogo)" htmlFor="supplierId" hint="Opcional">
+          <Controller
+            control={control}
+            name="supplierId"
+            render={({ field }) => (
+              <EntitySelect
+                id="supplierId"
+                queryKey={['maintenance-providers', 'select', 'SUPPLIER']}
+                queryFn={() => listMaintenanceProviders({ type: 'SUPPLIER', isActive: true, pageSize: 100 })}
+                getOptionValue={(p) => p.id}
+                getOptionLabel={(p) => p.name}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+              />
+            )}
+          />
+        </FormField>
+        <FormField label="Oficina (texto livre)" htmlFor="workshop" hint="Opcional">
           <Input id="workshop" {...register('workshop')} />
         </FormField>
-        <FormField label="Fornecedor" htmlFor="supplier" hint="Opcional">
+        <FormField label="Fornecedor (texto livre)" htmlFor="supplier" hint="Opcional">
           <Input id="supplier" {...register('supplier')} />
         </FormField>
         <FormField label="Mecânico" htmlFor="mechanic" hint="Opcional">

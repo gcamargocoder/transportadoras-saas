@@ -12,6 +12,9 @@ export const VEHICLE_STATUS_TONE: Record<VehicleStatus, Tone> = {
 
 export const MAINTENANCE_STATUS_TONE: Record<VehicleMaintenanceStatus, Tone> = {
   OPEN: 'warning',
+  DIAGNOSING: 'info',
+  AWAITING_APPROVAL: 'warning',
+  APPROVED: 'brand',
   IN_PROGRESS: 'info',
   WAITING_PARTS: 'warning',
   COMPLETED: 'success',

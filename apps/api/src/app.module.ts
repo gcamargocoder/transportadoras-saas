@@ -29,7 +29,9 @@ import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
 import { HealthModule } from './health/health.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
+import { MaintenanceProvidersModule } from './maintenance-providers/maintenance-providers.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PartsModule } from './parts/parts.module';
 import { PayablesModule } from './payables/payables.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReceivablesModule } from './receivables/receivables.module';
@@ -92,6 +94,8 @@ import { UsersModule } from './users/users.module';
     DriverTripsModule,
     TollDataModule,
     MaintenanceModule,
+    PartsModule,
+    MaintenanceProvidersModule,
     FleetOperationsModule,
     NotificationsModule,
     BillingModule,

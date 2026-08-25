@@ -1,4 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { FLEET_AVAILABILITY_STATUS_VALUES, FleetAvailabilityStatus } from './vehicle.entity';
+
+// Fase 86 -- quantidade e percentual por status operacional (5 categorias:
+// disponivel/em viagem/em manutencao/indisponivel/inativo), reaproveitando as
+// MESMAS contagens ja calculadas por VehiclesService.getSummary (nenhuma
+// query adicional). percent nunca divide por zero (0 quando total=0).
+export class VehicleAvailabilityBreakdownEntity {
+  @ApiProperty({ enum: FLEET_AVAILABILITY_STATUS_VALUES })
+  status!: FleetAvailabilityStatus;
+
+  @ApiProperty()
+  count!: number;
+
+  @ApiProperty({ description: 'count / total * 100, arredondado a 1 casa decimal. 0 quando total=0.' })
+  percent!: number;
+}
 
 // Indicadores do cadastro de veiculos (Fase 62) -- contagens globais do
 // tenant, calculadas via groupBy/count em paralelo (independente da
@@ -36,4 +52,12 @@ export class VehicleSummaryEntity {
 
   @ApiProperty()
   totalThirdParty!: number;
+
+  @ApiProperty({
+    type: [VehicleAvailabilityBreakdownEntity],
+    description:
+      'Fase 86 -- sempre 5 entradas (AVAILABLE/ON_TRIP/MAINTENANCE/INACTIVE/UNAVAILABLE), nessa ordem. ' +
+      'UNAVAILABLE agrupa SUSPENDED+SOLD (mesma taxonomia de FleetAvailabilityStatus).',
+  })
+  availabilityBreakdown!: VehicleAvailabilityBreakdownEntity[];
 }

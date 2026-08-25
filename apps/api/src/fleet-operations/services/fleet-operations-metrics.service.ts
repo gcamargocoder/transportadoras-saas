@@ -27,9 +27,11 @@ import {
   FuelConsumptionTotals,
 } from '../../common/utils/fuel-consumption.util';
 import { aggregateMonthlySeries } from '../../common/utils/monthly-series.util';
+import { computeVehicleDistancesKm, OdometerReadingPoint } from '../../common/utils/vehicle-distance.util';
 import { DashboardChartPointEntity } from '../../dashboard/entities/dashboard-charts.entity';
 import { FindFuelSuppliesQueryDto } from '../../fuel-supplies/dto/find-fuel-supplies-query.dto';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
+import { OPEN_MAINTENANCE_STATUSES } from '../../fleet/utils/maintenance-status-transition.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NEAR_REPLACEMENT_THRESHOLD_MM, TiresService } from '../../tires/services/tires.service';
 import { TripStopStatus } from '../../trip-operations/entities/trip-stop.entity';
@@ -60,7 +62,7 @@ import {
   FleetTrailerRankingEntryEntity,
   FleetTrailerTypeBreakdownEntity,
 } from '../entities/fleet-compositions-overview.entity';
-import { FleetCostCategoryEntity, FleetCostFleetEntity, FleetCostsEntity, FleetCostsPreviousPeriodEntity } from '../entities/fleet-costs.entity';
+import { FleetCostCategoryEntity, FleetCostFleetEntity, FleetCostPerKmEntity, FleetCostsEntity, FleetCostsPreviousPeriodEntity } from '../entities/fleet-costs.entity';
 import {
   FleetFinancialCustomerEntity,
   FleetFinancialDashboardEntity,
@@ -149,16 +151,12 @@ const NON_TERMINAL_TRIP_STATUSES: TripStatus[] = [
   TripStatus.PAUSED,
 ];
 
-// OPEN/IN_PROGRESS/WAITING_PARTS = em aberto (mesma divisao ja usada em
-// DashboardService, Fase 19). Fase 45 -- completedCount/cancelledCount
-// passam a ser contados separadamente (groupBy(['status'])), nunca mais
-// somados num unico "encerrada" (CANCELLED nunca deve ser confundido com
-// COMPLETED em nenhum indicador).
-const OPEN_MAINTENANCE_STATUSES: VehicleMaintenanceStatus[] = [
-  VehicleMaintenanceStatus.OPEN,
-  VehicleMaintenanceStatus.IN_PROGRESS,
-  VehicleMaintenanceStatus.WAITING_PARTS,
-];
+// Fase 82 -- OPEN_MAINTENANCE_STATUSES agora importado de
+// maintenance-status-transition.util.ts (fonte central, inclui os 3 novos
+// estados do ciclo de vida da OS: DIAGNOSING/AWAITING_APPROVAL/APPROVED).
+// Fase 45 -- completedCount/cancelledCount continuam contados separadamente
+// (groupBy(['status'])), nunca somados num unico "encerrada" (CANCELLED
+// nunca deve ser confundido com COMPLETED em nenhum indicador).
 
 // Categorias de TripExpense com fonte primaria propria neste dashboard --
 // excluidas da soma de "otherCost" para nunca contar o mesmo custo duas
@@ -382,6 +380,8 @@ export class FleetOperationsMetricsService {
       maintenanceByVehicle,
       tollByVehicle,
       monthlyTrend,
+      fuelOdometerRows,
+      maintenanceOdometerRows,
     ] = await Promise.all([
       this.prisma.fuelSupply.aggregate({ where: fuelWhere, _sum: { totalAmount: true } }),
       this.prisma.vehicleMaintenance.aggregate({ where: maintenanceWhere, _sum: { totalCost: true } }),
@@ -393,6 +393,17 @@ export class FleetOperationsMetricsService {
       this.prisma.vehicleMaintenance.groupBy({ by: ['vehicleId'], where: maintenanceWhere, _count: true, _sum: { totalCost: true } }),
       this.prisma.tollTransaction.groupBy({ by: ['vehicleId'], where: tollWhere, _count: true, _sum: { chargedAmount: true } }),
       this.computeCostsMonthlyTrend(tenantId, filters),
+      // Fase 85 -- pool de leituras de odometro (FuelSupply) para o calculo
+      // de distancia real do custo/km -- mesmo escopo de filtro de fuelCost,
+      // nunca uma consulta por veiculo.
+      this.prisma.fuelSupply.findMany({ where: fuelWhere, select: { vehicleId: true, odometerKm: true } }),
+      // Fase 85 -- idem para VehicleMaintenance: odometerKm (abertura) e
+      // completionOdometerKm (Fase 82, conclusao) sao ambos leituras reais
+      // de odometro do mesmo veiculo em momentos diferentes.
+      this.prisma.vehicleMaintenance.findMany({
+        where: maintenanceWhere,
+        select: { vehicleId: true, odometerKm: true, completionOdometerKm: true },
+      }),
     ]);
 
     const fuelCost = toNumberOrNull(fuelAgg._sum.totalAmount) ?? 0;
@@ -415,10 +426,65 @@ export class FleetOperationsMetricsService {
     mergeVehicleAmounts(merged, maintenanceByVehicle, (row) => toNumberOrNull(row._sum.totalCost) ?? 0);
     mergeVehicleAmounts(merged, tollByVehicle, (row) => toNumberOrNull(row._sum.chargedAmount) ?? 0);
 
-    const [topVehiclesByCost, costByFleet, previousPeriod] = await Promise.all([
+    // Fase 85 -- distancia real = pool de leituras de odometro de fuel +
+    // manutencao (mesmo escopo de filtro desta funcao), agregada pelo
+    // mesmo primitivo ja usado pelo custo/km de manutencao (Fase 45) --
+    // nunca TripMetrics.actualDistanceKm (nunca escrito por nenhum service,
+    // ver docs/cost-per-km.md).
+    const odometerPoints: OdometerReadingPoint[] = [
+      ...fuelOdometerRows.map((row) => ({ vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.odometerKm) })),
+      ...maintenanceOdometerRows.flatMap((row) => [
+        { vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.odometerKm) },
+        { vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.completionOdometerKm) },
+      ]),
+    ];
+    const vehicleDistances = computeVehicleDistancesKm(odometerPoints);
+    const totalDistanceKm =
+      vehicleDistances.size > 0 ? [...vehicleDistances.values()].reduce((sum, d) => sum + d, 0) : null;
+
+    const costPerKm = new FleetCostPerKmEntity();
+    costPerKm.distanceKm = totalDistanceKm;
+    costPerKm.periodStart = filters.startDate ?? null;
+    costPerKm.periodEnd = filters.endDate ?? null;
+    if (totalDistanceKm === null) {
+      costPerKm.available = false;
+      costPerKm.reason =
+        'Nenhum veiculo do escopo possui pelo menos 2 leituras de odometro (abastecimento ou manutencao) no periodo.';
+      costPerKm.value = null;
+      costPerKm.fuelCostPerKm = null;
+      costPerKm.maintenanceCostPerKm = null;
+      costPerKm.tireCostPerKm = null;
+      costPerKm.tollCostPerKm = null;
+      costPerKm.otherCostPerKm = null;
+    } else {
+      costPerKm.available = true;
+      costPerKm.reason = null;
+      costPerKm.value = totalCost / totalDistanceKm;
+      costPerKm.fuelCostPerKm = fuelCost / totalDistanceKm;
+      costPerKm.maintenanceCostPerKm = maintenanceCost / totalDistanceKm;
+      costPerKm.tireCostPerKm = tireCost / totalDistanceKm;
+      costPerKm.tollCostPerKm = tollCost / totalDistanceKm;
+      costPerKm.otherCostPerKm = otherCost / totalDistanceKm;
+    }
+
+    // Ranking por veiculo: so entram veiculos com custo conhecido (fuel/
+    // manutencao/pedagio, mesmo escopo de `merged`) E distancia qualificada
+    // (>= 2 leituras) -- nunca atribui uma distancia a um custo sem base,
+    // nem um custo/km a uma distancia sem custo correspondente.
+    const costPerKmRanking = [...merged.entries()]
+      .filter(([vehicleId]) => vehicleDistances.has(vehicleId))
+      .map(([vehicleId, agg]) => {
+        const distanceKm = vehicleDistances.get(vehicleId) as number;
+        return { vehicleId, value: agg.value / distanceKm, count: distanceKm };
+      })
+      .sort((a, b) => b.value - a.value)
+      .slice(0, TOP_VEHICLES_LIMIT);
+
+    const [topVehiclesByCost, costByFleet, previousPeriod, topVehiclesByCostPerKm] = await Promise.all([
       this.attachPlates(rankTopVehicles(merged, TOP_VEHICLES_LIMIT)),
       this.buildFleetRanking(merged),
       this.computePreviousPeriodCosts(tenantId, filters, totalCost),
+      this.attachPlates(costPerKmRanking),
     ]);
 
     const entity = new FleetCostsEntity();
@@ -434,6 +500,8 @@ export class FleetOperationsMetricsService {
     entity.costByFleet = costByFleet;
     entity.monthlyTrend = monthlyTrend;
     entity.previousPeriod = previousPeriod;
+    entity.costPerKm = costPerKm;
+    entity.topVehiclesByCostPerKm = topVehiclesByCostPerKm;
     return { entity, vehicleMap: merged };
   }
 
@@ -861,6 +929,7 @@ export class FleetOperationsMetricsService {
     const [
       statusGroups,
       scheduledCount,
+      lateCount,
       totalAgg,
       byTypeRaw,
       byPriorityRaw,
@@ -877,6 +946,14 @@ export class FleetOperationsMetricsService {
       this.prisma.vehicleMaintenance.groupBy({ by: ['status'], where: whereAnyStatus, _count: true }),
       this.prisma.vehicleMaintenance.count({
         where: { ...where, scheduledAt: { not: null }, status: { in: OPEN_MAINTENANCE_STATUSES } },
+      }),
+      // Fase 82 -- OS com data prevista JA vencida, ainda em aberto (secao 15
+      // do pedido: "OS atrasadas"). Distinto de overdueCount abaixo (planos
+      // preventivos vencidos, via MaintenancePlan) -- este e um sinal mais
+      // simples e direto: qualquer OS (preventiva ou corretiva) cuja
+      // scheduledAt ja passou e que ainda nao foi concluida/cancelada.
+      this.prisma.vehicleMaintenance.count({
+        where: { ...where, scheduledAt: { lt: new Date() }, status: { in: OPEN_MAINTENANCE_STATUSES } },
       }),
       this.prisma.vehicleMaintenance.aggregate({
         where,
@@ -994,6 +1071,7 @@ export class FleetOperationsMetricsService {
     entity.completedCount = completedCount;
     entity.cancelledCount = cancelledCount;
     entity.scheduledCount = scheduledCount;
+    entity.lateWorkOrdersCount = lateCount;
     entity.preventiveCount = preventiveCount;
     entity.correctiveCount = correctiveCount;
     entity.totalCost = totalCost;

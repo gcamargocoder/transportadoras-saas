@@ -13,6 +13,7 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { createMaintenance, listVehicles } from '../../lib/api/fleet.api';
+import { listMaintenanceProviders } from '../../lib/api/maintenance-providers.api';
 import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_TYPE_LABELS } from '../../lib/labels';
 import type { MaintenanceComponent } from '../../types/enums';
 
@@ -23,6 +24,8 @@ const schema = z.object({
   type: z.enum(['PREVENTIVE', 'CORRECTIVE', 'INSPECTION', 'EMERGENCY', 'OTHER']),
   component: z.enum(COMPONENT_VALUES).optional().or(z.literal('')),
   workshop: z.string().optional(),
+  workshopId: z.string().uuid().optional().or(z.literal('')),
+  supplierId: z.string().uuid().optional().or(z.literal('')),
   description: z.string().optional(),
   laborCost: z.coerce.number().optional(),
   partsCost: z.coerce.number().optional(),
@@ -52,6 +55,8 @@ export function CreateMaintenanceModal({
       createMaintenance({
         ...values,
         component: values.component ? (values.component as MaintenanceComponent) : undefined,
+        workshopId: values.workshopId || undefined,
+        supplierId: values.supplierId || undefined,
       }),
     onSuccess: () => {
       toast.success('Manutenção registrada com sucesso.');
@@ -132,7 +137,41 @@ export function CreateMaintenanceModal({
             ))}
           </Select>
         </FormField>
-        <FormField label="Oficina" htmlFor="workshop" hint="Opcional">
+        <FormField label="Oficina (catálogo)" htmlFor="workshopId" hint="Opcional">
+          <Controller
+            control={control}
+            name="workshopId"
+            render={({ field }) => (
+              <EntitySelect
+                id="workshopId"
+                queryKey={['maintenance-providers', 'select', 'WORKSHOP']}
+                queryFn={() => listMaintenanceProviders({ type: 'WORKSHOP', isActive: true, pageSize: 100 })}
+                getOptionValue={(p) => p.id}
+                getOptionLabel={(p) => p.name}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+              />
+            )}
+          />
+        </FormField>
+        <FormField label="Fornecedor (catálogo)" htmlFor="supplierId" hint="Opcional">
+          <Controller
+            control={control}
+            name="supplierId"
+            render={({ field }) => (
+              <EntitySelect
+                id="supplierId"
+                queryKey={['maintenance-providers', 'select', 'SUPPLIER']}
+                queryFn={() => listMaintenanceProviders({ type: 'SUPPLIER', isActive: true, pageSize: 100 })}
+                getOptionValue={(p) => p.id}
+                getOptionLabel={(p) => p.name}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+              />
+            )}
+          />
+        </FormField>
+        <FormField label="Oficina (texto livre)" htmlFor="workshop" hint="Opcional -- use quando a oficina não estiver no catálogo.">
           <Input id="workshop" {...register('workshop')} />
         </FormField>
         <FormField label="Custo de mão de obra (R$)" htmlFor="laborCost" hint="Opcional">

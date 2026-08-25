@@ -1,5 +1,6 @@
 import type { Paginated, PaginationParams } from '../../types/api';
 import type {
+  AuditLogEntity,
   FleetEntity,
   MaintenanceEntity,
   TagProviderEntity,
@@ -230,6 +231,7 @@ export interface FindMaintenancesQuery extends PaginationParams {
 }
 
 export interface MaintenancePartInput {
+  partId?: string | undefined;
   name: string;
   quantity: number;
   unitPrice: number;
@@ -245,7 +247,10 @@ export interface CreateMaintenancePayload {
   workshop?: string | undefined;
   supplier?: string | undefined;
   mechanic?: string | undefined;
+  workshopId?: string | undefined;
+  supplierId?: string | undefined;
   description?: string | undefined;
+  diagnosis?: string | undefined;
   notes?: string | undefined;
   laborCost?: number | undefined;
   partsCost?: number | undefined;
@@ -282,6 +287,36 @@ export function updateMaintenanceStatus(id: string, status: VehicleMaintenanceSt
 
 export function deleteMaintenance(id: string) {
   return api.delete<void>(`/maintenances/${id}`);
+}
+
+// --- Fase 82: Ordem de Servico (OS) -- ciclo de vida dedicado sobre o
+// mesmo VehicleMaintenance acima (ver docs/work-orders.md). ---
+export function diagnoseMaintenance(id: string, diagnosis: string) {
+  return api.post<MaintenanceEntity>(`/maintenances/${id}/diagnose`, { diagnosis });
+}
+
+export function submitMaintenanceForApproval(id: string) {
+  return api.post<MaintenanceEntity>(`/maintenances/${id}/submit-for-approval`, {});
+}
+
+export function approveMaintenance(id: string) {
+  return api.post<MaintenanceEntity>(`/maintenances/${id}/approve`, {});
+}
+
+export function startMaintenance(id: string) {
+  return api.post<MaintenanceEntity>(`/maintenances/${id}/start`, {});
+}
+
+export function completeMaintenance(id: string, completedAt: string, completionOdometerKm?: number) {
+  return api.post<MaintenanceEntity>(`/maintenances/${id}/complete`, { completedAt, completionOdometerKm });
+}
+
+export function cancelMaintenance(id: string) {
+  return api.post<MaintenanceEntity>(`/maintenances/${id}/cancel`, {});
+}
+
+export function getMaintenanceHistory(id: string, query: PaginationParams = {}) {
+  return api.get<Paginated<AuditLogEntity>>(`/maintenances/${id}/history`, query);
 }
 
 // --- Tag providers (operadoras de pedágio, dado global) ---

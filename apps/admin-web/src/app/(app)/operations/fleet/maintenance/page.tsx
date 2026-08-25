@@ -256,6 +256,12 @@ export default function FleetMaintenancePage(): JSX.Element {
                 tone={dashboardQuery.data.dueSoonCount > 0 ? 'warning' : 'success'}
               />
               <StatCard
+                label="OS atrasadas"
+                value={formatNumber(dashboardQuery.data.lateWorkOrdersCount)}
+                icon={AlertTriangle}
+                tone={dashboardQuery.data.lateWorkOrdersCount > 0 ? 'danger' : 'success'}
+              />
+              <StatCard
                 label="Alertas críticos"
                 value={formatNumber(dashboardQuery.data.maintenanceAlerts.filter((a) => a.severity === 'CRITICAL').length)}
                 tone={dashboardQuery.data.maintenanceAlerts.some((a) => a.severity === 'CRITICAL') ? 'danger' : 'success'}

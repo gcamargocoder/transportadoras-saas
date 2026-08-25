@@ -140,6 +140,12 @@ enum PaymentType {
 
 enum VehicleMaintenanceStatus {
   OPEN
+  /// Fase 82 -- diagnostico tecnico em andamento (Ordem de Servico).
+  DIAGNOSING
+  /// Fase 82 -- diagnostico concluido, aguardando aprovacao do orcamento.
+  AWAITING_APPROVAL
+  /// Fase 82 -- orcamento aprovado, ainda nao iniciada a execucao.
+  APPROVED
   IN_PROGRESS
   WAITING_PARTS
   COMPLETED
@@ -725,6 +731,11 @@ model Tenant {
   financialTransactions    FinancialTransaction[]
   /// Fase 80 -- conciliacao bancaria (movimentacoes externas importadas).
   financialBankTransactions FinancialBankTransaction[]
+  /// Fase 83 -- catalogo de pecas e ledger de estoque.
+  parts                     Part[]
+  partStockMovements        PartStockMovement[]
+  /// Fase 84 -- oficinas/fornecedores de manutencao.
+  maintenanceProviders      MaintenanceProvider[]
 
   @@map("tenants")
 }
@@ -934,6 +945,9 @@ model UserAccount {
   tireRetreadsCreated             TireRetread[]             @relation("TireRetreadCreator")
   tireInspectionsCreated          TireInspection[]          @relation("TireInspectionCreator")
   tireDisposalsCreated            TireDisposal[]            @relation("TireDisposalCreator")
+  partsCreated                    Part[]                    @relation("PartCreator")
+  partStockMovementsCreated       PartStockMovement[]       @relation("PartStockMovementCreator")
+  maintenanceProvidersCreated     MaintenanceProvider[]     @relation("MaintenanceProviderCreator")
   tollRatesCreated                TollRate[]                @relation("TollRateCreator")
   subscriptionPaymentsCreated     SubscriptionPayment[]
   fiscalDocumentsCreated          FiscalDocument[]          @relation("FiscalDocumentCreator")
@@ -1135,8 +1149,19 @@ model VehicleMaintenance {
   /// retroativa, ex: importacao de historico).
   openedAt           DateTime                   @default(now()) @map("opened_at")
   scheduledAt        DateTime?                  @map("scheduled_at")
+  /// Fase 82 -- data em que a execucao da OS de fato comecou (distinta de
+  /// openedAt/scheduledAt). Preenchida pela acao POST /maintenances/:id/start.
+  startedAt          DateTime?                  @map("started_at")
   completedAt        DateTime?                  @map("completed_at")
+  /// Fase 82 -- texto de diagnostico tecnico (distinto de description, que e
+  /// o problema relatado, e de notes, observacoes gerais). Preenchido pela
+  /// acao POST /maintenances/:id/diagnose, editavel depois via PATCH.
+  diagnosis          String?
   odometerKm         Decimal?                   @map("odometer_km") @db.Decimal(10, 2)
+  /// Fase 82 -- quilometragem do veiculo na CONCLUSAO da OS, distinta de
+  /// odometerKm (na abertura) e de nextOdometerKm (projecao da proxima
+  /// manutencao deste componente). Preenchida pela acao POST /:id/complete.
+  completionOdometerKm Decimal?                 @map("completion_odometer_km") @db.Decimal(10, 2)
   /// Fase 45 -- quilometragem prevista da PROXIMA manutencao deste
   /// componente (distinto de MaintenancePlan.intervalKm, que e a regra;
   /// este e o valor calculado/informado para ESTE registro especifico).
@@ -1144,6 +1169,14 @@ model VehicleMaintenance {
   workshop           String?
   supplier           String?
   mechanic           String?
+  /// Fase 84 -- vinculo opcional com o catalogo de oficinas/fornecedores
+  /// (MaintenanceProvider, type=WORKSHOP/SUPPLIER respectivamente). Os
+  /// campos de texto livre acima (workshop/supplier, Fase 13) sao
+  /// preservados -- registros historicos ou sem cadastro continuam
+  /// funcionando exatamente como antes (mesmo padrao de
+  /// MaintenancePart.partId na Fase 83).
+  workshopId         String?                    @map("workshop_id") @db.Uuid
+  supplierId         String?                    @map("supplier_id") @db.Uuid
   /// Usuario interno responsavel por acompanhar esta manutencao -- distinto
   /// do AuditLog.userId (que registra quem alterou o REGISTRO, nao quem e
   /// o responsavel pela manutencao em si).
@@ -1182,6 +1215,13 @@ model VehicleMaintenance {
   responsibleUser UserAccount?      @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull)
   maintenancePlan MaintenancePlan?  @relation(fields: [maintenancePlanId], references: [id], onDelete: SetNull)
   parts           MaintenancePart[]
+  /// Fase 83 -- saidas de estoque geradas ao concluir esta OS (ver
+  /// PartsService.consumePartsForMaintenance).
+  partStockMovements PartStockMovement[]
+  /// Fase 84 -- oficina/fornecedor vinculados (ver comentario de workshopId/
+  /// supplierId acima).
+  workshopProvider MaintenanceProvider? @relation("MaintenanceWorkshop", fields: [workshopId], references: [id], onDelete: SetNull)
+  supplierProvider MaintenanceProvider? @relation("MaintenanceSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -1189,6 +1229,8 @@ model VehicleMaintenance {
   @@index([vehicleId, status])
   @@index([tenantId, component])
   @@index([maintenancePlanId])
+  @@index([workshopId])
+  @@index([supplierId])
   @@map("vehicle_maintenances")
 }
 
@@ -1237,6 +1279,13 @@ model MaintenancePlan {
 model MaintenancePart {
   id            String   @id @default(uuid()) @db.Uuid
   maintenanceId String   @map("maintenance_id") @db.Uuid
+  /// Fase 83 -- vinculo opcional com o catalogo de pecas. Linhas criadas
+  /// antes da Fase 83 (ou itens sem correspondente no catalogo) continuam
+  /// com partId=null -- `name` permanece o texto livre em ambos os casos.
+  /// Presente = a conclusao da OS gera uma saida de estoque automatica (ver
+  /// PartsService.consumePartsForMaintenance); ausente = so um item de
+  /// custo, sem efeito no estoque (comportamento identico ao pre-Fase 83).
+  partId        String?  @map("part_id") @db.Uuid
   name          String
   quantity      Decimal  @db.Decimal(10, 2)
   unitPrice     Decimal  @map("unit_price") @db.Decimal(10, 2)
@@ -1247,9 +1296,164 @@ model MaintenancePart {
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   maintenance VehicleMaintenance @relation(fields: [maintenanceId], references: [id], onDelete: Cascade)
+  part        Part?              @relation(fields: [partId], references: [id], onDelete: SetNull)
 
   @@index([maintenanceId])
+  @@index([partId])
   @@map("maintenance_parts")
+}
+
+enum PartStockMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+
+  @@map("part_stock_movement_type")
+}
+
+/// Catalogo de pecas (Fase 83) -- fonte unica para cadastro de pecas usadas
+/// na manutencao da frota (nao existia antes; MaintenancePart era so um
+/// item de custo em texto livre, sem controle de estoque).
+///
+/// currentStock/isLowStock sao CACHE PERSISTIDO, nunca aceito do cliente --
+/// sempre recalculado pelo service dentro da MESMA transacao (runSerializable,
+/// mesmo utilitario da Fase 48) de qualquer PartStockMovement, nunca uma
+/// segunda fonte de verdade (a soma das movimentacoes SEMPRE bate com
+/// currentStock -- ver docs/parts-inventory.md). Justificativa de persistir
+/// em vez de so calcular sob demanda (diferente de FinancialAccount.
+/// currentBalance, que e 100% calculado): a listagem precisa filtrar/paginar
+/// por "estoque baixo" (currentStock <= minStock, comparacao entre 2
+/// colunas da MESMA linha, que o Prisma nao expressa em `where` sem SQL
+/// bruto) -- isLowStock e essa comparacao pre-computada e persistida,
+/// permitindo um filtro nativo, paginado e sem N+1.
+model Part {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  sku          String
+  name         String
+  description  String?
+  unit         String
+  category     String?
+  manufacturer String?
+  /// Codigo original do fabricante do veiculo (OEM), distinto do sku
+  /// (codigo interno).
+  oemCode      String?  @map("oem_code")
+  minStock     Decimal? @map("min_stock") @db.Decimal(10, 2)
+  /// Cache persistido -- ver comentario do model.
+  currentStock Decimal  @default(0) @map("current_stock") @db.Decimal(10, 2)
+  /// Cache persistido -- currentStock <= minStock (sempre false quando
+  /// minStock nao informado, nunca uma comparacao inventada). Ver
+  /// comentario do model.
+  isLowStock   Boolean  @default(false) @map("is_low_stock")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdBy    String   @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator          UserAccount         @relation("PartCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  movements        PartStockMovement[]
+  maintenanceParts MaintenancePart[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, category])
+  @@index([tenantId, isLowStock])
+  @@map("parts")
+}
+
+/// Ledger de movimentacao de estoque (Fase 83) -- append-only (mesmo
+/// espirito de TireMovement/FinancialTransaction): nunca ha UPDATE/DELETE
+/// pela API. Correcoes geram uma NOVA movimentacao ADJUSTMENT, nunca editam
+/// uma linha existente.
+model PartStockMovement {
+  id       String                @id @default(uuid()) @db.Uuid
+  tenantId String                @map("tenant_id") @db.Uuid
+  partId   String                @map("part_id") @db.Uuid
+  type     PartStockMovementType
+  /// IN/OUT: sempre positivo (o efeito no saldo vem de `type`). ADJUSTMENT:
+  /// pode ser positivo (correcao para cima) ou negativo (para baixo) --
+  /// representa o delta diretamente.
+  quantity Decimal               @db.Decimal(10, 2)
+  /// Custo unitario de referencia (ex: preco de compra na entrada).
+  /// Opcional -- usado para estimar valor de estoque no dashboard; nunca
+  /// inventado quando ausente.
+  unitCost     Decimal?  @map("unit_cost") @db.Decimal(10, 2)
+  movementDate DateTime  @default(now()) @map("movement_date")
+  reason       String?
+  /// Referencia/origem em texto livre (ex: nota fiscal, numero de pedido,
+  /// nome do fornecedor) -- sem CRM/fornecedor separado nesta fase (secao 4
+  /// da Fase 83).
+  reference    String?
+  notes        String?
+  /// Preenchido quando a origem da SAIDA e o consumo em uma Ordem de
+  /// Servico (Fase 82) -- ver PartsService.consumePartsForMaintenance.
+  /// Nulo para entradas/saidas/ajustes manuais.
+  maintenanceId String? @map("maintenance_id") @db.Uuid
+  createdBy     String  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  part        Part                @relation(fields: [partId], references: [id], onDelete: Cascade)
+  maintenance VehicleMaintenance? @relation(fields: [maintenanceId], references: [id], onDelete: SetNull)
+  creator     UserAccount         @relation("PartStockMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, partId])
+  @@index([tenantId, maintenanceId])
+  @@index([tenantId, movementDate])
+  @@map("part_stock_movements")
+}
+
+enum MaintenanceProviderType {
+  WORKSHOP
+  SUPPLIER
+
+  @@map("maintenance_provider_type")
+}
+
+/// Oficina ou fornecedor relacionado a manutencao da frota (Fase 84).
+/// Oficina e fornecedor sao conceitualmente o MESMO tipo de entidade (nome/
+/// documento/contato/endereco/ativo) -- modelados como UMA UNICA tabela com
+/// `type` discriminador, em vez de 2 tabelas quase identicas (decisao
+/// documentada em docs/maintenance-providers.md). VehicleMaintenance.
+/// workshopId/supplierId referenciam esta tabela filtrando implicitamente
+/// por type=WORKSHOP/SUPPLIER (o service valida o type correto na
+/// associacao, nunca o schema). `specialties` so faz sentido tipicamente
+/// para oficinas, mas fica disponivel para ambos os tipos sem restricao
+/// artificial (um fornecedor tambem pode ser "especializado" em algo).
+model MaintenanceProvider {
+  id          String                  @id @default(uuid()) @db.Uuid
+  tenantId    String                  @map("tenant_id") @db.Uuid
+  type        MaintenanceProviderType
+  name        String
+  tradeName   String?                 @map("trade_name")
+  /// CPF/CNPJ, opcional. Unico por tenant+type quando informado (multiplos
+  /// nulos sao permitidos pelo indice unico do Postgres, mesmo padrao ja
+  /// usado por Vehicle.renavam/chassisNumber).
+  document    String?                 @db.VarChar(20)
+  phone       String?
+  email       String?
+  address     String?
+  contactName String?                 @map("contact_name")
+  specialties String?
+  notes       String?
+  isActive    Boolean                 @default(true) @map("is_active")
+  createdBy   String                  @map("created_by") @db.Uuid
+  createdAt   DateTime                @default(now()) @map("created_at")
+  updatedAt   DateTime                @updatedAt @map("updated_at")
+
+  tenant                 Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator                UserAccount          @relation("MaintenanceProviderCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  maintenancesAsWorkshop VehicleMaintenance[] @relation("MaintenanceWorkshop")
+  maintenancesAsSupplier VehicleMaintenance[] @relation("MaintenanceSupplier")
+
+  @@unique([tenantId, type, document])
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, type, isActive])
+  @@map("maintenance_providers")
 }
 
 /// Pneu da frota (Fase 20). status = estado de ciclo de vida (NEW/IN_USE/

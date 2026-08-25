@@ -36,6 +36,8 @@ import type {
   ImportRowIssueType,
   LocationType,
   MaintenanceComponent,
+  MaintenanceProviderType,
+  PartStockMovementType,
   PayableEffectiveStatus,
   PaymentType,
   ReceivableEffectiveStatus,
@@ -78,6 +80,7 @@ import type {
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
   VehicleAvailability,
+  FleetAvailabilityStatus,
   VehicleOwnershipType,
   VehicleStatus,
   VehicleType,
@@ -332,8 +335,19 @@ export interface VehicleEntity {
   currentDriverId: string | null;
   currentDriverName: string | null;
   availability: VehicleAvailability;
+  // Fase 86 -- visao operacional detalhada (5 categorias), nao substitui `availability` acima.
+  fleetAvailabilityStatus: FleetAvailabilityStatus;
+  unavailabilityReason: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 86 -- quantidade + percentual por status operacional (5 categorias),
+// reaproveitando as mesmas contagens de VehicleSummaryEntity abaixo.
+export interface VehicleAvailabilityBreakdownEntity {
+  status: FleetAvailabilityStatus;
+  count: number;
+  percent: number;
 }
 
 // Fase 62 -- Gestao Avancada de Veiculos e Frota.
@@ -349,6 +363,7 @@ export interface VehicleSummaryEntity {
   totalOwn: number;
   totalAggregated: number;
   totalThirdParty: number;
+  availabilityBreakdown: VehicleAvailabilityBreakdownEntity[];
 }
 
 export interface VehicleDriverAssignmentEntity {
@@ -534,16 +549,24 @@ export interface MaintenanceEntity {
   id: string;
   tenantId: string;
   vehicleId: string;
+  vehiclePlate: string | null;
   type: VehicleMaintenanceType;
   status: VehicleMaintenanceStatus;
   priority: VehicleMaintenancePriority;
   openedAt: string;
   scheduledAt: string | null;
+  startedAt: string | null;
   completedAt: string | null;
+  diagnosis: string | null;
   odometerKm: number | null;
+  completionOdometerKm: number | null;
   workshop: string | null;
   supplier: string | null;
   mechanic: string | null;
+  workshopId: string | null;
+  workshopName: string | null;
+  supplierId: string | null;
+  supplierName: string | null;
   responsibleUserId: string | null;
   description: string | null;
   notes: string | null;
@@ -1476,6 +1499,24 @@ export interface FleetCostsPreviousPeriodEntity {
   deltaPercent: number | null;
 }
 
+// Fase 85 -- custo/km da frota. distanceKm vem do pool de leituras reais de
+// odometro (FuelSupply.odometerKm + VehicleMaintenance.odometerKm/
+// completionOdometerKm), nunca TripMetrics.actualDistanceKm. available=false
+// (com reason) quando nenhum veiculo do escopo tem >= 2 leituras de odometro.
+export interface FleetCostPerKmEntity {
+  available: boolean;
+  reason: string | null;
+  distanceKm: number | null;
+  value: number | null;
+  fuelCostPerKm: number | null;
+  maintenanceCostPerKm: number | null;
+  tireCostPerKm: number | null;
+  tollCostPerKm: number | null;
+  otherCostPerKm: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
 export interface FleetCostsEntity {
   totalCost: number;
   fuelCost: number;
@@ -1489,6 +1530,8 @@ export interface FleetCostsEntity {
   costByFleet: FleetCostFleetEntity[];
   monthlyTrend: DashboardChartPointEntity[];
   previousPeriod: FleetCostsPreviousPeriodEntity | null;
+  costPerKm: FleetCostPerKmEntity;
+  topVehiclesByCostPerKm: FleetVehicleRankingEntryEntity[];
 }
 
 // Fase 51 -- Gestao Financeira Operacional.
@@ -1585,6 +1628,7 @@ export interface FleetMaintenanceDashboardEntity {
   completedCount: number;
   cancelledCount: number;
   scheduledCount: number;
+  lateWorkOrdersCount: number;
   preventiveCount: number;
   correctiveCount: number;
   totalCost: number;
@@ -3215,4 +3259,81 @@ export interface ImportBankTransactionsResultEntity {
   duplicates: number;
   invalid: number;
   errors: ImportBankTransactionRowErrorEntity[];
+}
+
+// Fase 83 -- catalogo de pecas e ledger de estoque. Espelha
+// apps/api/src/parts/entities/*.ts. currentStock/isLowStock sao cache
+// persistido no backend (nunca calculado no frontend).
+export interface PartEntity {
+  id: string;
+  tenantId: string;
+  sku: string;
+  name: string;
+  description: string | null;
+  unit: string;
+  category: string | null;
+  manufacturer: string | null;
+  oemCode: string | null;
+  minStock: number | null;
+  currentStock: number;
+  isLowStock: boolean;
+  isZeroStock: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PartStockMovementEntity {
+  id: string;
+  partId: string;
+  type: PartStockMovementType;
+  quantity: number;
+  unitCost: number | null;
+  movementDate: string;
+  reason: string | null;
+  reference: string | null;
+  notes: string | null;
+  maintenanceId: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface PartsDashboardEntity {
+  totalParts: number;
+  activeParts: number;
+  inactiveParts: number;
+  lowStockCount: number;
+  zeroStockCount: number;
+  estimatedStockValue: number | null;
+  estimatedStockValueUnavailableReason: string | null;
+  partsWithoutKnownCost: number;
+  entriesInPeriod: number;
+  exitsInPeriod: number;
+}
+
+// Fase 84 -- oficina/fornecedor de manutencao (MaintenanceProvider,
+// discriminado por `type`). Espelha apps/api/src/maintenance-providers/entities/*.ts.
+export interface MaintenanceProviderEntity {
+  id: string;
+  tenantId: string;
+  type: MaintenanceProviderType;
+  name: string;
+  tradeName: string | null;
+  document: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  contactName: string | null;
+  specialties: string | null;
+  notes: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MaintenanceProviderSummaryEntity {
+  osCount: number;
+  vehiclesServedCount: number;
+  totalCost: number | null;
+  lastUsedAt: string | null;
 }

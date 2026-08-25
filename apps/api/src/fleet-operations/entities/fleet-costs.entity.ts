@@ -36,6 +36,49 @@ export class FleetCostsPreviousPeriodEntity {
   deltaPercent!: number | null;
 }
 
+// Fase 85 -- custo/km da frota. distanceKm vem do POOL de leituras reais de
+// odometro (FuelSupply.odometerKm + VehicleMaintenance.odometerKm/
+// completionOdometerKm) no mesmo escopo de filtro de FleetCostsEntity --
+// NUNCA TripMetrics.actualDistanceKm (auditado e confirmado: nenhum service
+// em todo o apps/api/src escreve esse campo, ver docs/vehicle-management.md
+// e docs/cost-per-km.md). available=false (com reason) quando nenhum
+// veiculo do escopo tem >= 2 leituras de odometro -- nunca um custo/km
+// inventado sem distancia real.
+export class FleetCostPerKmEntity {
+  @ApiProperty()
+  available!: boolean;
+
+  @ApiProperty({ nullable: true, description: 'Motivo quando available=false (nunca custo/km mascarado com 0 ou null sem explicacao).' })
+  reason!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'Distancia real (km) usada no calculo -- pool de odometro de FuelSupply + VehicleMaintenance.' })
+  distanceKm!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'totalCost / distanceKm.' })
+  value!: number | null;
+
+  @ApiProperty({ nullable: true })
+  fuelCostPerKm!: number | null;
+
+  @ApiProperty({ nullable: true })
+  maintenanceCostPerKm!: number | null;
+
+  @ApiProperty({ nullable: true })
+  tireCostPerKm!: number | null;
+
+  @ApiProperty({ nullable: true })
+  tollCostPerKm!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'otherCost (despesas operacionais) / distanceKm.' })
+  otherCostPerKm!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'Inicio do periodo considerado (filtro startDate), quando informado.' })
+  periodStart!: Date | null;
+
+  @ApiProperty({ nullable: true, description: 'Fim do periodo considerado (filtro endDate), quando informado.' })
+  periodEnd!: Date | null;
+}
+
 // Fase 40 -- custos REALIZADOS apenas (nunca previsao). fuelCost =
 // FuelSupply.totalAmount; maintenanceCost = VehicleMaintenance.totalCost;
 // tireCost = Tire.purchasePrice + TireRetread.cost; tollCost =
@@ -86,4 +129,15 @@ export class FleetCostsEntity {
     description: 'Fase 41 -- so preenchido quando startDate e endDate sao ambos informados no filtro.',
   })
   previousPeriod!: FleetCostsPreviousPeriodEntity | null;
+
+  @ApiProperty({ type: FleetCostPerKmEntity, description: 'Fase 85 -- custo operacional por km da frota.' })
+  costPerKm!: FleetCostPerKmEntity;
+
+  @ApiProperty({
+    type: [FleetVehicleRankingEntryEntity],
+    description:
+      'Fase 85 -- "value" = custo/km (R$) do veiculo, "count" = distancia (km) usada no calculo. So inclui ' +
+      'veiculos com custo conhecido (fuel/manutencao/pedagio) E distancia qualificada (>= 2 leituras de odometro).',
+  })
+  topVehiclesByCostPerKm!: FleetVehicleRankingEntryEntity[];
 }
