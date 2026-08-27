@@ -55,8 +55,10 @@ const TRIP_INCLUDE = {
 
 // Viagens ainda "em aberto" (nao concluidas/canceladas) -- usado tanto para
 // bloquear exclusao de Driver/Vehicle (ver DriversService/VehiclesService)
-// quanto para checagem de disponibilidade aqui.
-const NON_TERMINAL_STATUSES: TripStatus[] = [
+// quanto para checagem de disponibilidade aqui. Exportado desde a Fase 90
+// para FleetOptimizationService reaproveitar a MESMA lista na deteccao de
+// conflito de agenda em lote -- nunca uma segunda lista divergente.
+export const NON_TERMINAL_STATUSES: TripStatus[] = [
   TripStatus.PLANNED,
   TripStatus.WAITING_DRIVER,
   TripStatus.WAITING_DEPARTURE,

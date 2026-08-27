@@ -1,24 +1,34 @@
 import type { Paginated, PaginationParams } from '../../types/api';
 import type {
+  ApplyTripRoutingSuggestionEntity,
+  CustomerContactEntity,
   CustomerEntity,
+  CustomerNoteEntity,
+  CustomerSummaryEntity,
   DriverShiftEntity,
+  EmptyTripEntity,
+  FleetOptimizationResultEntity,
   LocationEntity,
   RouteEventEntity,
   RouteVersionEntity,
   TollReconciliationEntity,
+  TripDeliveryStopEntity,
   TripEntity,
+  TripEtaResultEntity,
   TripFinancialDashboardEntity,
   TripFinancialResultEntity,
   TripFinancialSummaryEntity,
   TripMetricsEntity,
   TripOccurrenceEntity,
   TripOperationsListEntity,
+  TripRoutingSuggestionEntity,
   TripSettlementEntity,
   TripSummaryEntity,
   TripTimelineEventEntity,
 } from '../../types/entities';
 import type {
   LocationType,
+  TripDeliveryStopStatus,
   TripOccurrenceSeverity,
   TripOccurrenceType,
   TripPriority,
@@ -206,14 +216,22 @@ export function runTripTollReconciliation(id: string) {
   return api.post<TollReconciliationEntity>(`/trips/${id}/toll-reconciliation/run`);
 }
 
-// --- Customers (cadastro de referencia usado por viagens/receitas) ---
+// --- Customers (CRM -- Fase 93: camada comercial sobre o cadastro de referencia usado por viagens/receitas) ---
 export interface FindCustomersQuery extends PaginationParams {
   search?: string | undefined;
+  isActive?: boolean | undefined;
 }
 
 export interface CreateCustomerPayload {
   name: string;
   document?: string | undefined;
+  phone?: string | undefined;
+  email?: string | undefined;
+  address?: string | undefined;
+}
+
+export interface UpdateCustomerPayload extends Partial<CreateCustomerPayload> {
+  isActive?: boolean | undefined;
 }
 
 export function listCustomers(query: FindCustomersQuery = {}, signal?: AbortSignal) {
@@ -226,6 +244,49 @@ export function getCustomer(id: string) {
 
 export function createCustomer(payload: CreateCustomerPayload) {
   return api.post<CustomerEntity>('/customers', payload);
+}
+
+export function updateCustomer(id: string, payload: UpdateCustomerPayload) {
+  return api.patch<CustomerEntity>(`/customers/${id}`, payload);
+}
+
+export function getCustomerSummary(id: string) {
+  return api.get<CustomerSummaryEntity>(`/customers/${id}/summary`);
+}
+
+export interface CreateCustomerContactPayload {
+  name: string;
+  role?: string | undefined;
+  phone?: string | undefined;
+  email?: string | undefined;
+  notes?: string | undefined;
+  isPrimary?: boolean | undefined;
+}
+
+export type UpdateCustomerContactPayload = Partial<CreateCustomerContactPayload>;
+
+export function listCustomerContacts(customerId: string) {
+  return api.get<CustomerContactEntity[]>(`/customers/${customerId}/contacts`);
+}
+
+export function createCustomerContact(customerId: string, payload: CreateCustomerContactPayload) {
+  return api.post<CustomerContactEntity>(`/customers/${customerId}/contacts`, payload);
+}
+
+export function updateCustomerContact(customerId: string, contactId: string, payload: UpdateCustomerContactPayload) {
+  return api.patch<CustomerContactEntity>(`/customers/${customerId}/contacts/${contactId}`, payload);
+}
+
+export function deleteCustomerContact(customerId: string, contactId: string) {
+  return api.delete<void>(`/customers/${customerId}/contacts/${contactId}`);
+}
+
+export function listCustomerNotes(customerId: string) {
+  return api.get<CustomerNoteEntity[]>(`/customers/${customerId}/notes`);
+}
+
+export function createCustomerNote(customerId: string, content: string) {
+  return api.post<CustomerNoteEntity>(`/customers/${customerId}/notes`, { content });
 }
 
 // --- Locations (origem/destino de viagens) ---
@@ -250,4 +311,89 @@ export function getLocation(id: string) {
 
 export function createLocation(payload: CreateLocationPayload) {
   return api.post<LocationEntity>('/locations', payload);
+}
+
+// --- Paradas/entregas planejadas (Fase 88) ---
+export interface CreateTripDeliveryStopPayload {
+  customerId?: string | undefined;
+  locationId: string;
+  plannedArrival?: string | undefined;
+  notes?: string | undefined;
+}
+
+export type UpdateTripDeliveryStopPayload = Partial<Omit<CreateTripDeliveryStopPayload, 'customerId'>> & {
+  customerId?: string | null | undefined;
+};
+
+export function getTripDeliveryStops(tripId: string) {
+  return api.get<TripDeliveryStopEntity[]>(`/trips/${tripId}/delivery-stops`);
+}
+
+export function createTripDeliveryStop(tripId: string, payload: CreateTripDeliveryStopPayload) {
+  return api.post<TripDeliveryStopEntity>(`/trips/${tripId}/delivery-stops`, payload);
+}
+
+export function updateTripDeliveryStop(
+  tripId: string,
+  stopId: string,
+  payload: UpdateTripDeliveryStopPayload,
+) {
+  return api.patch<TripDeliveryStopEntity>(`/trips/${tripId}/delivery-stops/${stopId}`, payload);
+}
+
+export function updateTripDeliveryStopStatus(
+  tripId: string,
+  stopId: string,
+  status: TripDeliveryStopStatus,
+) {
+  return api.patch<TripDeliveryStopEntity>(`/trips/${tripId}/delivery-stops/${stopId}/status`, {
+    status,
+  });
+}
+
+export function removeTripDeliveryStop(tripId: string, stopId: string) {
+  return api.delete<void>(`/trips/${tripId}/delivery-stops/${stopId}`);
+}
+
+export function reorderTripDeliveryStops(tripId: string, items: { id: string; sequence: number }[]) {
+  return api.put<TripDeliveryStopEntity[]>(`/trips/${tripId}/delivery-stops/reorder`, { items });
+}
+
+// --- Roteirização de paradas/entregas (Fase 89) ---
+export function getTripRoutingSuggestion(tripId: string) {
+  return api.get<TripRoutingSuggestionEntity>(`/trips/${tripId}/delivery-stops/routing-suggestion`);
+}
+
+export function applyTripRoutingSuggestion(tripId: string) {
+  return api.post<ApplyTripRoutingSuggestionEntity>(
+    `/trips/${tripId}/delivery-stops/routing-suggestion/apply`,
+  );
+}
+
+// --- Otimização de frota (Fase 90) ---
+// Somente leitura -- "aplicar" um candidato e o updateTrip(...) ja existente
+// acima (compositionId/driverId), nunca um endpoint novo.
+export function getTripFleetOptimization(tripId: string) {
+  return api.get<FleetOptimizationResultEntity>(`/trips/${tripId}/fleet-optimization`);
+}
+
+// --- Previsão de chegada / ETA (Fase 91) ---
+// Sempre calculada sob demanda pelo backend -- nunca persistida.
+export function getTripEta(tripId: string) {
+  return api.get<TripEtaResultEntity>(`/trips/${tripId}/delivery-stops/eta`);
+}
+
+// --- Viagens vazias (Fase 92) ---
+// Trip.loadStatus = EMPTY, informado pelo motorista na largada -- nunca
+// inferido de ausência de cliente/entrega.
+export interface FindEmptyTripsQuery extends PaginationParams {
+  driverId?: string | undefined;
+  vehicleId?: string | undefined;
+  status?: TripStatus | undefined;
+  departureFrom?: string | undefined;
+  departureTo?: string | undefined;
+}
+
+export function listEmptyTrips(query: FindEmptyTripsQuery, signal?: AbortSignal) {
+  return api.get<Paginated<EmptyTripEntity>>('/trips/empty-runs', query, signal);
 }

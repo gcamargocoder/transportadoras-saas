@@ -15,6 +15,8 @@ import {
   SubmitDeliveryProofInput,
   TrackingPointInput,
   TrackingPointsSyncResult,
+  TripDeliveryStop,
+  TripEtaResult,
   TripLoadStatus,
   TripOccurrence,
   TripStop,
@@ -135,6 +137,18 @@ export function closeStopByDeviceEvent(
 
 export function getStops(tripId: string): Promise<TripStop[]> {
   return apiRequest<TripStop[]>(`/driver/trips/${tripId}/stops`);
+}
+
+// Fase 88 -- paradas/entregas PLANEJADAS da viagem, em ordem de sequencia.
+// Somente leitura (ver comentario em driverTrips.types.ts).
+export function getDeliveryStops(tripId: string): Promise<TripDeliveryStop[]> {
+  return apiRequest<TripDeliveryStop[]>(`/driver/trips/${tripId}/delivery-stops`);
+}
+
+// Fase 91 -- previsao de chegada (ETA) do destino final e de cada parada,
+// sempre calculada sob demanda pelo backend (nunca persistida).
+export function getEta(tripId: string): Promise<TripEtaResult> {
+  return apiRequest<TripEtaResult>(`/driver/trips/${tripId}/delivery-stops/eta`);
 }
 
 export function createFuelSupply(

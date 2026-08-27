@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   AlertSeverity,
+  ContractStatus,
   DriverStatus,
   FiscalDocumentStatus,
   FiscalDocumentType,
@@ -19,6 +20,7 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { compact } from '../../common/utils/compact.util';
 import { detectOdometerRegression } from '../../common/utils/fuel-consumption.util';
+import { resolveDocumentExpiryStatus } from '../../fleet/utils/document-expiry.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NEAR_REPLACEMENT_THRESHOLD_MM } from '../../tires/services/tires.service';
 import { FindNotificationsQueryDto } from '../dto/find-notifications-query.dto';
@@ -304,6 +306,7 @@ export class NotificationsService {
       pendingBillings,
       deliveryProofPending,
       deliveryProofProblem,
+      contractsExpiring,
     ] = await Promise.all([
       this.collectCriticalOccurrences(tenantId),
       this.collectVehicleUnavailable(tenantId),
@@ -317,6 +320,7 @@ export class NotificationsService {
       this.collectBillingPending(tenantId),
       this.collectDeliveryProofPending(tenantId),
       this.collectDeliveryProofProblem(tenantId),
+      this.collectContractsExpiring(tenantId),
     ]);
 
     return [
@@ -332,6 +336,7 @@ export class NotificationsService {
       ...pendingBillings,
       ...deliveryProofPending,
       ...deliveryProofProblem,
+      ...contractsExpiring,
     ];
   }
 
@@ -610,5 +615,40 @@ export class NotificationsService {
       entityId: row.id,
       metadata: { tripId: row.tripId },
     }));
+  }
+
+  // Fase 98 -- "contrato vencendo/vencido". MESMO limiar de
+  // resolveDocumentExpiryStatus (fleet/utils/document-expiry.util.ts, 30
+  // dias) e a MESMA condicao de elegibilidade de
+  // ContractRenewalsService.getExpiringContracts (status ACTIVE/EXPIRED,
+  // endDate dentro do limiar) -- nunca uma segunda regra de vencimento.
+  private async collectContractsExpiring(tenantId: string): Promise<NotificationCandidate[]> {
+    const now = new Date();
+    const threshold = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const rows = await this.prisma.contract.findMany({
+      where: {
+        tenantId,
+        status: { in: [ContractStatus.ACTIVE, ContractStatus.EXPIRED] },
+        endDate: { not: null, lte: threshold },
+      },
+      select: { id: true, code: true, endDate: true, customer: { select: { name: true } } },
+    });
+
+    return rows
+      .filter((row): row is typeof row & { endDate: Date } => row.endDate !== null)
+      .map((row) => {
+        const expired = resolveDocumentExpiryStatus(row.endDate, now) === 'EXPIRED';
+        const dateLabel = row.endDate.toISOString().slice(0, 10);
+        return {
+          type: NotificationType.CONTRACT_EXPIRING,
+          severity: expired ? AlertSeverity.HIGH : AlertSeverity.MEDIUM,
+          title: expired ? `Contrato vencido: ${row.code}` : `Contrato vencendo: ${row.code}`,
+          message: expired
+            ? `Contrato ${row.code} do cliente ${row.customer.name} está vencido desde ${dateLabel}.`
+            : `Contrato ${row.code} do cliente ${row.customer.name} vence em ${dateLabel}.`,
+          entityType: 'Contract',
+          entityId: row.id,
+        };
+      });
   }
 }

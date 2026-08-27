@@ -6,6 +6,7 @@ import {
   AlertType,
   AxleEventSource,
   BillingPeriodicity,
+  ContractRenewalStatus,
   ContractStatus,
   DeliveryProofStatus,
   DocumentType,
@@ -35,6 +36,9 @@ import {
   PartStockMovementType,
   PayableStatus,
   PaymentType,
+  ProposalStatus,
+  QuotationAmountSource,
+  QuotationStatus,
   ReceivablePaymentMethod,
   ReceivableStatus,
   RevenueCategory,
@@ -52,6 +56,7 @@ import {
   TollMatchStatus,
   TollTransactionStatus,
   TrailerType,
+  TripDeliveryStopStatus,
   TripLoadStatus,
   TripPriority,
   TripStatus,
@@ -78,7 +83,9 @@ import {
   FleetAlertSeverity,
 } from '../types/enums';
 import type {
+  ContractExpiryStatus,
   DowntimeCategory,
+  EmptyTripReason,
   FiscalDocumentOrigin,
   ReconciliationEntityType,
   ReconciliationIssueType,
@@ -108,6 +115,14 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
 export const TRIP_LOAD_STATUS_LABELS: Record<TripLoadStatus, string> = {
   LOADED: 'Carregado',
   EMPTY: 'Vazio',
+};
+
+// Fase 92 -- motivo/classificacao da viagem vazia (ver docs/trip-empty-runs.md).
+export const EMPTY_TRIP_REASON_LABELS: Record<EmptyTripReason, string> = {
+  NO_DELIVERIES_PLANNED: 'Sem entregas planejadas',
+  ALL_DELIVERIES_CANCELLED: 'Entregas canceladas',
+  DELIVERIES_INCOMPLETE: 'Entregas incompletas',
+  COMPLETED_DELIVERIES_INCONSISTENT: 'Dado inconsistente (revisar)',
 };
 
 // Fase 29 -- Alert passa a ter leitura no painel de monitoramento.
@@ -676,6 +691,29 @@ export const CONTRACT_STATUS_TONE: Record<ContractStatus, 'success' | 'warning' 
   CANCELLED: 'danger',
 };
 
+// Fase 98 -- Renovacao de Contratos.
+export const CONTRACT_RENEWAL_STATUS_LABELS: Record<ContractRenewalStatus, string> = {
+  PENDING: 'Em andamento',
+  COMPLETED: 'Concluída',
+  CANCELLED: 'Cancelada',
+};
+
+export const CONTRACT_RENEWAL_STATUS_TONE: Record<ContractRenewalStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  PENDING: 'warning',
+  COMPLETED: 'success',
+  CANCELLED: 'neutral',
+};
+
+export const CONTRACT_EXPIRY_STATUS_LABELS: Record<ContractExpiryStatus, string> = {
+  EXPIRING_SOON: 'Vencendo',
+  EXPIRED: 'Vencido',
+};
+
+export const CONTRACT_EXPIRY_STATUS_TONE: Record<ContractExpiryStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  EXPIRING_SOON: 'warning',
+  EXPIRED: 'danger',
+};
+
 export const FREIGHT_TABLE_STATUS_LABELS: Record<FreightTableStatus, string> = {
   DRAFT: 'Rascunho',
   ACTIVE: 'Ativa',
@@ -769,6 +807,13 @@ export const TRIP_OCCURRENCE_SEVERITY_LABELS: Record<TripOccurrenceSeverity, str
 export const TRIP_OCCURRENCE_STATUS_LABELS: Record<TripOccurrenceStatus, string> = {
   OPEN: 'Em aberto',
   RESOLVED: 'Resolvida',
+  CANCELLED: 'Cancelada',
+};
+
+export const TRIP_DELIVERY_STOP_STATUS_LABELS: Record<TripDeliveryStopStatus, string> = {
+  PENDING: 'Pendente',
+  IN_PROGRESS: 'Em andamento',
+  COMPLETED: 'Concluída',
   CANCELLED: 'Cancelada',
 };
 
@@ -964,6 +1009,49 @@ export const FINANCIAL_BANK_TRANSACTION_STATUS_TONE: Record<FinancialBankTransac
   PENDING: 'neutral',
   MATCHED: 'success',
   DIVERGENT: 'warning',
+};
+
+// Fase 94 -- Cotacoes.
+export const QUOTATION_STATUS_LABELS: Record<QuotationStatus, string> = {
+  DRAFT: 'Rascunho',
+  SENT: 'Enviada',
+  APPROVED: 'Aprovada',
+  REJECTED: 'Rejeitada',
+  CONVERTED: 'Convertida em viagem',
+  CANCELLED: 'Cancelada',
+};
+
+export const QUOTATION_STATUS_TONE: Record<QuotationStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  DRAFT: 'neutral',
+  SENT: 'info',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  CONVERTED: 'success',
+  CANCELLED: 'danger',
+};
+
+export const QUOTATION_AMOUNT_SOURCE_LABELS: Record<QuotationAmountSource, string> = {
+  CALCULATED: 'Calculado pelo motor de precificação',
+  MANUAL: 'Informado manualmente',
+};
+
+// Fase 95 -- Propostas.
+export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
+  DRAFT: 'Rascunho',
+  SENT: 'Enviada',
+  ACCEPTED: 'Aceita',
+  REJECTED: 'Recusada',
+  EXPIRED: 'Expirada',
+  CANCELLED: 'Cancelada',
+};
+
+export const PROPOSAL_STATUS_TONE: Record<ProposalStatus, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  DRAFT: 'neutral',
+  SENT: 'info',
+  ACCEPTED: 'success',
+  REJECTED: 'danger',
+  EXPIRED: 'danger',
+  CANCELLED: 'danger',
 };
 
 export const MONTH_LABELS: Record<number, string> = {

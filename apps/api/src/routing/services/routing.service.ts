@@ -185,6 +185,16 @@ export class RoutingService {
     return current?.tolls ?? [];
   }
 
+  // Fase 89 -- sinal PURAMENTE informativo (nunca usado para decidir se um
+  // calculo pode ser tentado por outro modulo): reaproveitado por
+  // TripRoutingService para explicar ao usuario, na sugestao de sequencia de
+  // paradas, se esta instalacao tem um provider de mapas configurado ou nao
+  // -- mesmo binding ja resolvido em routing.module.ts, nunca uma segunda
+  // leitura de env var.
+  isProviderConfigured(): boolean {
+    return this.provider.isConfigured();
+  }
+
   // GET /driver/trips/:id/route -- visao MINIMA para o app do motorista
   // (secao 19 da Fase 26: destino, proximo pedagio, distancia). Nunca expoe
   // a RoutePlanEntity administrativa inteira.

@@ -7,6 +7,9 @@ export function toCustomerEntity(customer: Customer): CustomerEntity {
   entity.tenantId = customer.tenantId;
   entity.name = customer.name;
   entity.document = customer.document;
+  entity.phone = customer.phone;
+  entity.email = customer.email;
+  entity.address = customer.address;
   entity.isActive = customer.isActive;
   entity.createdAt = customer.createdAt;
   entity.updatedAt = customer.updatedAt;

@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import {
@@ -54,24 +55,42 @@ import { CreateTripOccurrenceDto } from '../../trip-operations/dto/create-trip-o
 import { FindTripOccurrencesQueryDto } from '../../trip-operations/dto/find-trip-occurrences-query.dto';
 import { TRIP_READ_ROLES, TRIP_WRITE_ROLES } from '../constants/trip-roles.constants';
 import { CreateRouteEventDto } from '../dto/create-route-event.dto';
+import { CreateTripDeliveryStopDto } from '../dto/create-trip-delivery-stop.dto';
 import { CreateTripDto } from '../dto/create-trip.dto';
+import { FindEmptyTripsQueryDto } from '../dto/find-empty-trips-query.dto';
 import { FindTripsQueryDto } from '../dto/find-trips-query.dto';
 import { FindTripTimelineQueryDto } from '../dto/find-trip-timeline-query.dto';
 import { PlannedTripMetricsDto } from '../dto/planned-trip-metrics.dto';
+import { ReorderTripDeliveryStopsDto } from '../dto/reorder-trip-delivery-stops.dto';
 import { UpdateRouteEventDto } from '../dto/update-route-event.dto';
+import { UpdateTripDeliveryStopDto } from '../dto/update-trip-delivery-stop.dto';
+import { UpdateTripDeliveryStopStatusDto } from '../dto/update-trip-delivery-stop-status.dto';
 import { UpdateTripStatusDto } from '../dto/update-trip-status.dto';
 import { UpdateTripDto } from '../dto/update-trip.dto';
 import { PaginatedTripsEntity } from '../entities/paginated-trips.entity';
 import { PaginatedTripTimelineEntity } from '../entities/trip-timeline-event.entity';
+import { PaginatedEmptyTripsEntity } from '../entities/empty-trip.entity';
 import { RouteEventEntity } from '../entities/route-event.entity';
 import { RouteVersionEntity } from '../entities/route-version.entity';
+import { TripDeliveryStopEntity } from '../entities/trip-delivery-stop.entity';
+import { FleetOptimizationResultEntity } from '../entities/fleet-optimization.entity';
+import { TripEtaResultEntity } from '../entities/trip-eta.entity';
+import {
+  ApplyTripRoutingSuggestionEntity,
+  TripRoutingSuggestionEntity,
+} from '../entities/trip-routing-suggestion.entity';
 import { TripMetricsEntity } from '../entities/trip-metrics.entity';
 import { TripSummaryEntity } from '../entities/trip-summary.entity';
 import { TripOperationsListEntity } from '../entities/trip-operation.entity';
 import { TripEntity } from '../entities/trip.entity';
+import { EmptyTripsService } from '../services/empty-trips.service';
+import { FleetOptimizationService } from '../services/fleet-optimization.service';
 import { RouteEventsService } from '../services/route-events.service';
 import { RouteVersionsService } from '../services/route-versions.service';
+import { TripDeliveryStopsService } from '../services/trip-delivery-stops.service';
+import { TripEtaService } from '../services/trip-eta.service';
 import { TripMetricsService } from '../services/trip-metrics.service';
+import { TripRoutingService } from '../services/trip-routing.service';
 import { TripTimelineService } from '../services/trip-timeline.service';
 import { TripsService } from '../services/trips.service';
 
@@ -94,6 +113,11 @@ export class TripsController {
     private readonly tripTimelineService: TripTimelineService,
     private readonly tripOccurrencesService: TripOccurrencesService,
     private readonly driverShiftsService: DriverShiftsService,
+    private readonly tripDeliveryStopsService: TripDeliveryStopsService,
+    private readonly tripEtaService: TripEtaService,
+    private readonly tripRoutingService: TripRoutingService,
+    private readonly fleetOptimizationService: FleetOptimizationService,
+    private readonly emptyTripsService: EmptyTripsService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -120,6 +144,19 @@ export class TripsController {
   @ApiOkResponse({ type: TripOperationsListEntity })
   getActiveOperations(): Promise<TripOperationsListEntity> {
     return this.tripsService.getActiveOperations(this.tenantContext.requireTenantId());
+  }
+
+  // Registrado ANTES de ':id' pelo mesmo motivo de 'operations/active' acima.
+  @Get('empty-runs')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 92 -- viagens vazias (Trip.loadStatus = EMPTY, informado pelo motorista na largada). ' +
+      'Nunca inferido de ausencia de cliente/entrega. Ver docs/trip-empty-runs.md.',
+  })
+  @ApiOkResponse({ type: PaginatedEmptyTripsEntity })
+  findEmptyTrips(@Query() query: FindEmptyTripsQueryDto): Promise<PaginatedEmptyTripsEntity> {
+    return this.emptyTripsService.findAll(this.tenantContext.requireTenantId(), query);
   }
 
   @Get(':id')
@@ -174,6 +211,27 @@ export class TripsController {
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
+  }
+
+  // ==========================================================================
+  // OTIMIZACAO DE FROTA (Fase 90) -- somente ANALISE (nunca aplica sozinha,
+  // regra 6). "Aplicar" uma selecao e o PATCH /trips/:id acima, com o
+  // compositionId/driverId do candidato escolhido -- ja e PLANNED-only
+  // (regra 7) e ja revalida disponibilidade (regra 8), nenhum endpoint de
+  // aplicacao duplicado aqui.
+  // ==========================================================================
+  @Get(':id/fleet-optimization')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Analisa e classifica candidatos (composicao de frota + motorista) para esta viagem: ' +
+      'disponibilidade, conflitos de agenda, restricoes encontradas e justificativa. Somente ' +
+      'leitura -- nao altera a viagem. Ver docs/trip-optimization.md para os criterios.',
+  })
+  @ApiOkResponse({ type: FleetOptimizationResultEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  getFleetOptimization(@Param('id', ParseUUIDPipe) tripId: string): Promise<FleetOptimizationResultEntity> {
+    return this.fleetOptimizationService.analyze(this.tenantContext.requireTenantId(), tripId);
   }
 
   @Patch(':id/status')
@@ -293,6 +351,205 @@ export class TripsController {
   @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
   findShifts(@Param('id', ParseUUIDPipe) id: string): Promise<DriverShiftEntity[]> {
     return this.driverShiftsService.findAllForTrip(this.tenantContext.requireTenantId(), id);
+  }
+
+  // ==========================================================================
+  // PARADAS/ENTREGAS PLANEJADAS (Fase 88) -- multiplas paradas por viagem,
+  // sub-recurso de Trip (mesmo padrao de route-events/occurrences acima).
+  // Distinto de GET /trips/:id/stops (Fase 25/43, mais abaixo): aquele e
+  // OPERACIONAL (paradas detectadas pelo app do motorista por tempo parado);
+  // este e o PLANEJAMENTO das entregas (sequencia/cliente/local/status).
+  // ==========================================================================
+  @Get(':id/delivery-stops')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({ summary: 'Lista as paradas/entregas planejadas da viagem, em ordem de sequencia.' })
+  @ApiOkResponse({ type: TripDeliveryStopEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findDeliveryStops(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripDeliveryStopEntity[]> {
+    return this.tripDeliveryStopsService.findAllForTrip(this.tenantContext.requireTenantId(), tripId);
+  }
+
+  // ==========================================================================
+  // PREVISAO DE CHEGADA / ETA (Fase 91) -- SEMPRE calculada sob demanda,
+  // NUNCA persistida (regra 13). Ver docs/trip-eta.md para o metodo de
+  // calculo e as limitacoes reais desta instalacao.
+  // ==========================================================================
+  @Get(':id/delivery-stops/eta')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Previsao de chegada (ETA) do destino final da viagem e de cada parada/entrega planejada. ' +
+      'Geografica (RoutePlan + GPS real) quando disponivel; senao, o planejado ajustado pelo ' +
+      'atraso real de partida; senao, null com o motivo explicado em `limitation`.',
+  })
+  @ApiOkResponse({ type: TripEtaResultEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  getEta(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripEtaResultEntity> {
+    return this.tripEtaService.compute(this.tenantContext.requireTenantId(), tripId);
+  }
+
+  @Post(':id/delivery-stops')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Adiciona uma parada/entrega ao fim da viagem (sequencia calculada automaticamente). ' +
+      'Somente enquanto a viagem ainda permite planejamento (nao partiu, nao cancelada).',
+  })
+  @ApiCreatedResponse({ type: TripDeliveryStopEntity })
+  @ApiNotFoundResponse({ description: 'Viagem, cliente ou local nao encontrados nesta empresa.' })
+  @ApiConflictResponse({ description: 'A viagem ja partiu ou esta cancelada -- planejamento encerrado.' })
+  createDeliveryStop(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Body() dto: CreateTripDeliveryStopDto,
+  ): Promise<TripDeliveryStopEntity> {
+    return this.tripDeliveryStopsService.create(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  // ==========================================================================
+  // ROTEIRIZACAO (Fase 89) -- sugestao de sequencia calculada sob demanda
+  // (nunca persistida) e aplicacao explicita, que reordena as paradas (mesmo
+  // mecanismo do reorder acima) e registra uma nova RouteVersion. Ver
+  // docs/trip-routing.md para o algoritmo/limitacoes reais desta instalacao.
+  // ==========================================================================
+  @Get(':id/delivery-stops/routing-suggestion')
+  @Roles(...TRIP_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Calcula (sem persistir) uma sequencia sugerida para as paradas/entregas da viagem, ' +
+      'comparada com a sequencia atual. distanceMeters/durationSeconds sao sempre null nesta ' +
+      'instalacao -- nenhuma coordenada geografica e capturada para Location.',
+  })
+  @ApiOkResponse({ type: TripRoutingSuggestionEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  getRoutingSuggestion(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripRoutingSuggestionEntity> {
+    return this.tripRoutingService.suggest(this.tenantContext.requireTenantId(), tripId);
+  }
+
+  @Post(':id/delivery-stops/routing-suggestion/apply')
+  @Roles(...TRIP_WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Aplica a sequencia sugerida no momento da chamada (recalculada, nunca reaproveita um ' +
+      'calculo antigo do cliente): reordena as paradas e registra uma nova RouteVersion ' +
+      '(reason=STOP_RESEQUENCE). Idempotente -- applied=false quando a sugestao ja era igual a ' +
+      'sequencia atual (nenhuma escrita). Somente enquanto a viagem ainda permite planejamento.',
+  })
+  @ApiOkResponse({ type: ApplyTripRoutingSuggestionEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  @ApiConflictResponse({ description: 'A viagem ja partiu ou esta cancelada -- planejamento encerrado.' })
+  applyRoutingSuggestion(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<ApplyTripRoutingSuggestionEntity> {
+    return this.tripRoutingService.apply(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Put(':id/delivery-stops/reorder')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Reordena as paradas/entregas da viagem. Recebe a lista COMPLETA (id + nova sequence), ' +
+      'que deve cobrir exatamente as paradas ja existentes formando 1..N sem lacunas.',
+  })
+  @ApiOkResponse({ type: TripDeliveryStopEntity, isArray: true })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  @ApiConflictResponse({ description: 'A viagem ja partiu ou esta cancelada -- planejamento encerrado.' })
+  reorderDeliveryStops(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Body() dto: ReorderTripDeliveryStopsDto,
+  ): Promise<TripDeliveryStopEntity[]> {
+    return this.tripDeliveryStopsService.reorder(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Patch(':id/delivery-stops/:stopId')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Edita cliente/local/previsao de chegada/observacoes de uma parada. Somente enquanto a ' +
+      'viagem ainda permite planejamento.',
+  })
+  @ApiOkResponse({ type: TripDeliveryStopEntity })
+  @ApiNotFoundResponse({ description: 'Viagem, parada, cliente ou local nao encontrados.' })
+  @ApiConflictResponse({ description: 'A viagem ja partiu ou esta cancelada -- planejamento encerrado.' })
+  updateDeliveryStop(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Param('stopId', ParseUUIDPipe) stopId: string,
+    @Body() dto: UpdateTripDeliveryStopDto,
+  ): Promise<TripDeliveryStopEntity> {
+    return this.tripDeliveryStopsService.update(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      stopId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Patch(':id/delivery-stops/:stopId/status')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Atualiza o status operacional da parada (PENDING -> IN_PROGRESS -> COMPLETED, ou ' +
+      'CANCELLED). Permitido enquanto a viagem nao estiver COMPLETED/CANCELLED.',
+  })
+  @ApiOkResponse({ type: TripDeliveryStopEntity })
+  @ApiNotFoundResponse({ description: 'Viagem ou parada nao encontrada.' })
+  @ApiConflictResponse({ description: 'Transicao de status invalida, ou viagem ja finalizada.' })
+  updateDeliveryStopStatus(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Param('stopId', ParseUUIDPipe) stopId: string,
+    @Body() dto: UpdateTripDeliveryStopStatusDto,
+  ): Promise<TripDeliveryStopEntity> {
+    return this.tripDeliveryStopsService.updateStatus(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      stopId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Delete(':id/delivery-stops/:stopId')
+  @Roles(...TRIP_WRITE_ROLES)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary:
+      'Remove uma parada/entrega (as demais sao renumeradas para fechar a lacuna de sequencia). ' +
+      'Somente enquanto a viagem ainda permite planejamento.',
+  })
+  @ApiNoContentResponse({ description: 'Parada removida.' })
+  @ApiNotFoundResponse({ description: 'Viagem ou parada nao encontrada.' })
+  @ApiConflictResponse({ description: 'A viagem ja partiu ou esta cancelada -- planejamento encerrado.' })
+  async removeDeliveryStop(
+    @Param('id', ParseUUIDPipe) tripId: string,
+    @Param('stopId', ParseUUIDPipe) stopId: string,
+  ): Promise<void> {
+    await this.tripDeliveryStopsService.remove(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      stopId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
   }
 
   @Get(':id/summary')

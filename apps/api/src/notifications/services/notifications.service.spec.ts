@@ -22,6 +22,7 @@ function buildPrismaMock(overrides: Record<string, unknown> = {}) {
     trip: { findMany: emptyFindMany() },
     driver: { findMany: emptyFindMany() },
     tripBilling: { findMany: emptyFindMany() },
+    contract: { findMany: emptyFindMany() },
     userAccount: { findMany: jest.fn().mockResolvedValue([]) },
     tenant: { findMany: jest.fn().mockResolvedValue([]) },
     ...overrides,

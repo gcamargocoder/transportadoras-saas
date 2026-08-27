@@ -13,27 +13,33 @@ import { FormField } from '../../../components/ui/form-field';
 import { PageHeader } from '../../../components/ui/page-header';
 import { Pagination } from '../../../components/ui/pagination';
 import { SearchInput } from '../../../components/ui/search-input';
+import { Select } from '../../../components/ui/select';
 import { useAuth } from '../../../hooks/use-auth';
 import { useDebounce } from '../../../hooks/use-debounce';
-import { CreateCustomerModal } from '../../../features/customers/create-customer-modal';
+import { CustomerFormModal } from '../../../features/customers/customer-form-modal';
 import { listCustomers } from '../../../lib/api/trips.api';
 import { TRIP_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import type { CustomerEntity } from '../../../types/entities';
 
 const PAGE_SIZE = 20;
 
+type ActiveFilter = 'all' | 'active' | 'inactive';
+
 export default function CustomersPage(): JSX.Element {
   const router = useRouter();
   const { user } = useAuth();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all');
   const [createOpen, setCreateOpen] = useState(false);
   const debouncedSearch = useDebounce(search);
 
+  const isActive = activeFilter === 'all' ? undefined : activeFilter === 'active';
+
   const query = useQuery({
-    queryKey: ['customers', { page, search: debouncedSearch }],
+    queryKey: ['customers', { page, search: debouncedSearch, isActive }],
     queryFn: ({ signal }) =>
-      listCustomers({ page, pageSize: PAGE_SIZE, search: debouncedSearch || undefined }, signal),
+      listCustomers({ page, pageSize: PAGE_SIZE, search: debouncedSearch || undefined, isActive }, signal),
   });
 
   const columns = useMemo<ColumnDef<CustomerEntity, unknown>[]>(
@@ -68,9 +74,10 @@ export default function CustomersPage(): JSX.Element {
       />
 
       <FilterBar
-        hasActiveFilters={Boolean(search)}
+        hasActiveFilters={Boolean(search) || activeFilter !== 'all'}
         onClear={() => {
           setSearch('');
+          setActiveFilter('all');
           setPage(1);
         }}
       >
@@ -83,6 +90,20 @@ export default function CustomersPage(): JSX.Element {
             }}
             placeholder="Nome do cliente..."
           />
+        </FormField>
+        <FormField label="Status" htmlFor="customer-active-filter" className="w-full sm:w-40">
+          <Select
+            id="customer-active-filter"
+            value={activeFilter}
+            onChange={(e) => {
+              setActiveFilter(e.target.value as ActiveFilter);
+              setPage(1);
+            }}
+          >
+            <option value="all">Todos</option>
+            <option value="active">Ativos</option>
+            <option value="inactive">Inativos</option>
+          </Select>
         </FormField>
       </FilterBar>
 
@@ -100,7 +121,7 @@ export default function CustomersPage(): JSX.Element {
         {query.data && <Pagination meta={query.data.meta} onPageChange={setPage} />}
       </div>
 
-      <CreateCustomerModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <CustomerFormModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   );
 }

@@ -6,17 +6,21 @@ import {
   CalendarClock,
   CircleDot,
   Container,
+  FileCheck,
+  FileText,
   Fuel,
   Gauge,
   Hammer,
   HandCoins,
   Handshake,
   History,
+  Kanban,
   Landmark,
   LayoutDashboard,
   LayoutGrid,
   ListChecks,
   Package,
+  Percent,
   ShieldAlert,
   ShieldCheck,
   Link2,
@@ -50,6 +54,9 @@ import {
   FINANCIAL_ACCOUNT_READ_ROLES,
   FINANCIAL_PERIOD_READ_ROLES,
   PAYABLE_READ_ROLES,
+  PIPELINE_READ_ROLES,
+  PROPOSAL_READ_ROLES,
+  QUOTATION_READ_ROLES,
   RECEIVABLE_READ_ROLES,
   RECONCILIATION_READ_ROLES,
   SUPER_ADMIN_ONLY,
@@ -113,6 +120,21 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Route,
         roles: TRIP_READ_ROLES,
         module: TenantModule.TRIPS,
+      },
+      // Fase 94 -- sem `module`: solicitacoes comerciais de cliente, mesmo
+      // criterio ja usado pelo CRM (Fase 93), funciona mesmo sem o modulo
+      // FREIGHT habilitado (calculo automatico cai graciosamente para
+      // manualAmount quando nao ha tabela/regra aplicavel).
+      { label: 'Cotações', href: '/quotations', icon: FileText, roles: QUOTATION_READ_ROLES },
+      // Fase 95 -- mesmo criterio (sem `module`): documento comercial
+      // formal, independente do modulo FREIGHT estar habilitado.
+      { label: 'Propostas', href: '/proposals', icon: FileCheck, roles: PROPOSAL_READ_ROLES },
+      // Fase 96 -- mesmo criterio (sem `module`).
+      {
+        label: 'Pipeline Comercial',
+        href: '/operations/commercial/pipeline',
+        icon: Kanban,
+        roles: PIPELINE_READ_ROLES,
       },
       {
         label: 'Pedágios',
@@ -212,6 +234,16 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: ArrowLeftRight,
         roles: FINANCE_READ_ROLES,
         module: TenantModule.FREIGHT,
+      },
+      // Fase 97 -- consolidacao de receita/custo real por cliente, mesmo
+      // grupo de leitura financeira (FINANCE_READ_ROLES). Sem `module`:
+      // depende so de Trip/TripRevenue/TripExpense (nucleo TRIPS), nunca do
+      // modulo FREIGHT (mesmo criterio ja usado por Quotations/Proposals/Pipeline).
+      {
+        label: 'Rentabilidade por Cliente',
+        href: '/operations/finance/customer-profitability',
+        icon: Percent,
+        roles: FINANCE_READ_ROLES,
       },
       {
         label: 'Conciliação financeira',

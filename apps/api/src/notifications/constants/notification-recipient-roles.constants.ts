@@ -38,6 +38,9 @@ export const NOTIFICATION_RECIPIENT_ROLES: Record<NotificationType, UserRole[]> 
   // Fase 70 -- grupo operacional recebe alem do motorista (directRecipientIds).
   DELIVERY_PROOF_PENDING: OPERATIONAL_ROLES,
   DELIVERY_PROOF_PROBLEM: OPERATIONAL_ROLES,
+  // Fase 98 -- renovacao de contrato e decisao comercial/gestao, mesmo
+  // grupo de BILLING_PENDING/DRIVER_SUSPENDED (nunca OPERATOR/DISPATCHER).
+  CONTRACT_EXPIRING: MANAGEMENT_ROLES,
 };
 
 // Todos os roles com PELO MENOS 1 tipo de notificacao elegivel -- usado

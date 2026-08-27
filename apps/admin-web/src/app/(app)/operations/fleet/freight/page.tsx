@@ -14,6 +14,7 @@ import { PageHeader } from '../../../../../components/ui/page-header';
 import { SkeletonCards } from '../../../../../components/ui/skeleton';
 import { StatCard } from '../../../../../components/ui/stat-card';
 import { Tabs } from '../../../../../components/ui/tabs';
+import { ContractRenewalsPanel } from '../../../../../features/freight/contract-renewals-panel';
 import { ContractsPanel } from '../../../../../features/freight/contracts-panel';
 import { FreightRulesPanel } from '../../../../../features/freight/freight-rules-panel';
 import { FreightSimulatorPanel } from '../../../../../features/freight/freight-simulator-panel';
@@ -23,7 +24,7 @@ import { listCustomers } from '../../../../../lib/api/trips.api';
 import type { FreightTableEntity } from '../../../../../types/entities';
 import { formatCurrency, formatDate } from '../../../../../utils/format';
 
-type TabValue = 'dashboard' | 'contracts' | 'tables' | 'rules' | 'simulator';
+type TabValue = 'dashboard' | 'contracts' | 'renewals' | 'tables' | 'rules' | 'simulator';
 
 export default function FreightPage(): JSX.Element {
   const [tab, setTab] = useState<TabValue>('dashboard');
@@ -49,6 +50,7 @@ export default function FreightPage(): JSX.Element {
     () => [
       { value: 'dashboard', label: 'Dashboard' },
       { value: 'contracts', label: 'Contratos' },
+      { value: 'renewals', label: 'Renovações' },
       { value: 'tables', label: 'Tabelas de frete' },
       { value: 'rules', label: 'Regras' },
       { value: 'simulator', label: 'Simulador' },
@@ -211,6 +213,7 @@ export default function FreightPage(): JSX.Element {
       )}
 
       {tab === 'contracts' && <ContractsPanel />}
+      {tab === 'renewals' && <ContractRenewalsPanel />}
       {tab === 'tables' && <FreightTablesPanel onManageRules={handleManageRules} />}
       {tab === 'rules' && <FreightRulesPanel initialTableId={rulesTableId} />}
       {tab === 'simulator' && <FreightSimulatorPanel />}

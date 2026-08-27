@@ -15,6 +15,7 @@ import { FleetOperationalIndicatorsEntity } from '../entities/fleet-operational-
 import { FleetOperationsDashboardEntity } from '../entities/fleet-operations-dashboard.entity';
 import { FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
 import { FleetDowntimeCostEntity } from '../entities/fleet-downtime-cost.entity';
+import { FleetEmptyTripsSummaryEntity } from '../entities/fleet-empty-trips-summary.entity';
 import { FleetCompositionsOverviewEntity } from '../entities/fleet-compositions-overview.entity';
 import { FleetFinancialDashboardEntity } from '../entities/fleet-financial-dashboard.entity';
 import { FleetTiresOverviewEntity } from '../entities/fleet-tires-overview.entity';
@@ -130,6 +131,19 @@ export class FleetOperationsController {
   @ApiOkResponse({ type: FleetTiresOverviewEntity })
   getTiresOverview(@Query() query: FleetOperationsQueryDto): Promise<FleetTiresOverviewEntity> {
     return this.metricsService.getTiresOverview(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('empty-trips')
+  @Roles(...FLEET_OPERATIONS_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 92 -- resumo de viagens vazias (Trip.loadStatus = EMPTY): contagem, percentual, ' +
+      'motivo/classificacao e distancia/custo somados quando ja calculados. Ver ' +
+      'GET /trips/empty-runs para a listagem detalhada e docs/trip-empty-runs.md.',
+  })
+  @ApiOkResponse({ type: FleetEmptyTripsSummaryEntity })
+  getEmptyTripsSummary(@Query() query: FleetOperationsQueryDto): Promise<FleetEmptyTripsSummaryEntity> {
+    return this.metricsService.getEmptyTripsSummary(this.tenantContext.requireTenantId(), query);
   }
 
   @Get('downtime-cost')

@@ -85,6 +85,65 @@ export interface NearbyTollPlaza {
   defaultAxles: number;
 }
 
+// Fase 88 -- paradas/entregas PLANEJADAS da viagem (sequencia/cliente/local/
+// status), distinta de TripStop abaixo (parada OPERACIONAL detectada pelo
+// app por tempo parado). Somente LEITURA nesta fase -- escrita continua
+// exclusiva do painel administrativo; navegacao/atualizacao de status pelo
+// motorista fica para fase futura. `sequence` ja reflete automaticamente
+// qualquer roteirizacao aplicada pelo escritorio (Fase 89, ver
+// docs/trip-routing.md) -- nenhum campo/endpoint novo foi necessario aqui:
+// aplicar uma sugestao apenas reordena os MESMOS registros que este tipo ja
+// espelha.
+export type TripDeliveryStopStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+
+export interface TripDeliveryStop {
+  id: string;
+  tripId: string;
+  sequence: number;
+  customerId: string | null;
+  customerName: string | null;
+  locationId: string;
+  locationName: string;
+  locationAddress: string | null;
+  status: TripDeliveryStopStatus;
+  plannedArrival: string | null;
+  notes: string | null;
+}
+
+// Fase 91 -- previsao de chegada (ETA), SEMPRE calculada sob demanda pelo
+// backend (nunca persistida) -- espelha apps/api/src/trips/entities/
+// trip-eta.entity.ts. Somente leitura nesta fase (sem GPS/navegacao no
+// app ainda).
+export type TripEtaSource = 'GEOGRAPHIC' | 'DELAY_SHIFT' | 'NONE';
+
+export interface TripDeliveryStopEta {
+  stopId: string;
+  sequence: number;
+  status: TripDeliveryStopStatus;
+  isNextStop: boolean;
+  plannedArrival: string | null;
+  estimatedArrival: string | null;
+  source: TripEtaSource;
+  basis: string | null;
+  varianceSeconds: number | null;
+  delayed: boolean | null;
+  limitation: string | null;
+}
+
+export interface TripEtaResult {
+  tripId: string;
+  generatedAt: string;
+  nextStopId: string | null;
+  tripPlannedArrival: string | null;
+  tripEstimatedArrival: string | null;
+  tripEstimatedArrivalSource: TripEtaSource;
+  tripEstimatedArrivalBasis: string | null;
+  tripVarianceSeconds: number | null;
+  tripDelayed: boolean | null;
+  stops: TripDeliveryStopEta[];
+  limitations: string[];
+}
+
 export interface TripStop {
   id: string;
   tripId: string;

@@ -33,6 +33,7 @@ import {
   getFleetOperationsCompositions,
   getFleetOperationsDashboard,
   getFleetOperationsDowntimeCost,
+  getFleetOperationsEmptyTrips,
   getFleetOperationsFuel,
   getFleetOperationsIndicators,
 } from '../../../../lib/api/fleet-operations.api';
@@ -83,6 +84,11 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
   const downtimeCostQuery = useQuery({
     queryKey: ['fleet-operations', 'downtime-cost', filters],
     queryFn: ({ signal }) => getFleetOperationsDowntimeCost(filters, signal),
+  });
+
+  const emptyTripsQuery = useQuery({
+    queryKey: ['fleet-operations', 'empty-trips', filters],
+    queryFn: ({ signal }) => getFleetOperationsEmptyTrips(filters, signal),
   });
 
   const tollsQuery = useQuery({
@@ -285,6 +291,53 @@ export default function FleetOperationsDashboardPage(): JSX.Element {
                     value={formatNumber(operationalQuery.data.delayedTrips)}
                     icon={AlertTriangle}
                     tone={operationalQuery.data.delayedTrips > 0 ? 'danger' : 'success'}
+                  />
+                </div>
+              )}
+            </Card>
+          </section>
+
+          {/* ===== Secao 3.4: Viagens vazias (Fase 92) ===== */}
+          <section>
+            <Card>
+              <CardHeader
+                title="Viagens vazias"
+                description="Viagens que já partiram com loadStatus = EMPTY (informado pelo motorista na largada)."
+                action={
+                  <Link href="/operations/fleet/empty-runs" className="text-xs font-medium text-brand-600 hover:underline">
+                    Ver detalhes →
+                  </Link>
+                }
+              />
+              {emptyTripsQuery.isLoading && (
+                <div className="p-5">
+                  <SkeletonCards count={4} />
+                </div>
+              )}
+              {emptyTripsQuery.data && (
+                <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                  <StatCard
+                    label="Viagens vazias"
+                    value={formatNumber(emptyTripsQuery.data.emptyCount)}
+                    icon={RouteIcon}
+                    tone={emptyTripsQuery.data.emptyCount > 0 ? 'warning' : 'success'}
+                  />
+                  <StatCard
+                    label="% vazias (sobre viagens com dado)"
+                    value={emptyTripsQuery.data.emptyPercent === null ? '—' : `${formatNumber(emptyTripsQuery.data.emptyPercent, 1)}%`}
+                  />
+                  <StatCard
+                    label="Sem dado informado"
+                    value={formatNumber(emptyTripsQuery.data.unknownLoadStatusCount)}
+                    icon={AlertTriangle}
+                    tone={emptyTripsQuery.data.unknownLoadStatusCount > 0 ? 'warning' : 'success'}
+                  />
+                  <StatCard
+                    label="Custo total (vazias)"
+                    value={
+                      emptyTripsQuery.data.totalCost === null ? 'Indisponível' : formatCurrency(emptyTripsQuery.data.totalCost)
+                    }
+                    icon={Wallet}
                   />
                 </div>
               )}

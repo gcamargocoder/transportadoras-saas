@@ -33,7 +33,12 @@ import { MaintenanceProvidersModule } from './maintenance-providers/maintenance-
 import { NotificationsModule } from './notifications/notifications.module';
 import { PartsModule } from './parts/parts.module';
 import { PayablesModule } from './payables/payables.module';
+import { ContractRenewalsModule } from './contract-renewals/contract-renewals.module';
+import { CustomerProfitabilityModule } from './customer-profitability/customer-profitability.module';
+import { PipelineModule } from './pipeline/pipeline.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProposalsModule } from './proposals/proposals.module';
+import { QuotationsModule } from './quotations/quotations.module';
 import { ReceivablesModule } from './receivables/receivables.module';
 import { RoutingModule } from './routing/routing.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -101,6 +106,11 @@ import { UsersModule } from './users/users.module';
     BillingModule,
     FiscalModule,
     FreightModule,
+    QuotationsModule,
+    ProposalsModule,
+    PipelineModule,
+    CustomerProfitabilityModule,
+    ContractRenewalsModule,
     BillingOperationalModule,
     ReceivablesModule,
     PayablesModule,

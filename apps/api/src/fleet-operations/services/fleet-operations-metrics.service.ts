@@ -8,6 +8,7 @@ import {
   RevenueCategory,
   TireStatus,
   TrailerType,
+  TripLoadStatus,
   TripOccurrenceSeverity,
   TripStatus,
   TripStopType,
@@ -35,6 +36,12 @@ import { OPEN_MAINTENANCE_STATUSES } from '../../fleet/utils/maintenance-status-
 import { PrismaService } from '../../prisma/prisma.service';
 import { NEAR_REPLACEMENT_THRESHOLD_MM, TiresService } from '../../tires/services/tires.service';
 import { TripStopStatus } from '../../trip-operations/entities/trip-stop.entity';
+import {
+  buildDeliveryStopCountsByTrip,
+  classifyEmptyTripReason,
+  EMPTY_DELIVERY_STOP_STATUS_COUNTS,
+  EmptyTripReason,
+} from '../../trips/utils/empty-trip.util';
 import {
   CONSUMPTION_OUTLIER_MULTIPLIER,
   COST_OUTLIER_MULTIPLIER,
@@ -79,6 +86,10 @@ import {
   FleetRevenuePerHourEntity,
   FleetVehicleDowntimeCostEntity,
 } from '../entities/fleet-downtime-cost.entity';
+import {
+  FleetEmptyTripsReasonBreakdownEntity,
+  FleetEmptyTripsSummaryEntity,
+} from '../entities/fleet-empty-trips-summary.entity';
 import {
   FleetFuelAnalyticsEntity,
   FleetFuelCostPerKmEntity,
@@ -2149,6 +2160,96 @@ export class FleetOperationsMetricsService {
     if (periodMinutes <= 0) return null;
     const capacityMinutes = periodMinutes * activeVehiclesCount;
     return ((sumActualDurationMin ?? 0) / capacityMinutes) * 100;
+  }
+
+  // ==========================================================================
+  // VIAGENS VAZIAS (Fase 92) -- resumo para o card do dashboard operacional.
+  // Reaproveita buildTripWhere (mesmo escopo tenant/veiculo/frota de
+  // computeOperationalIndicators acima) + a MESMA regra de classificacao de
+  // apps/api/src/trips/utils/empty-trip.util.ts usada pela listagem
+  // (GET /trips/empty-runs, EmptyTripsService) -- nenhuma consulta nem regra
+  // duplicada. "Vazia" e SEMPRE Trip.loadStatus = EMPTY (informado pelo
+  // motorista na largada, Fase 27); nunca inferido de ausencia de cliente/
+  // entrega (regra 2). O filtro de periodo desta secao usa actualDeparture
+  // (partida REAL) -- diferente de buildTripMetricsWhere acima, que usa
+  // createdAt -- porque so faz sentido falar em "viagem vazia" depois que
+  // ela de fato partiu (loadStatus nunca existe antes disso).
+  // ==========================================================================
+  async getEmptyTripsSummary(tenantId: string, query: FleetOperationsQueryDto): Promise<FleetEmptyTripsSummaryEntity> {
+    const filters = this.parseFilters(query);
+    const departedWhere: Prisma.TripWhereInput = {
+      ...this.buildTripWhere(tenantId, filters, undefined),
+      actualDeparture: { not: null, ...this.dateRangeFilter(filters) },
+      ...compact({ driverId: filters.driverId }),
+    };
+
+    const [loadedCount, emptyCount, unknownLoadStatusCount, emptyTripRows] = await Promise.all([
+      this.prisma.trip.count({ where: { ...departedWhere, loadStatus: TripLoadStatus.LOADED } }),
+      this.prisma.trip.count({ where: { ...departedWhere, loadStatus: TripLoadStatus.EMPTY } }),
+      this.prisma.trip.count({ where: { ...departedWhere, loadStatus: null } }),
+      this.prisma.trip.findMany({ where: { ...departedWhere, loadStatus: TripLoadStatus.EMPTY }, select: { id: true } }),
+    ]);
+
+    const emptyTripIds = emptyTripRows.map((t) => t.id);
+    const [stopCountRows, metricsRows] = await Promise.all([
+      emptyTripIds.length > 0
+        ? this.prisma.tripDeliveryStop.groupBy({
+            by: ['tripId', 'status'],
+            where: { tenantId, tripId: { in: emptyTripIds } },
+            _count: true,
+          })
+        : Promise.resolve([]),
+      emptyTripIds.length > 0
+        ? this.prisma.tripMetrics.findMany({
+            where: { tenantId, tripId: { in: emptyTripIds } },
+            select: { actualDistanceKm: true, actualTotalCost: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const stopCountsByTrip = buildDeliveryStopCountsByTrip(
+      stopCountRows.map((row) => ({ tripId: row.tripId, status: row.status, _count: row._count })),
+    );
+    const reasonCounts = new Map<EmptyTripReason, number>();
+    for (const tripId of emptyTripIds) {
+      const reason = classifyEmptyTripReason(stopCountsByTrip.get(tripId) ?? EMPTY_DELIVERY_STOP_STATUS_COUNTS);
+      reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+    }
+
+    let totalDistanceKm = 0;
+    let tripsWithDistanceCount = 0;
+    let totalCost = 0;
+    let tripsWithCostCount = 0;
+    for (const metrics of metricsRows) {
+      const distance = toNumberOrNull(metrics.actualDistanceKm);
+      if (distance !== null) {
+        totalDistanceKm += distance;
+        tripsWithDistanceCount += 1;
+      }
+      const cost = toNumberOrNull(metrics.actualTotalCost);
+      if (cost !== null) {
+        totalCost += cost;
+        tripsWithCostCount += 1;
+      }
+    }
+
+    const entity = new FleetEmptyTripsSummaryEntity();
+    entity.totalDepartedTrips = loadedCount + emptyCount + unknownLoadStatusCount;
+    entity.loadedCount = loadedCount;
+    entity.emptyCount = emptyCount;
+    entity.unknownLoadStatusCount = unknownLoadStatusCount;
+    entity.emptyPercent = safeAverage(emptyCount * 100, loadedCount + emptyCount);
+    entity.reasonBreakdown = Array.from(reasonCounts.entries()).map(([reason, count]) => {
+      const row = new FleetEmptyTripsReasonBreakdownEntity();
+      row.reason = reason;
+      row.count = count;
+      return row;
+    });
+    entity.totalDistanceKm = tripsWithDistanceCount > 0 ? totalDistanceKm : null;
+    entity.totalCost = tripsWithCostCount > 0 ? totalCost : null;
+    entity.tripsWithDistanceCount = tripsWithDistanceCount;
+    entity.tripsWithCostCount = tripsWithCostCount;
+    return entity;
   }
 
   // ==========================================================================

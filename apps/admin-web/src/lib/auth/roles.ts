@@ -70,6 +70,19 @@ export const FISCAL_DOCUMENT_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
 export const FREIGHT_READ_ROLES = OPERATIONAL_READ_ROLES;
 export const FREIGHT_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
 
+// Fase 94 -- Cotacoes: mesmo grupo operacional do modulo Freight (do qual
+// reaproveita o motor de precificacao).
+export const QUOTATION_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const QUOTATION_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
+// Fase 95 -- Propostas: mesmo grupo operacional/comercial de Freight/Quotations.
+export const PROPOSAL_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const PROPOSAL_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
+// Fase 96 -- Pipeline Comercial: mesmo grupo operacional/comercial.
+export const PIPELINE_READ_ROLES = OPERATIONAL_READ_ROLES;
+export const PIPELINE_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;
+
 // Fase 60 -- mesmo grupo operacional do modulo Freight.
 export const BILLING_READ_ROLES = OPERATIONAL_READ_ROLES;
 export const BILLING_WRITE_ROLES = OPERATIONAL_WRITE_ROLES;

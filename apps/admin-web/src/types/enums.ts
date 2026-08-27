@@ -238,6 +238,8 @@ export const RouteVersionReason = {
   ROADWORK: 'ROADWORK',
   INTERDICTION: 'INTERDICTION',
   DESTINATION_CHANGE: 'DESTINATION_CHANGE',
+  // Fase 89 -- sugestao de sequencia de paradas/entregas aplicada.
+  STOP_RESEQUENCE: 'STOP_RESEQUENCE',
 } as const;
 export type RouteVersionReason = (typeof RouteVersionReason)[keyof typeof RouteVersionReason];
 
@@ -407,6 +409,26 @@ export const TripStopStatus = {
   CANCELLED: 'CANCELLED',
 } as const;
 export type TripStopStatus = (typeof TripStopStatus)[keyof typeof TripStopStatus];
+
+// Fase 88 -- status operacional da parada/entrega PLANEJADA (distinto de
+// TripStopStatus acima, que e das paradas OPERACIONAIS do app do motorista).
+export const TripDeliveryStopStatus = {
+  PENDING: 'PENDING',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type TripDeliveryStopStatus = (typeof TripDeliveryStopStatus)[keyof typeof TripDeliveryStopStatus];
+
+// Fase 91 -- de onde veio a previsao de chegada (ETA). GEOGRAPHIC: RoutePlan
+// + GPS real. DELAY_SHIFT: planejado deslocado pelo atraso real de partida.
+// NONE: sem dado suficiente.
+export const TripEtaSource = {
+  GEOGRAPHIC: 'GEOGRAPHIC',
+  DELAY_SHIFT: 'DELAY_SHIFT',
+  NONE: 'NONE',
+} as const;
+export type TripEtaSource = (typeof TripEtaSource)[keyof typeof TripEtaSource];
 
 export const AxleEventSource = {
   DRIVER_INPUT: 'DRIVER_INPUT',
@@ -611,6 +633,14 @@ export const ContractStatus = {
 } as const;
 export type ContractStatus = (typeof ContractStatus)[keyof typeof ContractStatus];
 
+// Fase 98 -- Renovacao de Contratos.
+export const ContractRenewalStatus = {
+  PENDING: 'PENDING',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type ContractRenewalStatus = (typeof ContractRenewalStatus)[keyof typeof ContractRenewalStatus];
+
 export const FreightTableStatus = {
   DRAFT: 'DRAFT',
   ACTIVE: 'ACTIVE',
@@ -627,6 +657,38 @@ export const FreightRuleStatus = {
   ARCHIVED: 'ARCHIVED',
 } as const;
 export type FreightRuleStatus = (typeof FreightRuleStatus)[keyof typeof FreightRuleStatus];
+
+// Fase 94 -- Cotacoes. REJECTED/CONVERTED/CANCELLED sao finais (nem
+// conteudo nem status mudam depois). CONVERTED so e definido via
+// POST /quotations/:id/convert-to-trip, nunca diretamente.
+export const QuotationStatus = {
+  DRAFT: 'DRAFT',
+  SENT: 'SENT',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED',
+  CONVERTED: 'CONVERTED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type QuotationStatus = (typeof QuotationStatus)[keyof typeof QuotationStatus];
+
+export const QuotationAmountSource = {
+  CALCULATED: 'CALCULATED',
+  MANUAL: 'MANUAL',
+} as const;
+export type QuotationAmountSource = (typeof QuotationAmountSource)[keyof typeof QuotationAmountSource];
+
+// Fase 95 -- Propostas. Unico estado com conteudo editavel e DRAFT. SENT em
+// diante ja bloqueia conteudo; ACCEPTED/REJECTED/EXPIRED/CANCELLED sao
+// terminais tambem para o status.
+export const ProposalStatus = {
+  DRAFT: 'DRAFT',
+  SENT: 'SENT',
+  ACCEPTED: 'ACCEPTED',
+  REJECTED: 'REJECTED',
+  EXPIRED: 'EXPIRED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type ProposalStatus = (typeof ProposalStatus)[keyof typeof ProposalStatus];
 
 // Fase 60 -- Faturamento Operacional e Conciliacao Comercial. PAID/
 // CANCELLED sao sempre transicoes manuais explicitas -- as demais sao

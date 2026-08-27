@@ -13,6 +13,15 @@ export class CustomerEntity {
   @ApiProperty({ nullable: true })
   document!: string | null;
 
+  @ApiProperty({ nullable: true })
+  phone!: string | null;
+
+  @ApiProperty({ nullable: true })
+  email!: string | null;
+
+  @ApiProperty({ nullable: true })
+  address!: string | null;
+
   @ApiProperty()
   isActive!: boolean;
 

@@ -11,6 +11,7 @@ import type {
   ChecklistItemType,
   ChecklistTemplateStatus,
   ChecklistType,
+  ContractRenewalStatus,
   ContractStatus,
   DeliveryProofStatus,
   DocumentType,
@@ -40,6 +41,9 @@ import type {
   PartStockMovementType,
   PayableEffectiveStatus,
   PaymentType,
+  ProposalStatus,
+  QuotationAmountSource,
+  QuotationStatus,
   ReceivableEffectiveStatus,
   ReceivablePaymentMethod,
   RevenueCategory,
@@ -65,6 +69,8 @@ import type {
   TripLoadStatus,
   TripPriority,
   TripStatus,
+  TripDeliveryStopStatus,
+  TripEtaSource,
   TripStopSource,
   TripStopStatus,
   TripStopType,
@@ -607,9 +613,56 @@ export interface CustomerEntity {
   tenantId: string;
   name: string;
   document: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 93 -- CRM: pessoas de contato do cliente.
+export interface CustomerContactEntity {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  name: string;
+  role: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 93 -- CRM: observacoes/interacoes comerciais (append-only).
+export interface CustomerNoteEntity {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  content: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+// Fase 93 -- CRM: indicadores basicos, NAO financeiros (ver
+// CustomerSummaryEntity no backend).
+export interface CustomerTripsByStatusEntity {
+  status: TripStatus;
+  count: number;
+}
+
+export interface CustomerSummaryEntity {
+  customerId: string;
+  tripsTotal: number;
+  tripsByStatus: CustomerTripsByStatusEntity[];
+  firstTripAt: string | null;
+  lastTripAt: string | null;
+  contactsCount: number;
+  notesCount: number;
+  contractsTotal: number;
+  activeContractsCount: number;
 }
 
 export interface LocationEntity {
@@ -1738,6 +1791,54 @@ export interface FleetOperationalIndicatorsEntity {
   topVehiclesByTripCount: FleetVehicleRankingEntryEntity[];
 }
 
+// Fase 92 -- viagens vazias (Trip.loadStatus = EMPTY). NOTA: ao contrario do
+// que o comentario acima (Fase 41) registrava, TripMetrics.actualDistanceKm/
+// actualTotalCost SAO escritos desde a Fase 66 (TripsService, ao concluir a
+// viagem com hodometro final) -- usados abaixo. Ver docs/trip-empty-runs.md.
+export type EmptyTripReason =
+  | 'NO_DELIVERIES_PLANNED'
+  | 'ALL_DELIVERIES_CANCELLED'
+  | 'DELIVERIES_INCOMPLETE'
+  | 'COMPLETED_DELIVERIES_INCONSISTENT';
+
+export interface EmptyTripEntity {
+  id: string;
+  status: TripStatus;
+  plannedDeparture: string | null;
+  actualDeparture: string | null;
+  actualArrival: string | null;
+  originName: string;
+  destinationName: string;
+  vehicleId: string | null;
+  vehiclePlate: string | null;
+  driverId: string | null;
+  driverName: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  reason: EmptyTripReason;
+  hasDeliveryStops: boolean;
+  distanceKm: number | null;
+  totalCost: number | null;
+}
+
+export interface FleetEmptyTripsReasonBreakdownEntity {
+  reason: EmptyTripReason;
+  count: number;
+}
+
+export interface FleetEmptyTripsSummaryEntity {
+  totalDepartedTrips: number;
+  loadedCount: number;
+  emptyCount: number;
+  unknownLoadStatusCount: number;
+  emptyPercent: number | null;
+  reasonBreakdown: FleetEmptyTripsReasonBreakdownEntity[];
+  totalDistanceKm: number | null;
+  totalCost: number | null;
+  tripsWithDistanceCount: number;
+  tripsWithCostCount: number;
+}
+
 // Fase 41 -- camada de alertas computada em memoria, nunca persistida (ver
 // backend fleet-operations/entities/fleet-alert.entity.ts).
 export type FleetAlertType =
@@ -2198,6 +2299,124 @@ export interface TripOccurrenceEntity {
   updatedAt: string;
 }
 
+// Fase 88 -- espelha apps/api/src/trips/entities/trip-delivery-stop.entity.ts.
+// Parada/entrega PLANEJADA (sequencia/cliente/local/status), distinta de
+// TripStopEntity acima (parada OPERACIONAL do app do motorista).
+export interface TripDeliveryStopEntity {
+  id: string;
+  tripId: string;
+  sequence: number;
+  customerId: string | null;
+  customerName: string | null;
+  locationId: string;
+  locationName: string;
+  locationAddress: string | null;
+  status: TripDeliveryStopStatus;
+  plannedArrival: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 91 -- espelha apps/api/src/trips/entities/trip-eta.entity.ts. SEMPRE
+// calculada sob demanda pelo backend -- nunca persistida, nunca inventada
+// no frontend.
+export interface TripDeliveryStopEtaEntity {
+  stopId: string;
+  sequence: number;
+  status: TripDeliveryStopStatus;
+  isNextStop: boolean;
+  plannedArrival: string | null;
+  estimatedArrival: string | null;
+  source: TripEtaSource;
+  basis: string | null;
+  varianceSeconds: number | null;
+  delayed: boolean | null;
+  limitation: string | null;
+}
+
+export interface TripEtaResultEntity {
+  tripId: string;
+  generatedAt: string;
+  nextStopId: string | null;
+  tripPlannedArrival: string | null;
+  tripEstimatedArrival: string | null;
+  tripEstimatedArrivalSource: TripEtaSource;
+  tripEstimatedArrivalBasis: string | null;
+  tripVarianceSeconds: number | null;
+  tripDelayed: boolean | null;
+  stops: TripDeliveryStopEtaEntity[];
+  limitations: string[];
+}
+
+// Fase 89 -- espelha apps/api/src/trips/entities/trip-routing-suggestion.entity.ts.
+// distanceMeters/durationSeconds sempre null nesta instalacao (ver
+// docs/trip-routing.md) -- nunca inventados no frontend.
+export interface TripRoutingSuggestionItemEntity {
+  stopId: string;
+  currentSequence: number;
+  suggestedSequence: number;
+  customerName: string | null;
+  locationName: string;
+  locationAddress: string | null;
+  plannedArrival: string | null;
+  hasAddress: boolean;
+}
+
+export interface TripRoutingSuggestionEntity {
+  tripId: string;
+  generatedAt: string;
+  changed: boolean;
+  items: TripRoutingSuggestionItemEntity[];
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  routingProviderConfigured: boolean;
+  limitations: string[];
+}
+
+export interface ApplyTripRoutingSuggestionEntity {
+  applied: boolean;
+  routeVersionId: string | null;
+  routeVersionNumber: number | null;
+}
+
+// Fase 90 -- espelha apps/api/src/trips/entities/fleet-optimization.entity.ts.
+// Um candidato e sempre um PAR (composicao de frota + motorista) -- "aplicar"
+// e o PATCH /trips/:id ja existente (compositionId/driverId), nunca um
+// endpoint novo.
+export interface FleetOptimizationCandidateEntity {
+  compositionId: string;
+  vehicleId: string;
+  vehiclePlate: string;
+  vehicleType: VehicleType;
+  vehicleCategory: string | null;
+  cargoCapacityKg: number | null;
+  totalAxles: number | null;
+  driverId: string;
+  driverName: string;
+  driverCnhCategory: string;
+  vehicleAvailable: boolean;
+  driverAvailable: boolean;
+  available: boolean;
+  isCurrentSelection: boolean;
+  hasCurrentDriverVehicleAssignment: boolean;
+  score: number;
+  rank: number | null;
+  restrictions: string[];
+  justification: string;
+}
+
+export interface FleetOptimizationResultEntity {
+  tripId: string;
+  generatedAt: string;
+  candidates: FleetOptimizationCandidateEntity[];
+  availableCompositionsCount: number;
+  availableDriversCount: number;
+  totalCompositionsConsidered: number;
+  totalDriversConsidered: number;
+  limitations: string[];
+}
+
 // Fase 67 -- espelha apps/api/src/trip-operations/entities/driver-shift.entity.ts.
 // type reaproveita TripStopType (REST/MEAL/FUEL/MAINTENANCE/OTHER).
 export interface ShiftBreakEntity {
@@ -2607,6 +2826,57 @@ export interface ContractEntity {
   updatedAt: string;
 }
 
+// ============================================================================
+// Fase 98 -- Renovacao de Contratos.
+// ============================================================================
+
+export interface ContractRenewalEntity {
+  id: string;
+  tenantId: string;
+  previousContractId: string;
+  previousContractCode: string | null;
+  customerId: string;
+  customerName: string | null;
+  newContractId: string | null;
+  newContractCode: string | null;
+  status: ContractRenewalStatus;
+  previousEndDate: string | null;
+  newStartDate: string | null;
+  newEndDate: string | null;
+  notes: string | null;
+  initiatedBy: string;
+  initiatorName: string | null;
+  initiatedAt: string;
+  completedBy: string | null;
+  completerName: string | null;
+  completedAt: string | null;
+  cancelledBy: string | null;
+  cancellerName: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ContractExpiryStatus = 'EXPIRING_SOON' | 'EXPIRED';
+
+export interface RenewalExpiringContractEntity {
+  contractId: string;
+  code: string;
+  customerId: string;
+  customerName: string;
+  endDate: string;
+  daysUntilExpiry: number;
+  expiryStatus: ContractExpiryStatus;
+  hasActiveRenewal: boolean;
+  activeRenewalId: string | null;
+}
+
+export interface ContractRenewalSummaryEntity {
+  expiringCount: number;
+  expiredCount: number;
+  pendingRenewalsCount: number;
+}
+
 export interface FreightTableEntity {
   id: string;
   tenantId: string;
@@ -2716,6 +2986,178 @@ export interface TripFreightEntity {
   updaterName: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 94 -- Cotacoes: solicitacao de transporte de um cliente, ANTES de
+// existir uma Trip. Valor/breakdown sao sempre um snapshot (nunca
+// recalculados retroativamente quando a FreightTable/FreightRule de
+// origem muda depois).
+export interface QuotationEntity {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  customerName: string | null;
+  customerContactId: string | null;
+  customerContactName: string | null;
+  originLocationId: string;
+  originLocationName: string | null;
+  destinationLocationId: string;
+  destinationLocationName: string | null;
+  cargoType: string | null;
+  weightKg: number | null;
+  cubageM3: number | null;
+  vehicleType: VehicleType | null;
+  conditions: string | null;
+  status: QuotationStatus;
+  validUntil: string;
+  expired: boolean;
+  amountSource: QuotationAmountSource;
+  amount: number;
+  freightTableId: string | null;
+  freightTableName: string | null;
+  freightRuleId: string | null;
+  freightRuleVersion: number | null;
+  baseAmount: number | null;
+  additionsAmount: number | null;
+  tollAmount: number | null;
+  feesAmount: number | null;
+  calculatedAmount: number | null;
+  calculationInput: Record<string, unknown> | null;
+  convertedTripId: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 95 -- Propostas: documento comercial formal ao cliente, distinto da
+// Quotation (Fase 94). Valor/condicoes sao sempre um snapshot (nunca
+// recalculados depois de emitida).
+export interface ProposalEntity {
+  id: string;
+  tenantId: string;
+  number: number;
+  customerId: string;
+  customerName: string | null;
+  quotationId: string | null;
+  quotationOriginLocationName: string | null;
+  quotationDestinationLocationName: string | null;
+  status: ProposalStatus;
+  totalAmount: number;
+  commercialConditions: string | null;
+  notes: string | null;
+  issuedAt: string;
+  validUntil: string;
+  expired: boolean;
+  decidedAt: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 96 -- Pipeline Comercial. Estagio CONFIGURAVEL POR TENANT (nao e um
+// enum fixo como QuotationStatus/ProposalStatus).
+export interface PipelineStageEntity {
+  id: string;
+  tenantId: string;
+  name: string;
+  order: number;
+  isWon: boolean;
+  isLost: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PipelineOpportunityEntity {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  customerName: string | null;
+  quotationId: string | null;
+  proposalId: string | null;
+  proposalNumber: number | null;
+  stageId: string;
+  stageName: string | null;
+  stageIsWon: boolean | null;
+  stageIsLost: boolean | null;
+  title: string | null;
+  estimatedValue: number | null;
+  notes: string | null;
+  lostReason: string | null;
+  wonAt: string | null;
+  lostAt: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  updatedBy: string | null;
+  updaterName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PipelineBoardColumnEntity {
+  stage: PipelineStageEntity;
+  totalCount: number;
+  totalEstimatedValue: number;
+  opportunities: PipelineOpportunityEntity[];
+}
+
+export interface PipelineBoardEntity {
+  columns: PipelineBoardColumnEntity[];
+}
+
+export interface PipelineDashboardStageBreakdownEntity {
+  stageId: string;
+  stageName: string;
+  isWon: boolean;
+  isLost: boolean;
+  count: number;
+  estimatedValue: number;
+}
+
+export interface PipelineDashboardEntity {
+  openCount: number;
+  openEstimatedValue: number;
+  wonCount: number;
+  wonEstimatedValue: number;
+  lostCount: number;
+  lostEstimatedValue: number;
+  conversionRate: number;
+  byStage: PipelineDashboardStageBreakdownEntity[];
+}
+
+// Fase 97 -- Rentabilidade por Cliente. Sempre calculado ao vivo (nunca
+// persistido); revenue = TripRevenue.amount, cost = TripExpense(APPROVED) +
+// FuelSupply + TollTransaction (mesma metodologia de
+// TripSettlementsService.getFinancialDashboard).
+export interface CustomerProfitabilityEntity {
+  customerId: string;
+  customerName: string;
+  tripsCount: number;
+  revenue: number;
+  cost: number;
+  result: number;
+  marginPercent: number | null;
+}
+
+export interface CustomerProfitabilitySummaryEntity {
+  totalRevenue: number;
+  totalCost: number;
+  totalResult: number;
+  marginPercent: number | null;
+  tripsCount: number;
+  customersCount: number;
+}
+
+export interface CustomerProfitabilityDashboardEntity {
+  summary: CustomerProfitabilitySummaryEntity;
+  topByResult: CustomerProfitabilityEntity[];
+  topByMargin: CustomerProfitabilityEntity[];
 }
 
 // Reaproveita o financeiro da viagem (Fase 51) -- nenhum custo recalculado

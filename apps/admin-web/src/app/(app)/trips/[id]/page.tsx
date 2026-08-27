@@ -19,9 +19,11 @@ import { TRIP_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { TRIP_STATUS_TONE } from '../../../../features/trips/status';
 import { UpdateTripPlanModal } from '../../../../features/trips/update-trip-plan-modal';
 import { AdvancesTab } from '../../../../features/trips/tabs/advances-tab';
+import { DeliveryStopsTab } from '../../../../features/trips/tabs/delivery-stops-tab';
 import { ExpensesTab } from '../../../../features/trips/tabs/expenses-tab';
 import { FinancialTab } from '../../../../features/trips/tabs/financial-tab';
 import { FiscalTab } from '../../../../features/trips/tabs/fiscal-tab';
+import { FleetOptimizationTab } from '../../../../features/trips/tabs/fleet-optimization-tab';
 import { FreightTab } from '../../../../features/trips/tabs/freight-tab';
 import { OccurrencesTab } from '../../../../features/trips/tabs/occurrences-tab';
 import { OperacaoTab } from '../../../../features/trips/tabs/operacao-tab';
@@ -37,6 +39,8 @@ import { TRIP_STATUS_LABELS } from '../../../../lib/labels';
 type TabValue =
   | 'overview'
   | 'timeline'
+  | 'fleet-optimization'
+  | 'delivery-stops'
   | 'occurrences'
   | 'shifts'
   | 'rota'
@@ -90,6 +94,13 @@ export default function TripDetailPage(): JSX.Element {
   const canWrite = hasRole(user?.role, TRIP_WRITE_ROLES);
   const canEditPlan = canWrite && trip.status === 'PLANNED';
   const canCancel = canWrite && !TERMINAL_STATUSES.includes(trip.status);
+  // Fase 88 -- paradas/entregas planejadas so podem ser adicionadas/editadas/
+  // removidas/reordenadas enquanto a viagem ainda nao partiu de fato (mesmo
+  // criterio de TripDeliveryStopsService.assertPlanningAllowed no backend);
+  // o status de progresso de cada parada continua editavel ate a viagem
+  // chegar a um estado terminal.
+  const planningAllowed = trip.status !== 'CANCELLED' && !trip.actualDeparture;
+  const tripFinished = TERMINAL_STATUSES.includes(trip.status);
 
   return (
     <div>
@@ -123,6 +134,8 @@ export default function TripDetailPage(): JSX.Element {
         tabs={[
           { value: 'overview', label: 'Visão geral' },
           { value: 'timeline', label: 'Linha do tempo' },
+          { value: 'fleet-optimization', label: 'Otimização de frota' },
+          { value: 'delivery-stops', label: 'Paradas/Entregas' },
           { value: 'occurrences', label: 'Ocorrências' },
           { value: 'shifts', label: 'Jornada' },
           { value: 'rota', label: 'Rota planejada' },
@@ -143,6 +156,10 @@ export default function TripDetailPage(): JSX.Element {
       <div className="mt-4 overflow-hidden rounded-lg border border-border bg-white">
         {tab === 'overview' && <OverviewTab trip={trip} />}
         {tab === 'timeline' && <TimelineTab tripId={trip.id} />}
+        {tab === 'fleet-optimization' && <FleetOptimizationTab tripId={trip.id} canApply={canEditPlan} />}
+        {tab === 'delivery-stops' && (
+          <DeliveryStopsTab tripId={trip.id} planningAllowed={planningAllowed} tripFinished={tripFinished} />
+        )}
         {tab === 'occurrences' && <OccurrencesTab tripId={trip.id} />}
         {tab === 'shifts' && <ShiftsTab tripId={trip.id} />}
         {tab === 'rota' && <RotaTab tripId={trip.id} />}

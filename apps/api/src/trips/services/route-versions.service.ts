@@ -5,8 +5,10 @@ import { toRouteVersionEntity } from '../mappers/route-version.mapper';
 import { TripsService } from './trips.service';
 
 // Somente leitura -- RouteVersion e imutavel (ver comentario no schema).
-// Nesta fase existe sempre exatamente 1 versao (INITIAL, criada junto com
-// a viagem). Replanejamento (fase futura) anexara novas versoes aqui.
+// Toda viagem nasce com exatamente 1 versao (INITIAL, criada junto com a
+// viagem). A partir da Fase 89, aplicar uma sugestao de roteirizacao de
+// paradas (TripRoutingService.apply) anexa uma nova versao (reason=
+// STOP_RESEQUENCE) -- nunca edita uma existente.
 @Injectable()
 export class RouteVersionsService {
   constructor(

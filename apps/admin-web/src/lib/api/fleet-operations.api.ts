@@ -2,6 +2,7 @@ import type { QueryableParams } from '../../types/api';
 import type {
   FleetCostsEntity,
   FleetCompositionsOverviewEntity,
+  FleetEmptyTripsSummaryEntity,
   FleetFinancialDashboardEntity,
   FleetFuelAnalyticsEntity,
   FleetMaintenanceDashboardEntity,
@@ -102,6 +103,13 @@ export function getFleetOperationsTires(query: FleetOperationsQuery = {}, signal
 // parado em si respeita o periodo).
 export function getFleetOperationsDowntimeCost(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
   return api.get<FleetDowntimeCostEntity>('/fleet-operations/downtime-cost', query, signal);
+}
+
+// Fase 92 -- resumo de viagens vazias (Trip.loadStatus = EMPTY). Listagem
+// detalhada/filtrada fica em listEmptyTrips (lib/api/trips.api.ts,
+// GET /trips/empty-runs).
+export function getFleetOperationsEmptyTrips(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetEmptyTripsSummaryEntity>('/fleet-operations/empty-trips', query, signal);
 }
 
 // Uso de veiculo+carreta por viagem: composicao atual da frota de carretas

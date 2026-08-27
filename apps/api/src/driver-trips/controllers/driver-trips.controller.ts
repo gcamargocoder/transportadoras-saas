@@ -34,6 +34,10 @@ import { MulterExceptionFilter } from '../../toll-import/filters/multer-exceptio
 import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entity';
 import { TrackingPointsSyncResultEntity } from '../../trip-operations/entities/tracking-point.entity';
 import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
+import { TripDeliveryStopEntity } from '../../trips/entities/trip-delivery-stop.entity';
+import { TripEtaResultEntity } from '../../trips/entities/trip-eta.entity';
+import { TripDeliveryStopsService } from '../../trips/services/trip-delivery-stops.service';
+import { TripEtaService } from '../../trips/services/trip-eta.service';
 import { DriverShiftEntity } from '../../trip-operations/entities/driver-shift.entity';
 import { TripOccurrenceEntity } from '../../trip-operations/entities/trip-occurrence.entity';
 import { CloseAxleEventDto } from '../../trip-operations/dto/close-axle-event.dto';
@@ -94,6 +98,8 @@ export class DriverTripsController {
     private readonly axleEventsService: AxleEventsService,
     private readonly trackingPointsService: TrackingPointsService,
     private readonly tripOccurrencesService: TripOccurrencesService,
+    private readonly tripDeliveryStopsService: TripDeliveryStopsService,
+    private readonly tripEtaService: TripEtaService,
     private readonly driverShiftsService: DriverShiftsService,
     private readonly fuelSuppliesService: FuelSuppliesService,
     private readonly routingService: RoutingService,
@@ -382,6 +388,37 @@ export class DriverTripsController {
     const tenantId = this.tenantContext.requireTenantId();
     await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
     return this.tripOccurrencesService.findAllForTrip(tenantId, id, {});
+  }
+
+  // ==========================================================================
+  // PARADAS/ENTREGAS PLANEJADAS (Fase 88) -- somente LEITURA para o Driver
+  // App: reaproveita o MESMO TripDeliveryStopsService do admin (nenhuma
+  // consulta paralela). Escrita (adicionar/editar/remover/reordenar/mudar
+  // status) continua exclusiva do TripsController administrativo nesta fase
+  // -- navegacao/atualizacao de status pelo motorista fica para fase futura.
+  // ==========================================================================
+  @Get('trips/:id/delivery-stops')
+  @ApiOperation({ summary: 'Lista as paradas/entregas planejadas desta viagem, em ordem de sequencia.' })
+  @ApiOkResponse({ type: TripDeliveryStopEntity, isArray: true })
+  async findDeliveryStops(@Param('id', ParseUUIDPipe) id: string): Promise<TripDeliveryStopEntity[]> {
+    const tenantId = this.tenantContext.requireTenantId();
+    await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
+    return this.tripDeliveryStopsService.findAllForTrip(tenantId, id);
+  }
+
+  // Fase 91 -- previsao de chegada (ETA), somente leitura, MESMO
+  // TripEtaService do admin (nenhum motor de calculo paralelo). Sem tela
+  // nova nesta fase -- so a leitura fica pronta para o app consumir.
+  @Get('trips/:id/delivery-stops/eta')
+  @ApiOperation({
+    summary:
+      'Previsao de chegada (ETA) do destino final e de cada parada/entrega planejada desta viagem.',
+  })
+  @ApiOkResponse({ type: TripEtaResultEntity })
+  async getEta(@Param('id', ParseUUIDPipe) id: string): Promise<TripEtaResultEntity> {
+    const tenantId = this.tenantContext.requireTenantId();
+    await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
+    return this.tripEtaService.compute(tenantId, id);
   }
 
   // ==========================================================================
