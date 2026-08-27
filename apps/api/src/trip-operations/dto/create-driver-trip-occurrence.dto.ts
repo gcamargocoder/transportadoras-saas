@@ -15,6 +15,13 @@ export class CreateDriverTripOccurrenceDto {
   @IsEnum(TripOccurrenceType, { message: 'type invalido.' })
   type!: TripOccurrenceType;
 
+  // Fase 101 -- parada/entrega especifica desta viagem, quando aplicavel.
+  // Validado no service (deve pertencer a esta viagem).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Parada/entrega especifica (TripDeliveryStop) desta viagem.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'tripDeliveryStopId deve ser um UUID valido.' })
+  tripDeliveryStopId?: string;
+
   @ApiPropertyOptional({ enum: TripOccurrenceSeverity, default: TripOccurrenceSeverity.INFO })
   @IsOptional()
   @IsEnum(TripOccurrenceSeverity, { message: 'severity invalido.' })

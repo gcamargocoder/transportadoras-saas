@@ -257,6 +257,11 @@ export function FiscalTab({ tripId }: { tripId: string }): JSX.Element {
                       </span>
                     </span>
                     <span className="flex shrink-0 items-center gap-1.5">
+                      {d.tripDeliveryStopId ? (
+                        <Badge tone="brand">Parada #{d.tripDeliveryStopSequence ?? '?'}</Badge>
+                      ) : (
+                        <Badge tone="neutral">Sem parada vinculada</Badge>
+                      )}
                       {d.validationIssues.length > 0 && <Badge tone="danger">{d.validationIssues.length} problema(s)</Badge>}
                       <Badge tone={FISCAL_DOCUMENT_STATUS_TONE[d.status]}>{FISCAL_DOCUMENT_STATUS_LABELS[d.status]}</Badge>
                     </span>

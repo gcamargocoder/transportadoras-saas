@@ -65,6 +65,22 @@ export class UploadFiscalDocumentDto {
   @IsUUID('4', { message: 'tripId deve ser um UUID valido.' })
   tripId?: string;
 
+  // Fase 100 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  // Exige tripId informado no mesmo request e que a parada esteja COMPLETED
+  // (ver FiscalDocumentsService.assertDeliveryProofStopUsable).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Parada/entrega especifica (TripDeliveryStop) -- exige tripId e status COMPLETED.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'tripDeliveryStopId deve ser um UUID valido.' })
+  tripDeliveryStopId?: string;
+
+  // Fase 102 -- vinculo direto com a ocorrencia especifica (TripOccurrence,
+  // Fase 67/101). Quando tripId tambem informado, a ocorrencia precisa
+  // pertencer a essa viagem (ver FiscalDocumentsService.assertTripOccurrenceBelongsToTrip).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Ocorrencia especifica (TripOccurrence) desta viagem, quando aplicavel.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'tripOccurrenceId deve ser um UUID valido.' })
+  tripOccurrenceId?: string;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID('4', { message: 'vehicleId deve ser um UUID valido.' })

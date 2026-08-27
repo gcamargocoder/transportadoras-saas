@@ -1985,6 +1985,16 @@ enum TripOccurrenceType {
   FUEL_PROBLEM
   TIRE_PROBLEM
   OTHER
+  /// Fase 101 -- catalogo especifico de ocorrencias de ENTREGA (vinculadas a
+  /// TripDeliveryStop). "Veiculo/rota" reaproveita VEHICLE_PROBLEM/
+  /// ROUTE_DEVIATION acima (ja existiam, nunca duplicados); "documentacao"
+  /// reaproveita DOCUMENT_PROBLEM; "atraso" reaproveita DELAY; "outros"
+  /// reaproveita OTHER. Os 4 abaixo sao os unicos conceitos que nao tinham
+  /// nenhum valor equivalente no catalogo generico de ocorrencias de viagem.
+  RECIPIENT_ABSENT
+  WRONG_ADDRESS
+  DELIVERY_REFUSED
+  CARGO_DAMAGE
 
   @@map("trip_occurrence_type")
 }
@@ -1993,6 +2003,13 @@ enum TripOccurrenceSeverity {
   INFO
   WARNING
   CRITICAL
+  /// Fase 101 -- escala LOW/MEDIUM/HIGH/CRITICAL pedida para ocorrencias de
+  /// entrega. INFO/WARNING/CRITICAL (Fase 67) continuam usados sem alteracao
+  /// pelos demais tipos de ocorrencia de viagem (acidente, quebra etc.) --
+  /// as duas escalas convivem no mesmo enum, nunca uma redefine a outra.
+  LOW
+  MEDIUM
+  HIGH
 
   @@map("trip_occurrence_severity")
 }
@@ -2014,44 +2031,58 @@ enum TripOccurrenceStatus {
 /// (mesmo padrao de FuelSupply.attachmentId/TripExpense.attachmentId),
 /// nunca um sistema de arquivos novo.
 model TripOccurrence {
-  id            String                 @id @default(uuid()) @db.Uuid
-  tenantId      String                 @map("tenant_id") @db.Uuid
-  tripId        String                 @map("trip_id") @db.Uuid
-  driverShiftId String?                @map("driver_shift_id") @db.Uuid
-  driverId      String?                @map("driver_id") @db.Uuid
-  vehicleId     String?                @map("vehicle_id") @db.Uuid
-  type          TripOccurrenceType
-  severity      TripOccurrenceSeverity @default(INFO)
-  description   String
-  occurredAt    DateTime               @map("occurred_at")
-  latitude      Decimal?               @db.Decimal(9, 6)
-  longitude     Decimal?               @db.Decimal(9, 6)
-  locationLabel String?                @map("location_label")
-  resolvedAt    DateTime?              @map("resolved_at")
-  resolvedBy    String?                @map("resolved_by") @db.Uuid
-  cancelledAt   DateTime?              @map("cancelled_at")
-  attachmentId  String?                @map("attachment_id") @db.Uuid
-  metadata      Json?                  @default("{}")
+  id                 String                 @id @default(uuid()) @db.Uuid
+  tenantId           String                 @map("tenant_id") @db.Uuid
+  tripId             String                 @map("trip_id") @db.Uuid
+  /// Fase 101 -- vinculo direto com a parada/entrega especifica (Fase 88),
+  /// distinto de tripId (a viagem inteira). Opcional: ocorrencias que nao
+  /// sao de uma entrega especifica (acidente, quebra em transito etc.)
+  /// continuam sem este vinculo.
+  tripDeliveryStopId String?                @map("trip_delivery_stop_id") @db.Uuid
+  driverShiftId      String?                @map("driver_shift_id") @db.Uuid
+  driverId           String?                @map("driver_id") @db.Uuid
+  vehicleId          String?                @map("vehicle_id") @db.Uuid
+  type               TripOccurrenceType
+  severity           TripOccurrenceSeverity @default(INFO)
+  description        String
+  occurredAt         DateTime               @map("occurred_at")
+  latitude           Decimal?               @db.Decimal(9, 6)
+  longitude          Decimal?               @db.Decimal(9, 6)
+  locationLabel      String?                @map("location_label")
+  /// Fase 101 -- marca que a ocorrencia esta sendo tratada (status
+  /// IN_PROGRESS, derivado igual a RESOLVED/CANCELLED abaixo -- nunca uma
+  /// coluna de status redundante).
+  inProgressAt       DateTime?              @map("in_progress_at")
+  resolvedAt         DateTime?              @map("resolved_at")
+  resolvedBy         String?                @map("resolved_by") @db.Uuid
+  cancelledAt        DateTime?              @map("cancelled_at")
+  attachmentId       String?                @map("attachment_id") @db.Uuid
+  metadata           Json?                  @default("{}")
   /// Idempotencia de submissao offline pelo Driver App (mesmo padrao de
   /// TripStop/FuelSupply/AxleEvent/ChecklistExecution/FiscalDocument).
   /// Sempre null para ocorrencias criadas pelo fluxo administrativo, unico
   /// por tenant (Postgres permite multiplos NULL sob unique).
-  deviceEventId String?                @unique @map("device_event_id")
-  createdBy     String                 @map("created_by") @db.Uuid
-  createdAt     DateTime               @default(now()) @map("created_at")
-  updatedAt     DateTime               @updatedAt @map("updated_at")
+  deviceEventId      String?                @unique @map("device_event_id")
+  createdBy          String                 @map("created_by") @db.Uuid
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip        Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  driverShift DriverShift? @relation(fields: [driverShiftId], references: [id], onDelete: SetNull)
-  driver      Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  vehicle     Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  attachment  Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
-  creator     UserAccount  @relation("TripOccurrenceCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  resolver    UserAccount? @relation("TripOccurrenceResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip             Trip              @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripDeliveryStop TripDeliveryStop? @relation(fields: [tripDeliveryStopId], references: [id], onDelete: SetNull)
+  driverShift      DriverShift?      @relation(fields: [driverShiftId], references: [id], onDelete: SetNull)
+  driver           Driver?           @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle          Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  attachment       Attachment?       @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator          UserAccount       @relation("TripOccurrenceCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  resolver         UserAccount?      @relation("TripOccurrenceResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+  /// Fase 102 -- documentos/evidencias vinculados via FiscalDocument.tripOccurrenceId
+  /// (mecanismo generico, distinto do attachmentId unico acima).
+  fiscalDocuments  FiscalDocument[]
 
   @@index([tenantId])
   @@index([tenantId, tripId])
+  @@index([tenantId, tripDeliveryStopId])
   @@index([tenantId, severity])
   @@index([tenantId, occurredAt])
   @@index([tenantId, driverId])
@@ -2668,32 +2699,59 @@ model TripDeliveryStop {
   /// Previsao de chegada informada manualmente no planejamento -- NUNCA
   /// calculada por algoritmo (roteirizacao/ETA fica para a Fase 89).
   plannedArrival DateTime?              @map("planned_arrival")
+  /// Fase 99 -- EXECUCAO real, sempre DERIVADA da propria transicao de
+  /// status (nunca informada manualmente, mesmo espirito de
+  /// PipelineOpportunity.wonAt/lostAt): gravada automaticamente quando a
+  /// parada entra em IN_PROGRESS. Junto com plannedArrival, responde
+  /// "previsao x execucao" pedido pela fase.
+  actualArrival  DateTime?              @map("actual_arrival")
+  /// Fase 99 -- gravado automaticamente quando a parada entra em COMPLETED.
+  deliveredAt    DateTime?              @map("delivered_at")
+  /// Fase 99 -- motivo obrigatorio ao marcar FAILED (mesmo padrao de
+  /// PipelineOpportunity.lostReason) -- permite identificar "problema" sem
+  /// ainda implementar o modulo completo de ocorrencias (fases futuras).
+  failureReason  String?                @map("failure_reason") @db.Text
   notes          String?
   createdAt      DateTime               @default(now()) @map("created_at")
   updatedAt      DateTime               @updatedAt @map("updated_at")
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  location Location  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip           Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  customer       Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  location       Location         @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  /// Fase 100 -- comprovantes de entrega (POD) vinculados diretamente a esta
+  /// parada, reaproveitando FiscalDocument/Attachment (documentType=
+  /// DELIVERY_PROOF) -- nunca um model/armazenamento novo. 0..N por parada
+  /// (multiplas evidencias = multiplas linhas, mesmo padrao de
+  /// ChecklistEvidence).
+  proofDocuments FiscalDocument[]
+  /// Fase 101 -- ocorrencias registradas para esta parada especifica,
+  /// reaproveitando TripOccurrence (Fase 67) -- nunca um model novo.
+  occurrences    TripOccurrence[]
 
   @@unique([tripId, sequence])
   @@index([tenantId])
   @@index([tenantId, tripId])
   @@index([tenantId, customerId])
   @@index([tenantId, locationId])
+  @@index([tenantId, status])
   @@map("trip_delivery_stops")
 }
 
 /// Status operacional da parada/entrega planejada (Fase 88). PENDING = ainda
 /// nao chegou; IN_PROGRESS = motorista/equipe operando a entrega no local;
 /// COMPLETED = entrega concluida; CANCELLED = parada removida do fluxo sem
-/// ter sido entregue (nunca conta como concluida).
+/// ter sido entregue (nunca conta como concluida); FAILED (Fase 99) =
+/// entrega TENTADA mas nao concluida (ex: destinatario ausente, endereco
+/// nao localizado) -- distinta de CANCELLED (removida do planejamento antes
+/// de qualquer tentativa). Identifica "problema/ocorrencia" sem ainda
+/// implementar o modulo completo de ocorrencias (fases futuras).
 enum TripDeliveryStopStatus {
   PENDING
   IN_PROGRESS
   COMPLETED
   CANCELLED
+  FAILED
 
   @@map("trip_delivery_stop_status")
 }
@@ -3870,6 +3928,11 @@ enum FiscalDocumentType {
   DAMDFE
   DELIVERY_PROOF
   OTHER
+  /// Fase 102 -- evidencia documental de uma TripOccurrence (foto de avaria,
+  /// boletim de ocorrencia etc.), distinta de DELIVERY_PROOF (evidencia de
+  /// ENTREGA). Mesmo mecanismo generico de FiscalDocument, nunca um storage
+  /// paralelo.
+  OCCURRENCE_EVIDENCE
 
   @@map("fiscal_document_type")
 }
@@ -3902,63 +3965,80 @@ enum FiscalDocumentSource {
 /// TripExpense) -- um documento pode ser importado antes de qualquer
 /// vinculacao e vinculado depois via PATCH.
 model FiscalDocument {
-  id                String               @id @default(uuid()) @db.Uuid
-  tenantId          String               @map("tenant_id") @db.Uuid
-  documentType      FiscalDocumentType   @map("document_type")
-  documentNumber    String?              @map("document_number")
+  id                 String               @id @default(uuid()) @db.Uuid
+  tenantId           String               @map("tenant_id") @db.Uuid
+  documentType       FiscalDocumentType   @map("document_type")
+  documentNumber     String?              @map("document_number")
   /// Chave de acesso (44 digitos, NF-e/CT-e/MDF-e) -- unica por tenant
   /// quando presente (Postgres permite multiplos NULL sob unique, entao
   /// documentos sem chave nunca colidem entre si por este campo).
-  accessKey         String?              @map("access_key")
-  series            String?
-  issueDate         DateTime?            @map("issue_date")
-  senderName        String?              @map("sender_name")
-  senderDocument    String?              @map("sender_document")
-  recipientName     String?              @map("recipient_name")
-  recipientDocument String?              @map("recipient_document")
-  status            FiscalDocumentStatus @default(PENDING)
-  source            FiscalDocumentSource
-  attachmentId      String?              @map("attachment_id") @db.Uuid
+  accessKey          String?              @map("access_key")
+  series             String?
+  issueDate          DateTime?            @map("issue_date")
+  senderName         String?              @map("sender_name")
+  senderDocument     String?              @map("sender_document")
+  recipientName      String?              @map("recipient_name")
+  recipientDocument  String?              @map("recipient_document")
+  status             FiscalDocumentStatus @default(PENDING)
+  source             FiscalDocumentSource
+  attachmentId       String?              @map("attachment_id") @db.Uuid
   /// Nome original do arquivo enviado pelo cliente -- so metadado de
   /// exibicao, NUNCA usado como caminho de storage (ver
   /// fiscal-document-storage.config.ts, mesmo padrao de toll-import/
   /// checklist-evidence: nome em disco e sempre um UUID novo).
-  fileName          String?              @map("file_name")
-  mimeType          String?              @map("mime_type")
-  sizeBytes         Int?                 @map("size_bytes")
+  fileName           String?              @map("file_name")
+  mimeType           String?              @map("mime_type")
+  sizeBytes          Int?                 @map("size_bytes")
   /// Campos adicionais reconhecidos pelo parser XML sem coluna propria (ex:
   /// "amount" -- valor total do documento, presente no XML mas fora da
   /// lista minima de colunas pedida na Fase 52) -- preserva o dado bruto,
   /// nunca descartado nem inventado quando ausente.
-  metadata          Json?                @default("{}")
+  metadata           Json?                @default("{}")
   /// Fase 56 -- idempotencia de submissao offline pelo Driver App (mesmo
   /// padrao de ChecklistExecution/TripStop/FuelSupply/AxleEvent): reenviar a
   /// fila (syncQueue.ts) apos reconexao nunca cria um segundo comprovante.
   /// Sempre null para documentos criados pelo fluxo administrativo (upload/
   /// import), unico por tenant (Postgres permite multiplos NULL sob unique).
-  deviceEventId     String?              @unique @map("device_event_id")
-  tripId            String?              @map("trip_id") @db.Uuid
-  vehicleId         String?              @map("vehicle_id") @db.Uuid
-  driverId          String?              @map("driver_id") @db.Uuid
-  customerId        String?              @map("customer_id") @db.Uuid
-  createdBy         String               @map("created_by") @db.Uuid
-  updatedBy         String?              @map("updated_by") @db.Uuid
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
+  deviceEventId      String?              @unique @map("device_event_id")
+  tripId             String?              @map("trip_id") @db.Uuid
+  /// Fase 100 -- vinculo DIRETO com a parada/entrega especifica (Fase 88),
+  /// distinto de tripId (a viagem inteira). Opcional: documentos nao-POD, e
+  /// PODs de viagens sem paradas explicitas, continuam sem este vinculo.
+  /// Quando presente, so pode apontar para uma TripDeliveryStop COMPLETED
+  /// (ver FiscalDocumentsService.assertDeliveryProofStopUsable).
+  tripDeliveryStopId String?              @map("trip_delivery_stop_id") @db.Uuid
+  /// Fase 102 -- vinculo DIRETO com a ocorrencia especifica (Fase 67/101),
+  /// distinto de tripId (a viagem inteira). Independente de
+  /// tripDeliveryStopId -- uma ocorrencia pode ou nao estar ligada a uma
+  /// parada. Nenhuma exigencia de status da ocorrencia (mesmo criterio ja
+  /// usado para vincular a propria ocorrencia a uma parada, Fase 101): uma
+  /// evidencia pode ser anexada antes, durante ou depois da resolucao.
+  tripOccurrenceId   String?              @map("trip_occurrence_id") @db.Uuid
+  vehicleId          String?              @map("vehicle_id") @db.Uuid
+  driverId           String?              @map("driver_id") @db.Uuid
+  customerId         String?              @map("customer_id") @db.Uuid
+  createdBy          String               @map("created_by") @db.Uuid
+  updatedBy          String?              @map("updated_by") @db.Uuid
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
 
-  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  attachment Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
-  trip       Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  vehicle    Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  driver     Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  customer   Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  creator    UserAccount  @relation("FiscalDocumentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  updater    UserAccount? @relation("FiscalDocumentUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  attachment       Attachment?       @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  trip             Trip?             @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  tripDeliveryStop TripDeliveryStop? @relation(fields: [tripDeliveryStopId], references: [id], onDelete: SetNull)
+  tripOccurrence   TripOccurrence?   @relation(fields: [tripOccurrenceId], references: [id], onDelete: SetNull)
+  vehicle          Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver           Driver?           @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  customer         Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  creator          UserAccount       @relation("FiscalDocumentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater          UserAccount?      @relation("FiscalDocumentUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, accessKey])
   @@index([tenantId, documentType])
   @@index([tenantId, status])
   @@index([tenantId, tripId])
+  @@index([tenantId, tripDeliveryStopId])
+  @@index([tenantId, tripOccurrenceId])
   @@index([tenantId, vehicleId])
   @@index([tenantId, driverId])
   @@index([tenantId, issueDate])

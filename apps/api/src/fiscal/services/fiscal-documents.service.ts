@@ -3,7 +3,7 @@ import { createReadStream, promises as fs, ReadStream } from 'fs';
 import { extname, join, resolve } from 'path';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType, Prisma } from '@prisma/client';
+import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType, Prisma, TripDeliveryStopStatus } from '@prisma/client';
 import { AppConfig } from '../../config/configuration';
 import { AuditService } from '../../audit/services/audit.service';
 import { PaginatedAuditLogEntity } from '../../audit/entities/paginated-audit-log.entity';
@@ -22,6 +22,7 @@ import { EXTENSION_TO_FILE_SIGNATURE_KIND } from '../constants/fiscal-file.const
 import { FindFiscalDocumentsQueryDto } from '../dto/find-fiscal-documents-query.dto';
 import { ImportFiscalXmlDto } from '../dto/import-fiscal-xml.dto';
 import { SubmitDeliveryProofDto } from '../dto/submit-delivery-proof.dto';
+import { SubmitOccurrenceEvidenceDto } from '../dto/submit-occurrence-evidence.dto';
 import { UpdateFiscalDocumentDto } from '../dto/update-fiscal-document.dto';
 import { UploadFiscalDocumentDto } from '../dto/upload-fiscal-document.dto';
 import { FiscalDashboardEntity, FiscalDocumentStatusCountEntity, FiscalDocumentTypeCountEntity, FiscalIssueCountEntity } from '../entities/fiscal-dashboard.entity';
@@ -48,6 +49,10 @@ const PROBLEMATIC_DOCUMENTS_LIMIT = 10;
 
 const FISCAL_DOCUMENT_INCLUDE = {
   trip: { include: { origin: true, destination: true, composition: { select: { vehicleId: true } } } },
+  tripDeliveryStop: { select: { sequence: true } },
+  // Fase 102 -- so tipo/severidade (exibicao "Avaria (Alta)"), mesmo
+  // principio de tripDeliveryStop acima.
+  tripOccurrence: { select: { type: true, severity: true } },
   vehicle: true,
   driver: true,
   customer: true,
@@ -192,6 +197,12 @@ export class FiscalDocumentsService {
       await assertValidFileSignature(file.path, kind);
 
       await this.assertLinkedEntitiesExist(tenantId, dto);
+      if (dto.tripDeliveryStopId) {
+        await this.assertDeliveryProofStopUsable(tenantId, dto.tripDeliveryStopId, dto.tripId ?? null);
+      }
+      if (dto.tripOccurrenceId) {
+        await this.assertTripOccurrenceBelongsToTrip(tenantId, dto.tripOccurrenceId, dto.tripId ?? null);
+      }
 
       const accessKey = normalizeAccessKey(dto.accessKey);
       if (dto.accessKey && !accessKey) {
@@ -245,6 +256,8 @@ export class FiscalDocumentsService {
               recipientName: dto.recipientName,
               recipientDocument: dto.recipientDocument,
               tripId: dto.tripId,
+              tripDeliveryStopId: dto.tripDeliveryStopId,
+              tripOccurrenceId: dto.tripOccurrenceId,
               vehicleId: dto.vehicleId,
               driverId: dto.driverId,
               customerId: dto.customerId,
@@ -260,7 +273,12 @@ export class FiscalDocumentsService {
         action: 'fiscal.document_uploaded',
         entityName: 'FiscalDocument',
         entityId: document.id,
-        newValue: toJsonSafe({ documentType: document.documentType, fileName: document.fileName, source: document.source }),
+        newValue: toJsonSafe({
+          documentType: document.documentType,
+          fileName: document.fileName,
+          source: document.source,
+          tripDeliveryStopId: document.tripDeliveryStopId,
+        }),
         ipAddress: metadata.ipAddress,
         userAgent: metadata.userAgent,
       });
@@ -409,6 +427,14 @@ export class FiscalDocumentsService {
       driverId: dto.driverId ?? undefined,
       customerId: dto.customerId ?? undefined,
     });
+    if (dto.tripDeliveryStopId) {
+      const effectiveTripId = dto.tripId !== undefined ? dto.tripId : before.tripId;
+      await this.assertDeliveryProofStopUsable(tenantId, dto.tripDeliveryStopId, effectiveTripId);
+    }
+    if (dto.tripOccurrenceId) {
+      const effectiveTripId = dto.tripId !== undefined ? dto.tripId : before.tripId;
+      await this.assertTripOccurrenceBelongsToTrip(tenantId, dto.tripOccurrenceId, effectiveTripId);
+    }
 
     const wasLinked = this.isLinked(dto);
 
@@ -425,6 +451,8 @@ export class FiscalDocumentsService {
           recipientName: dto.recipientName,
           recipientDocument: dto.recipientDocument,
           tripId: dto.tripId,
+          tripDeliveryStopId: dto.tripDeliveryStopId,
+          tripOccurrenceId: dto.tripOccurrenceId,
           vehicleId: dto.vehicleId,
           driverId: dto.driverId,
           customerId: dto.customerId,
@@ -492,6 +520,9 @@ export class FiscalDocumentsService {
       if (!trip) {
         throw new NotFoundException('Viagem (tripId) nao encontrada nesta empresa.');
       }
+      if (dto.tripDeliveryStopId) {
+        await this.assertDeliveryProofStopUsable(tenantId, dto.tripDeliveryStopId, tripId);
+      }
 
       const id = randomUUID();
       const document = await runSerializable(this.prisma, async (tx) => {
@@ -530,6 +561,7 @@ export class FiscalDocumentsService {
             driverId,
             customerId: trip.customerId ?? null,
             createdBy: actor.userId,
+            ...compact({ tripDeliveryStopId: dto.tripDeliveryStopId }),
             // Observacao livre: sem coluna propria (nao fazia parte do
             // schema minimo), vai para metadata (mesmo padrao ja usado por
             // "amount"/"manifestedAccessKeys" -- nunca uma coluna nova para
@@ -546,7 +578,125 @@ export class FiscalDocumentsService {
         action: 'fiscal.delivery_proof_submitted',
         entityName: 'FiscalDocument',
         entityId: document.id,
-        newValue: toJsonSafe({ documentType: document.documentType, fileName: document.fileName, tripId }),
+        newValue: toJsonSafe({
+          documentType: document.documentType,
+          fileName: document.fileName,
+          tripId,
+          tripDeliveryStopId: document.tripDeliveryStopId,
+        }),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      });
+
+      return this.buildEntityWithIssues(tenantId, document);
+    } catch (error) {
+      await fs.unlink(file.path).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  // Fase 102 -- POST /driver/trips/:id/occurrences/:occurrenceId/evidence
+  // (Driver App, offline-first). Mesmo padrao de
+  // submitDeliveryProofFromDriverApp acima: idempotente por deviceEventId,
+  // vehicleId SEMPRE derivado da viagem (nunca aceito do cliente), driverId
+  // e o motorista autenticado (DriverGuard). occurrenceId ja foi validado
+  // contra ESTA viagem pelo controller (via getOne) antes de chegar aqui;
+  // este metodo revalida contra o tenant/viagem por seguranca (mesmo
+  // principio de defesa em profundidade ja usado no fluxo administrativo).
+  async submitOccurrenceEvidenceFromDriverApp(
+    tenantId: string,
+    driverId: string,
+    tripId: string,
+    occurrenceId: string,
+    dto: SubmitOccurrenceEvidenceDto,
+    file: Express.Multer.File,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<FiscalDocumentEntity> {
+    try {
+      const kind = EXTENSION_TO_FILE_SIGNATURE_KIND[extname(file.originalname).toLowerCase()];
+      if (!kind) {
+        throw new BadRequestException('Extensao de arquivo nao suportada.');
+      }
+      await assertValidFileSignature(file.path, kind);
+
+      const existing = await this.prisma.fiscalDocument.findFirst({
+        where: { tenantId, deviceEventId: dto.deviceEventId },
+        include: FISCAL_DOCUMENT_INCLUDE,
+      });
+      if (existing) {
+        await fs.unlink(file.path).catch(() => undefined);
+        return this.buildEntityWithIssues(tenantId, existing);
+      }
+
+      await this.assertTripOccurrenceBelongsToTrip(tenantId, occurrenceId, tripId);
+
+      // tripId ja foi validado contra este motorista pelo controller
+      // (DriverTripsService.getOne) -- esta busca e so para derivar
+      // vehicleId REAL, nunca confiado do cliente.
+      const trip = await this.prisma.trip.findFirst({
+        where: { id: tripId, tenantId, deletedAt: null },
+        select: { composition: { select: { vehicleId: true } } },
+      });
+      if (!trip) {
+        throw new NotFoundException('Viagem (tripId) nao encontrada nesta empresa.');
+      }
+
+      const id = randomUUID();
+      const document = await runSerializable(this.prisma, async (tx) => {
+        const plan = await tx.tenantPlan.findUnique({ where: { tenantId } });
+        const usedBytes = await getStorageUsedBytes(tx, tenantId);
+        assertStorageUnderLimit(usedBytes, file.size, plan?.maxStorageMb, PLAN_ERRORS.STORAGE_LIMIT_REACHED);
+
+        const attachment = await tx.attachment.create({
+          data: {
+            tenantId,
+            entityName: 'FiscalDocument',
+            entityId: id,
+            storageKey: file.filename,
+            uploadedById: actor.userId,
+            sizeBytes: file.size,
+          },
+        });
+
+        return tx.fiscalDocument.create({
+          data: {
+            id,
+            tenantId,
+            documentType: FiscalDocumentType.OCCURRENCE_EVIDENCE,
+            status: FiscalDocumentStatus.PENDING,
+            source: FiscalDocumentSource.UPLOAD,
+            attachmentId: attachment.id,
+            fileName: file.originalname,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            deviceEventId: dto.deviceEventId,
+            issueDate: dto.capturedAt ? new Date(dto.capturedAt) : new Date(),
+            tripId,
+            tripOccurrenceId: occurrenceId,
+            vehicleId: trip.composition?.vehicleId ?? null,
+            driverId,
+            createdBy: actor.userId,
+            // Observacao livre: sem coluna propria, vai para metadata (mesmo
+            // padrao ja usado em submitDeliveryProofFromDriverApp).
+            ...(dto.observation ? { metadata: { observation: dto.observation } as Prisma.InputJsonValue } : {}),
+          },
+          include: FISCAL_DOCUMENT_INCLUDE,
+        });
+      });
+
+      await this.audit.log({
+        tenantId,
+        userId: actor.userId,
+        action: 'fiscal.occurrence_evidence_submitted',
+        entityName: 'FiscalDocument',
+        entityId: document.id,
+        newValue: toJsonSafe({
+          documentType: document.documentType,
+          fileName: document.fileName,
+          tripId,
+          tripOccurrenceId: document.tripOccurrenceId,
+        }),
         ipAddress: metadata.ipAddress,
         userAgent: metadata.userAgent,
       });
@@ -560,6 +710,19 @@ export class FiscalDocumentsService {
 
   async remove(tenantId: string, id: string, actor: AuditActor, metadata: RequestMetadata): Promise<void> {
     const before = await this.findOwnedOrThrow(tenantId, id);
+    // Fase 100 -- "POD deve preservar historico; nunca apagar silenciosamente
+    // evidencias ja registradas": comprovante de entrega nunca e removido
+    // por este endpoint generico (correcao de vinculo/status continua
+    // possivel via PATCH). Fase 102 -- a mesma regra se aplica a evidencia
+    // de ocorrencia (OCCURRENCE_EVIDENCE), pelo mesmo motivo: um documento
+    // com valor de evidencia operacional nunca deve ser apagado
+    // silenciosamente. Demais tipos de documento fiscal nao mudam --
+    // continuam removiveis como antes.
+    if (before.documentType === FiscalDocumentType.DELIVERY_PROOF || before.documentType === FiscalDocumentType.OCCURRENCE_EVIDENCE) {
+      throw new ConflictException(
+        'Documentos de evidencia operacional (comprovante de entrega ou evidencia de ocorrencia) nao podem ser removidos -- o historico e sempre preservado.',
+      );
+    }
 
     await this.prisma.fiscalDocument.delete({ where: { id } });
 
@@ -997,6 +1160,8 @@ export class FiscalDocumentsService {
         documentNumber: query.documentNumber,
         accessKey: query.accessKey,
         tripId: query.tripId,
+        tripDeliveryStopId: query.tripDeliveryStopId,
+        tripOccurrenceId: query.tripOccurrenceId,
         vehicleId: query.vehicleId,
         driverId: query.driverId,
         customerId: query.customerId,
@@ -1007,7 +1172,14 @@ export class FiscalDocumentsService {
   }
 
   private isLinked(dto: UpdateFiscalDocumentDto): boolean {
-    return dto.tripId !== undefined || dto.vehicleId !== undefined || dto.driverId !== undefined || dto.customerId !== undefined;
+    return (
+      dto.tripId !== undefined ||
+      dto.tripDeliveryStopId !== undefined ||
+      dto.tripOccurrenceId !== undefined ||
+      dto.vehicleId !== undefined ||
+      dto.driverId !== undefined ||
+      dto.customerId !== undefined
+    );
   }
 
   private async assertLinkedEntitiesExist(tenantId: string, fields: LinkFields): Promise<void> {
@@ -1041,6 +1213,49 @@ export class FiscalDocumentsService {
       );
     }
     await Promise.all(checks);
+  }
+
+  // Fase 102 -- garante que a ocorrencia informada realmente pertence a
+  // esta viagem quando expectedTripId e conhecido (nunca aceita uma
+  // ocorrencia de outra viagem so porque e do mesmo tenant), mesmo padrao
+  // de TripOccurrencesService.assertTripDeliveryStopBelongsToTrip (Fase
+  // 101): 404 quando a ocorrencia nunca existiu, 400 quando existe mas e
+  // de outra viagem. Nenhuma exigencia de status da ocorrencia -- uma
+  // evidencia pode ser anexada antes, durante ou depois da resolucao.
+  private async assertTripOccurrenceBelongsToTrip(tenantId: string, tripOccurrenceId: string, expectedTripId: string | null): Promise<void> {
+    const occurrence = await this.prisma.tripOccurrence.findFirst({ where: { id: tripOccurrenceId, tenantId } });
+    if (!occurrence) {
+      throw new NotFoundException('Ocorrencia (tripOccurrenceId) nao encontrada nesta empresa.');
+    }
+    if (expectedTripId && occurrence.tripId !== expectedTripId) {
+      throw new BadRequestException('tripOccurrenceId nao pertence a viagem (tripId) informada.');
+    }
+  }
+
+  // Fase 100 -- "permitir registrar comprovante somente para entrega
+  // concluida". So chamado quando tripDeliveryStopId e explicitamente
+  // informado (o vinculo por tripId sozinho, ja existente desde a Fase 56,
+  // continua sem esta exigencia -- nunca uma restricao retroativa sobre o
+  // fluxo ja estabelecido). expectedTripId, quando informado, garante que a
+  // parada realmente pertence a viagem do documento (nunca aceita uma
+  // parada de outra viagem so porque e do mesmo tenant).
+  private async assertDeliveryProofStopUsable(
+    tenantId: string,
+    tripDeliveryStopId: string,
+    expectedTripId: string | null,
+  ): Promise<void> {
+    const stop = await this.prisma.tripDeliveryStop.findFirst({ where: { id: tripDeliveryStopId, tenantId } });
+    if (!stop) {
+      throw new NotFoundException('Parada/entrega (tripDeliveryStopId) nao encontrada nesta empresa.');
+    }
+    if (expectedTripId && stop.tripId !== expectedTripId) {
+      throw new BadRequestException('tripDeliveryStopId nao pertence a viagem (tripId) informada.');
+    }
+    if (stop.status !== TripDeliveryStopStatus.COMPLETED) {
+      throw new ConflictException(
+        `So e possivel registrar comprovante de entrega para uma parada COMPLETED (status atual: ${stop.status}).`,
+      );
+    }
   }
 
   // Upload manual: duplicidade por accessKey (ou, na ausencia dela, pela

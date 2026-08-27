@@ -3,15 +3,21 @@ import { Prisma, TripDeliveryStopStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
+import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { compact } from '../../common/utils/compact.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTripDeliveryStopDto } from '../dto/create-trip-delivery-stop.dto';
+import { FindDeliveryStopsQueryDto } from '../dto/find-delivery-stops-query.dto';
 import { ReorderTripDeliveryStopsDto } from '../dto/reorder-trip-delivery-stops.dto';
 import { UpdateTripDeliveryStopDto } from '../dto/update-trip-delivery-stop.dto';
 import { UpdateTripDeliveryStopStatusDto } from '../dto/update-trip-delivery-stop-status.dto';
+import { DeliveryStopsDashboardEntity } from '../entities/delivery-stops-dashboard.entity';
+import { PaginatedDeliveryStopsEntity } from '../entities/paginated-delivery-stops.entity';
 import { TripDeliveryStopEntity } from '../entities/trip-delivery-stop.entity';
 import {
+  DELIVERY_STOP_LIST_INCLUDE,
+  toDeliveryStopListItemEntity,
   toTripDeliveryStopEntity,
   TripDeliveryStopWithRelations,
 } from '../mappers/trip-delivery-stop.mapper';
@@ -24,17 +30,31 @@ const STOP_INCLUDE = { customer: true, location: true } satisfies Prisma.TripDel
 
 // PENDING/IN_PROGRESS podem avancar (inclusive pulando etapa, mesmo espirito
 // de ALLOWED_TRANSITIONS de Trip -- "chegou e ja concluiu" e valido); estados
-// terminais (COMPLETED/CANCELLED) nunca saem de onde estao.
+// terminais (COMPLETED/CANCELLED/FAILED) nunca saem de onde estao. FAILED
+// (Fase 99) e alcancavel tanto de PENDING (problema identificado antes de
+// qualquer tentativa, ex: endereco invalido) quanto de IN_PROGRESS (tentativa
+// mal sucedida no local) -- mesma simetria ja aplicada a CANCELLED.
 const ALLOWED_STATUS_TRANSITIONS: Record<TripDeliveryStopStatus, TripDeliveryStopStatus[]> = {
   PENDING: [
     TripDeliveryStopStatus.IN_PROGRESS,
     TripDeliveryStopStatus.COMPLETED,
     TripDeliveryStopStatus.CANCELLED,
+    TripDeliveryStopStatus.FAILED,
   ],
-  IN_PROGRESS: [TripDeliveryStopStatus.COMPLETED, TripDeliveryStopStatus.CANCELLED],
+  IN_PROGRESS: [
+    TripDeliveryStopStatus.COMPLETED,
+    TripDeliveryStopStatus.CANCELLED,
+    TripDeliveryStopStatus.FAILED,
+  ],
   COMPLETED: [],
   CANCELLED: [],
+  FAILED: [],
 };
+
+// Status que ainda representam trabalho aberto -- usado para "atrasada"
+// (plannedArrival no passado, entrega ainda nao resolvida) tanto na
+// listagem (filtro `late`) quanto no dashboard.
+const OPEN_STATUSES: TripDeliveryStopStatus[] = [TripDeliveryStopStatus.PENDING, TripDeliveryStopStatus.IN_PROGRESS];
 
 // Fase 88 -- CRUD das paradas/entregas PLANEJADAS de uma viagem (distinto de
 // TripStopsService, que trata das paradas OPERACIONAIS detectadas pelo app
@@ -199,10 +219,26 @@ export class TripDeliveryStopsService {
         `Transicao de status invalida: ${before.status} -> ${dto.status}.`,
       );
     }
+    if (dto.status === TripDeliveryStopStatus.FAILED && !dto.reason?.trim()) {
+      throw new BadRequestException('Informe "reason" ao marcar a parada como FAILED.');
+    }
 
+    const now = new Date();
     const stop = await this.prisma.tripDeliveryStop.update({
       where: { id: stopId },
-      data: { status: dto.status },
+      data: {
+        status: dto.status,
+        // Fase 99 -- execucao SEMPRE derivada da propria transicao (nunca
+        // informada manualmente), mesmo espirito de wonAt/lostAt em
+        // PipelineOpportunity. Nao sobrescreve se ja setada (ex: reentrar em
+        // IN_PROGRESS depois de outra transicao intermediaria, quando
+        // aplicavel, preserva o primeiro instante real).
+        ...compact({
+          actualArrival: dto.status === TripDeliveryStopStatus.IN_PROGRESS && !before.actualArrival ? now : undefined,
+          deliveredAt: dto.status === TripDeliveryStopStatus.COMPLETED ? now : undefined,
+          failureReason: dto.status === TripDeliveryStopStatus.FAILED ? dto.reason?.trim() : undefined,
+        }),
+      },
       include: STOP_INCLUDE,
     });
 
@@ -213,12 +249,101 @@ export class TripDeliveryStopsService {
       entityName: 'TripDeliveryStop',
       entityId: stopId,
       previousValue: { status: before.status },
-      newValue: { status: stop.status },
+      newValue: toJsonSafe({ status: stop.status, reason: dto.reason ?? null }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
 
     return toTripDeliveryStopEntity(stop);
+  }
+
+  // Fase 99 -- visao operacional CROSS-TRIP das entregas (busca/filtros/
+  // paginacao server-side). Reaproveita a MESMA tabela/status/relacoes de
+  // sempre -- nunca uma segunda fonte. `search` cobre cliente/local (ILIKE),
+  // mesmo espirito de FindTripsQueryDto. Paginacao SEMPRE no banco -- nunca
+  // carrega o tenant inteiro para filtrar em memoria.
+  async findAll(tenantId: string, query: FindDeliveryStopsQueryDto): Promise<PaginatedDeliveryStopsEntity> {
+    const where = this.buildBaseWhere(tenantId, query);
+    if (query.late) {
+      where.status = { in: OPEN_STATUSES };
+      where.plannedArrival = { lt: new Date() };
+    } else if (query.status) {
+      where.status = query.status;
+    }
+
+    const [rows, total] = await Promise.all([
+      this.prisma.tripDeliveryStop.findMany({
+        where,
+        include: DELIVERY_STOP_LIST_INCLUDE,
+        orderBy: [{ plannedArrival: 'asc' }, { createdAt: 'asc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.tripDeliveryStop.count({ where }),
+    ]);
+
+    const result = new PaginatedDeliveryStopsEntity();
+    result.items = rows.map(toDeliveryStopListItemEntity);
+    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
+    return result;
+  }
+
+  // Dashboard/resumo operacional: contagem por status + atrasadas, sempre em
+  // lote fixo (groupBy + 1 count), custo constante independente do volume de
+  // entregas do tenant -- nunca 1 query por entrega/status.
+  async getDashboard(tenantId: string, query: FindDeliveryStopsQueryDto): Promise<DeliveryStopsDashboardEntity> {
+    const where = this.buildBaseWhere(tenantId, query);
+
+    const [statusRows, lateCount] = await Promise.all([
+      this.prisma.tripDeliveryStop.groupBy({ by: ['status'], where, _count: true }),
+      this.prisma.tripDeliveryStop.count({
+        where: { ...where, status: { in: OPEN_STATUSES }, plannedArrival: { lt: new Date() } },
+      }),
+    ]);
+
+    const countByStatus = new Map(statusRows.map((r) => [r.status, r._count]));
+    const entity = new DeliveryStopsDashboardEntity();
+    entity.pendingCount = countByStatus.get(TripDeliveryStopStatus.PENDING) ?? 0;
+    entity.inProgressCount = countByStatus.get(TripDeliveryStopStatus.IN_PROGRESS) ?? 0;
+    entity.completedCount = countByStatus.get(TripDeliveryStopStatus.COMPLETED) ?? 0;
+    entity.failedCount = countByStatus.get(TripDeliveryStopStatus.FAILED) ?? 0;
+    entity.cancelledCount = countByStatus.get(TripDeliveryStopStatus.CANCELLED) ?? 0;
+    entity.lateCount = lateCount;
+    entity.totalCount =
+      entity.pendingCount + entity.inProgressCount + entity.completedCount + entity.failedCount + entity.cancelledCount;
+    return entity;
+  }
+
+  // Filtros "base" (cliente/viagem/periodo/busca), compartilhados por
+  // findAll/getDashboard. Status/`late` sao aplicados por cada chamador --
+  // a listagem permite filtrar por UM status ou por "atrasada"; o dashboard
+  // nunca filtra por status (ele PRODUZ a contagem por status).
+  private buildBaseWhere(
+    tenantId: string,
+    query: Pick<FindDeliveryStopsQueryDto, 'customerId' | 'tripId' | 'search' | 'plannedFrom' | 'plannedTo'>,
+  ): Prisma.TripDeliveryStopWhereInput {
+    const plannedRange = compact({
+      gte: query.plannedFrom ? new Date(query.plannedFrom) : undefined,
+      lte: query.plannedTo ? new Date(`${query.plannedTo}T23:59:59.999Z`) : undefined,
+    });
+
+    return {
+      tenantId,
+      trip: { deletedAt: null },
+      ...compact({
+        customerId: query.customerId,
+        tripId: query.tripId,
+        plannedArrival: Object.keys(plannedRange).length > 0 ? plannedRange : undefined,
+      }),
+      ...(query.search
+        ? {
+            OR: [
+              { customer: { name: { contains: query.search, mode: 'insensitive' } } },
+              { location: { name: { contains: query.search, mode: 'insensitive' } } },
+            ],
+          }
+        : {}),
+    };
   }
 
   async remove(

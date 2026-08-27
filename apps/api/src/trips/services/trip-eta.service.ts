@@ -173,8 +173,13 @@ export class TripEtaService {
     entity.isNextStop = nextStop?.id === stop.id;
     entity.plannedArrival = stop.plannedArrival;
 
+    // Fase 99 -- FAILED tambem e terminal (entrega ja resolvida, ainda que
+    // sem sucesso): nunca faz sentido continuar calculando uma previsao de
+    // chegada para ela, mesmo criterio ja aplicado a COMPLETED/CANCELLED.
     const finished =
-      stop.status === TripDeliveryStopStatus.COMPLETED || stop.status === TripDeliveryStopStatus.CANCELLED;
+      stop.status === TripDeliveryStopStatus.COMPLETED ||
+      stop.status === TripDeliveryStopStatus.CANCELLED ||
+      stop.status === TripDeliveryStopStatus.FAILED;
     // Unica parada com coordenada conhecida: a ULTIMA da sequencia, quando o
     // local dela e literalmente o mesmo destino final cadastrado na viagem
     // (comparacao por id, nunca por coordenada inventada).
@@ -187,7 +192,7 @@ export class TripEtaService {
     let limitation: string | null = null;
 
     if (finished) {
-      limitation = 'Parada já concluída ou cancelada.';
+      limitation = 'Parada já concluída, cancelada ou com falha registrada.';
     } else if (isFinalDestinationStop && geographic) {
       source = 'GEOGRAPHIC';
       estimatedArrival = geographic.arrivalDate;

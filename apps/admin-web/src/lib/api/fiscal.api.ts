@@ -11,6 +11,12 @@ export interface FindFiscalDocumentsQuery extends PaginationParams {
   documentNumber?: string | undefined;
   accessKey?: string | undefined;
   tripId?: string | undefined;
+  // Fase 100 -- "consulta na entrega": filtra pelos comprovantes/documentos
+  // de UMA parada especifica, distinto de tripId (a viagem inteira).
+  tripDeliveryStopId?: string | undefined;
+  // Fase 102 -- "consulta na ocorrencia": filtra pelos documentos/evidencias
+  // de UMA ocorrencia especifica.
+  tripOccurrenceId?: string | undefined;
   vehicleId?: string | undefined;
   driverId?: string | undefined;
   customerId?: string | undefined;
@@ -57,6 +63,13 @@ export interface UploadFiscalDocumentFields {
   recipientName?: string | undefined;
   recipientDocument?: string | undefined;
   tripId?: string | undefined;
+  // Fase 100 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  // Exige tripId no mesmo envio e a parada COMPLETED (validado no backend).
+  tripDeliveryStopId?: string | undefined;
+  // Fase 102 -- vinculo direto com a ocorrencia especifica (Fase 67/101).
+  // Quando tripId tambem informado, a ocorrencia precisa pertencer a essa
+  // viagem (validado no backend). Nenhuma exigencia de status.
+  tripOccurrenceId?: string | undefined;
   vehicleId?: string | undefined;
   driverId?: string | undefined;
   customerId?: string | undefined;
@@ -103,6 +116,10 @@ export interface UpdateFiscalDocumentPayload {
   recipientName?: string | undefined;
   recipientDocument?: string | undefined;
   tripId?: string | null | undefined;
+  // Fase 100 -- envie null para desvincular. Exige a parada COMPLETED.
+  tripDeliveryStopId?: string | null | undefined;
+  // Fase 102 -- envie null para desvincular. Nenhuma exigencia de status.
+  tripOccurrenceId?: string | null | undefined;
   vehicleId?: string | null | undefined;
   driverId?: string | null | undefined;
   customerId?: string | null | undefined;

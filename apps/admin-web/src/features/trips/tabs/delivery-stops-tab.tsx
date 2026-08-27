@@ -13,11 +13,13 @@ import { Dropdown } from '../../../components/ui/dropdown';
 import { useToast } from '../../../components/ui/toast';
 import { useAuth } from '../../../hooks/use-auth';
 import { toFriendlyMessage } from '../../../lib/api/errors';
+import { listFiscalDocuments } from '../../../lib/api/fiscal.api';
 import {
   applyTripRoutingSuggestion,
   getTripDeliveryStops,
   getTripEta,
   getTripRoutingSuggestion,
+  listDeliveryOccurrences,
   removeTripDeliveryStop,
   reorderTripDeliveryStops,
   updateTripDeliveryStopStatus,
@@ -26,6 +28,9 @@ import { hasRole, TRIP_WRITE_ROLES } from '../../../lib/auth/roles';
 import { TRIP_DELIVERY_STOP_STATUS_LABELS } from '../../../lib/labels';
 import { TRIP_DELIVERY_STOP_STATUS_TONE } from '../status';
 import { DeliveryStopModal } from '../delivery-stop-modal';
+import { DeliveryStopOccurrencesModal } from '../delivery-stop-occurrences-modal';
+import { DeliveryStopProofsModal } from '../delivery-stop-proofs-modal';
+import { FailDeliveryStopModal } from '../fail-delivery-stop-modal';
 import type { TripDeliveryStopEntity, TripRoutingSuggestionEntity } from '../../../types/entities';
 import type { TripDeliveryStopStatus } from '../../../types/enums';
 import { formatDateTime } from '../../../utils/format';
@@ -42,11 +47,13 @@ function formatVariance(seconds: number): string {
 // Fase 88 -- proximos status validos a partir do atual (mesma regra do
 // backend, TripDeliveryStopsService.ALLOWED_STATUS_TRANSITIONS -- so para
 // montar as opcoes do menu; o backend e quem realmente valida a transicao).
+// FAILED adicionado na Fase 99.
 const NEXT_STATUSES: Record<TripDeliveryStopStatus, TripDeliveryStopStatus[]> = {
-  PENDING: ['IN_PROGRESS', 'COMPLETED', 'CANCELLED'],
-  IN_PROGRESS: ['COMPLETED', 'CANCELLED'],
+  PENDING: ['IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'FAILED'],
+  IN_PROGRESS: ['COMPLETED', 'CANCELLED', 'FAILED'],
   COMPLETED: [],
   CANCELLED: [],
+  FAILED: [],
 };
 
 // Distinta de OperacaoTab (paradas OPERACIONAIS do app do motorista, Fase
@@ -67,12 +74,55 @@ export function DeliveryStopsTab({
   const [createOpen, setCreateOpen] = useState(false);
   const [editingStop, setEditingStop] = useState<TripDeliveryStopEntity | null>(null);
   const [removingStop, setRemovingStop] = useState<TripDeliveryStopEntity | null>(null);
+  const [failingStop, setFailingStop] = useState<TripDeliveryStopEntity | null>(null);
   const [suggestion, setSuggestion] = useState<TripRoutingSuggestionEntity | null>(null);
+  const [viewingProofsStop, setViewingProofsStop] = useState<TripDeliveryStopEntity | null>(null);
+  const [viewingOccurrencesStop, setViewingOccurrencesStop] = useState<TripDeliveryStopEntity | null>(null);
 
   const query = useQuery({
     queryKey: ['trip-delivery-stops', tripId],
     queryFn: () => getTripDeliveryStops(tripId),
   });
+
+  // Fase 100 -- comprovantes (POD) da viagem, buscados UMA VEZ para a aba
+  // inteira e agrupados por parada em memoria (nunca 1 consulta por linha
+  // da tabela -- mesmo principio de evitar N+1 ja aplicado no backend).
+  const proofsQuery = useQuery({
+    queryKey: ['fiscal-documents', { tripId, documentType: 'DELIVERY_PROOF' }],
+    queryFn: () => listFiscalDocuments({ tripId, documentType: 'DELIVERY_PROOF', pageSize: 100 }),
+  });
+  const proofCountByStopId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const d of proofsQuery.data?.items ?? []) {
+      if (!d.tripDeliveryStopId) continue;
+      map.set(d.tripDeliveryStopId, (map.get(d.tripDeliveryStopId) ?? 0) + 1);
+    }
+    return map;
+  }, [proofsQuery.data]);
+
+  // Fase 101 -- ocorrencias de entrega da viagem, buscadas UMA VEZ para a
+  // aba inteira e agrupadas por parada em memoria (mesmo principio dos
+  // comprovantes acima -- nunca 1 consulta por linha da tabela). Ao
+  // contrario dos comprovantes, ocorrencias nao exigem a parada COMPLETED.
+  const occurrencesQuery = useQuery({
+    queryKey: ['delivery-occurrences', { tripId }],
+    queryFn: () => listDeliveryOccurrences({ tripId, pageSize: 100 }),
+  });
+  const openOccurrenceCountByStopId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const o of occurrencesQuery.data?.items ?? []) {
+      if (o.status !== 'OPEN' && o.status !== 'IN_PROGRESS') continue;
+      map.set(o.tripDeliveryStopId, (map.get(o.tripDeliveryStopId) ?? 0) + 1);
+    }
+    return map;
+  }, [occurrencesQuery.data]);
+  const totalOccurrenceCountByStopId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const o of occurrencesQuery.data?.items ?? []) {
+      map.set(o.tripDeliveryStopId, (map.get(o.tripDeliveryStopId) ?? 0) + 1);
+    }
+    return map;
+  }, [occurrencesQuery.data]);
 
   // Fase 91 -- previsao de chegada, sempre recalculada pelo backend (nunca
   // persistida); busca automatica junto com a lista, sem exigir uma acao
@@ -211,6 +261,58 @@ export function DeliveryStopsTab({
           );
         },
       },
+      {
+        // Fase 99 -- execucao REAL, sempre derivada pelo backend da propria
+        // transicao de status (nunca editavel aqui).
+        header: 'Execução',
+        cell: ({ row }) => {
+          const stop = row.original;
+          if (stop.status === 'FAILED') {
+            return <div className="text-xs text-danger-600">{stop.failureReason ?? 'Falha registrada'}</div>;
+          }
+          if (!stop.actualArrival && !stop.deliveredAt) return '—';
+          return (
+            <div className="flex flex-col gap-0.5 text-xs text-ink-subtle">
+              {stop.actualArrival && <div>Chegada: {formatDateTime(stop.actualArrival)}</div>}
+              {stop.deliveredAt && <div>Entregue: {formatDateTime(stop.deliveredAt)}</div>}
+            </div>
+          );
+        },
+      },
+      {
+        // Fase 100 -- comprovantes (POD) vinculados diretamente a esta
+        // parada. So faz sentido consultar depois de COMPLETED (unico
+        // status que permite registrar um POD vinculado).
+        header: 'Comprovantes',
+        cell: ({ row }) => {
+          const stop = row.original;
+          if (stop.status !== 'COMPLETED') return <span className="text-xs text-ink-subtle">—</span>;
+          const count = proofCountByStopId.get(stop.id) ?? 0;
+          return (
+            <button type="button" onClick={() => setViewingProofsStop(stop)} className="inline-flex">
+              <Badge tone={count > 0 ? 'success' : 'neutral'}>{count > 0 ? `${count} comprovante(s)` : 'Nenhum'}</Badge>
+            </button>
+          );
+        },
+      },
+      {
+        // Fase 101 -- ocorrencias vinculadas diretamente a esta parada.
+        // Diferente de Comprovantes, disponivel para QUALQUER status (uma
+        // ocorrencia pode acontecer antes, durante ou depois da tentativa).
+        header: 'Ocorrências',
+        cell: ({ row }) => {
+          const stop = row.original;
+          const openCount = openOccurrenceCountByStopId.get(stop.id) ?? 0;
+          const totalCount = totalOccurrenceCountByStopId.get(stop.id) ?? 0;
+          return (
+            <button type="button" onClick={() => setViewingOccurrencesStop(stop)} className="inline-flex">
+              <Badge tone={openCount > 0 ? 'danger' : 'neutral'}>
+                {totalCount > 0 ? `${totalCount} ocorrência(s)` : 'Nenhuma'}
+              </Badge>
+            </button>
+          );
+        },
+      },
       { header: 'Observações', accessorFn: (row) => row.notes ?? '—' },
       ...(canWrite
         ? [
@@ -256,7 +358,14 @@ export function DeliveryStopsTab({
                           : []),
                         ...nextStatuses.map((status) => ({
                           label: `Marcar como ${TRIP_DELIVERY_STOP_STATUS_LABELS[status].toLowerCase()}`,
-                          onClick: () => statusMutation.mutate({ stopId: stop.id, status }),
+                          danger: status === 'FAILED',
+                          // FAILED (Fase 99) exige motivo -- abre o modal em
+                          // vez de mutar direto (mesmo padrao de
+                          // StageMoveDropdown para estagio isLost).
+                          onClick: () =>
+                            status === 'FAILED'
+                              ? setFailingStop(stop)
+                              : statusMutation.mutate({ stopId: stop.id, status }),
                         })),
                         ...(planningAllowed
                           ? [
@@ -277,7 +386,17 @@ export function DeliveryStopsTab({
           ]
         : []),
     ],
-    [canWrite, planningAllowed, tripFinished, stops.length, reorderMutation.isPending, etaByStopId],
+    [
+      canWrite,
+      planningAllowed,
+      tripFinished,
+      stops.length,
+      reorderMutation.isPending,
+      etaByStopId,
+      proofCountByStopId,
+      openOccurrenceCountByStopId,
+      totalOccurrenceCountByStopId,
+    ],
   );
 
   const eta = etaQuery.data;
@@ -452,6 +571,29 @@ export function DeliveryStopsTab({
         confirmLabel="Remover"
         danger
         loading={removeMutation.isPending}
+      />
+      {failingStop && (
+        <FailDeliveryStopModal
+          open={Boolean(failingStop)}
+          onClose={() => setFailingStop(null)}
+          tripId={tripId}
+          stopId={failingStop.id}
+        />
+      )}
+      <DeliveryStopProofsModal
+        open={Boolean(viewingProofsStop)}
+        onClose={() => setViewingProofsStop(null)}
+        tripDeliveryStopId={viewingProofsStop?.id ?? null}
+        stopLabel={viewingProofsStop ? `Parada #${viewingProofsStop.sequence} · ${viewingProofsStop.locationName}` : ''}
+      />
+      <DeliveryStopOccurrencesModal
+        open={Boolean(viewingOccurrencesStop)}
+        onClose={() => setViewingOccurrencesStop(null)}
+        tripId={tripId}
+        tripDeliveryStopId={viewingOccurrencesStop?.id ?? null}
+        stopLabel={
+          viewingOccurrencesStop ? `Parada #${viewingOccurrencesStop.sequence} · ${viewingOccurrencesStop.locationName}` : ''
+        }
       />
     </div>
   );

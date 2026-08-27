@@ -3,37 +3,52 @@ import { buildDeliveryStopCountsByTrip, classifyEmptyTripReason } from './empty-
 describe('empty-trip.util', () => {
   describe('classifyEmptyTripReason', () => {
     it('NO_DELIVERIES_PLANNED quando nao ha nenhuma parada', () => {
-      expect(classifyEmptyTripReason({ completed: 0, cancelled: 0, pending: 0, inProgress: 0 })).toBe(
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 0, pending: 0, inProgress: 0, failed: 0 })).toBe(
         'NO_DELIVERIES_PLANNED',
       );
     });
 
     it('ALL_DELIVERIES_CANCELLED quando todas as paradas estao canceladas', () => {
-      expect(classifyEmptyTripReason({ completed: 0, cancelled: 3, pending: 0, inProgress: 0 })).toBe(
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 3, pending: 0, inProgress: 0, failed: 0 })).toBe(
         'ALL_DELIVERIES_CANCELLED',
       );
     });
 
-    it('DELIVERIES_INCOMPLETE quando ha paradas nem concluidas nem todas canceladas', () => {
-      expect(classifyEmptyTripReason({ completed: 0, cancelled: 1, pending: 2, inProgress: 0 })).toBe(
+    // Fase 99 -- FAILED (entrega tentada sem sucesso) conta junto de
+    // CANCELLED para esta classificacao: em ambos os casos a viagem saiu
+    // vazia sem nenhuma entrega efetivada.
+    it('ALL_DELIVERIES_CANCELLED quando todas as paradas estao FAILED, ou uma mistura de FAILED/CANCELLED', () => {
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 0, pending: 0, inProgress: 0, failed: 2 })).toBe(
+        'ALL_DELIVERIES_CANCELLED',
+      );
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 1, pending: 0, inProgress: 0, failed: 1 })).toBe(
+        'ALL_DELIVERIES_CANCELLED',
+      );
+    });
+
+    it('DELIVERIES_INCOMPLETE quando ha paradas nem concluidas nem todas canceladas/com falha', () => {
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 1, pending: 2, inProgress: 0, failed: 0 })).toBe(
         'DELIVERIES_INCOMPLETE',
       );
-      expect(classifyEmptyTripReason({ completed: 0, cancelled: 0, pending: 0, inProgress: 1 })).toBe(
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 0, pending: 0, inProgress: 1, failed: 0 })).toBe(
+        'DELIVERIES_INCOMPLETE',
+      );
+      expect(classifyEmptyTripReason({ completed: 0, cancelled: 0, pending: 1, inProgress: 0, failed: 1 })).toBe(
         'DELIVERIES_INCOMPLETE',
       );
     });
 
     it('COMPLETED_DELIVERIES_INCONSISTENT quando ha parada concluida apesar de loadStatus=EMPTY', () => {
-      expect(classifyEmptyTripReason({ completed: 1, cancelled: 0, pending: 0, inProgress: 0 })).toBe(
+      expect(classifyEmptyTripReason({ completed: 1, cancelled: 0, pending: 0, inProgress: 0, failed: 0 })).toBe(
         'COMPLETED_DELIVERIES_INCONSISTENT',
       );
-      expect(classifyEmptyTripReason({ completed: 2, cancelled: 3, pending: 1, inProgress: 0 })).toBe(
+      expect(classifyEmptyTripReason({ completed: 2, cancelled: 3, pending: 1, inProgress: 0, failed: 1 })).toBe(
         'COMPLETED_DELIVERIES_INCONSISTENT',
       );
     });
 
     it('e deterministico -- mesma entrada sempre produz a mesma saida', () => {
-      const counts = { completed: 0, cancelled: 2, pending: 0, inProgress: 0 };
+      const counts = { completed: 0, cancelled: 2, pending: 0, inProgress: 0, failed: 0 };
       const results = Array.from({ length: 5 }, () => classifyEmptyTripReason(counts));
       expect(new Set(results).size).toBe(1);
     });
@@ -45,10 +60,11 @@ describe('empty-trip.util', () => {
         { tripId: 'trip-1', status: 'CANCELLED', _count: 2 },
         { tripId: 'trip-1', status: 'PENDING', _count: 1 },
         { tripId: 'trip-2', status: 'COMPLETED', _count: 1 },
+        { tripId: 'trip-2', status: 'FAILED', _count: 1 },
       ]);
 
-      expect(map.get('trip-1')).toEqual({ completed: 0, cancelled: 2, pending: 1, inProgress: 0 });
-      expect(map.get('trip-2')).toEqual({ completed: 1, cancelled: 0, pending: 0, inProgress: 0 });
+      expect(map.get('trip-1')).toEqual({ completed: 0, cancelled: 2, pending: 1, inProgress: 0, failed: 0 });
+      expect(map.get('trip-2')).toEqual({ completed: 1, cancelled: 0, pending: 0, inProgress: 0, failed: 1 });
       expect(map.get('trip-3')).toBeUndefined();
     });
 

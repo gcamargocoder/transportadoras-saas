@@ -433,7 +433,7 @@ export class NotificationsService {
   private async collectCriticalOccurrences(tenantId: string): Promise<NotificationCandidate[]> {
     const rows = await this.prisma.tripOccurrence.findMany({
       where: { tenantId, severity: TripOccurrenceSeverity.CRITICAL, resolvedAt: null, cancelledAt: null },
-      select: { id: true, type: true, tripId: true, description: true },
+      select: { id: true, type: true, tripId: true, tripDeliveryStopId: true, description: true },
     });
     return rows.map((row) => ({
       type: NotificationType.CRITICAL_OCCURRENCE,
@@ -442,7 +442,11 @@ export class NotificationsService {
       message: row.description,
       entityType: 'TripOccurrence',
       entityId: row.id,
-      metadata: { tripId: row.tripId },
+      // Fase 101 -- tripDeliveryStopId incluido quando a ocorrencia critica
+      // e de uma entrega especifica (nunca uma segunda condicao de
+      // deteccao -- o filtro acima continua sendo so severity=CRITICAL +
+      // aberta, igual desde a Fase 68).
+      metadata: { tripId: row.tripId, tripDeliveryStopId: row.tripDeliveryStopId },
     }));
   }
 

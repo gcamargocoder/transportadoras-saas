@@ -1,9 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { TripOccurrenceSeverity, TripOccurrenceType } from '@prisma/client';
 
-export type TripOccurrenceStatus = 'OPEN' | 'RESOLVED' | 'CANCELLED';
+export type TripOccurrenceStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED';
 
-export const TRIP_OCCURRENCE_STATUSES: TripOccurrenceStatus[] = ['OPEN', 'RESOLVED', 'CANCELLED'];
+export const TRIP_OCCURRENCE_STATUSES: TripOccurrenceStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CANCELLED'];
 
 // Fase 67 -- status e SEMPRE derivado de resolvedAt/cancelledAt no mapper,
 // nunca uma coluna redundante (mesmo padrao de TripStop, ver
@@ -16,6 +16,10 @@ export class TripOccurrenceEntity {
 
   @ApiProperty({ format: 'uuid' })
   tripId!: string;
+
+  // Fase 101 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  @ApiProperty({ format: 'uuid', nullable: true })
+  tripDeliveryStopId!: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, description: 'Jornada do motorista em curso no momento do registro, quando houver.' })
   driverShiftId!: string | null;
@@ -52,6 +56,10 @@ export class TripOccurrenceEntity {
 
   @ApiProperty({ nullable: true })
   locationLabel!: string | null;
+
+  // Fase 101 -- marca que a ocorrencia esta sendo tratada (status IN_PROGRESS).
+  @ApiProperty({ nullable: true })
+  inProgressAt!: Date | null;
 
   @ApiProperty({ nullable: true })
   resolvedAt!: Date | null;

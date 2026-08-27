@@ -418,7 +418,7 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
   // PATCH /:stopId/status -- maquina de estados da parada
   // ==========================================================================
   describe('PATCH /trips/:id/delivery-stops/:stopId/status', () => {
-    it('avanca PENDING -> IN_PROGRESS -> COMPLETED; e idempotente no mesmo status', async () => {
+    it('avanca PENDING -> IN_PROGRESS -> COMPLETED; e idempotente no mesmo status; grava execucao real (actualArrival/deliveredAt)', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('StatusFlow');
       const { tripId } = await setupPlannedTrip(adminAuth);
       const locationId = await createLocation(adminAuth, `Local ${randomUUID()}`);
@@ -428,6 +428,8 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .send({ locationId })
         .expect(201);
       const stopId = stopRes.body.data.id as string;
+      expect(stopRes.body.data.actualArrival).toBeNull();
+      expect(stopRes.body.data.deliveredAt).toBeNull();
 
       const toInProgress = await request(app.getHttpServer())
         .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
@@ -435,6 +437,9 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .send({ status: 'IN_PROGRESS' })
         .expect(200);
       expect(toInProgress.body.data.status).toBe('IN_PROGRESS');
+      expect(toInProgress.body.data.actualArrival).toEqual(expect.any(String));
+      expect(toInProgress.body.data.deliveredAt).toBeNull();
+      const firstActualArrival = toInProgress.body.data.actualArrival as string;
 
       const idempotent = await request(app.getHttpServer())
         .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
@@ -442,6 +447,9 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .send({ status: 'IN_PROGRESS' })
         .expect(200);
       expect(idempotent.body.data.status).toBe('IN_PROGRESS');
+      // Idempotente: actualArrival preserva o PRIMEIRO instante real, nunca
+      // e sobrescrito por uma reentrada no mesmo status.
+      expect(idempotent.body.data.actualArrival).toBe(firstActualArrival);
 
       const toCompleted = await request(app.getHttpServer())
         .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
@@ -449,6 +457,8 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .send({ status: 'COMPLETED' })
         .expect(200);
       expect(toCompleted.body.data.status).toBe('COMPLETED');
+      expect(toCompleted.body.data.deliveredAt).toEqual(expect.any(String));
+      expect(toCompleted.body.data.actualArrival).toBe(firstActualArrival);
 
       // COMPLETED e terminal -- nunca volta.
       await request(app.getHttpServer())
@@ -456,6 +466,63 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .set('Authorization', adminAuth)
         .send({ status: 'PENDING' })
         .expect(409);
+    });
+
+    it('FAILED (Fase 99) exige "reason", e alcancavel de PENDING e de IN_PROGRESS, e e terminal', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('StatusFailed');
+      const { tripId } = await setupPlannedTrip(adminAuth);
+      const locationA = await createLocation(adminAuth, `Local A ${randomUUID()}`);
+      const locationB = await createLocation(adminAuth, `Local B ${randomUUID()}`);
+
+      const stopA = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId: locationA })
+        .expect(201);
+      const stopAId = stopA.body.data.id as string;
+
+      // Sem reason -- 400.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopAId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'FAILED' })
+        .expect(400);
+
+      // PENDING -> FAILED direto (problema identificado antes de qualquer tentativa).
+      const failedFromPending = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopAId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'FAILED', reason: 'Endereço não localizado' })
+        .expect(200);
+      expect(failedFromPending.body.data.status).toBe('FAILED');
+      expect(failedFromPending.body.data.failureReason).toBe('Endereço não localizado');
+
+      // FAILED e terminal -- nunca volta.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopAId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'PENDING' })
+        .expect(409);
+
+      // IN_PROGRESS -> FAILED (tentativa mal sucedida no local).
+      const stopB = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId: locationB })
+        .expect(201);
+      const stopBId = stopB.body.data.id as string;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopBId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      const failedFromInProgress = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopBId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'FAILED', reason: 'Destinatário ausente' })
+        .expect(200);
+      expect(failedFromInProgress.body.data.status).toBe('FAILED');
+      expect(failedFromInProgress.body.data.failureReason).toBe('Destinatário ausente');
     });
   });
 
@@ -552,6 +619,212 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .delete(`/api/v1/trips/${tripId}/delivery-stops/${stopId}`)
         .set('Authorization', dispatcherAuth)
         .expect(204);
+    });
+  });
+
+  // ==========================================================================
+  // GET /delivery-stops -- visao CROSS-TRIP (Fase 99, Gestao de Entregas)
+  // ==========================================================================
+  describe('GET /delivery-stops (cross-trip)', () => {
+    async function setupTwoTripsWithStops(adminAuth: string) {
+      const customerA = await createCustomer(adminAuth, `Industria A ${randomUUID()}`);
+      const customerB = await createCustomer(adminAuth, `Industria B ${randomUUID()}`);
+      const { tripId: tripA } = await setupPlannedTrip(adminAuth);
+      const { tripId: tripB } = await setupPlannedTrip(adminAuth);
+
+      const locationA = await createLocation(adminAuth, `Local A ${randomUUID()}`);
+      const locationB = await createLocation(adminAuth, `Local B ${randomUUID()}`);
+
+      const stopA = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripA}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId: locationA, customerId: customerA, plannedArrival: '2020-01-01T00:00:00.000Z' })
+        .expect(201);
+      const stopB = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripB}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId: locationB, customerId: customerB, plannedArrival: '2099-01-01T00:00:00.000Z' })
+        .expect(201);
+
+      return {
+        tripA,
+        tripB,
+        customerA,
+        customerB,
+        stopAId: stopA.body.data.id as string,
+        stopBId: stopB.body.data.id as string,
+      };
+    }
+
+    it('lista entregas de TODAS as viagens do tenant, com contexto da viagem (origem/destino/motorista)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CrossTripList');
+      const { tripA, stopAId } = await setupTwoTripsWithStops(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(2);
+      expect(res.body.data.meta.total).toBe(2);
+
+      const item = res.body.data.items.find((i: { id: string }) => i.id === stopAId);
+      expect(item).toMatchObject({ tripId: tripA, status: 'PENDING' });
+      expect(item.tripOriginName).toEqual(expect.any(String));
+      expect(item.tripDestinationName).toEqual(expect.any(String));
+    });
+
+    it('filtra por customerId, tripId e status', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CrossTripFilters');
+      const { tripA, customerA, stopAId } = await setupTwoTripsWithStops(adminAuth);
+
+      const byCustomer = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ customerId: customerA })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byCustomer.body.data.items).toHaveLength(1);
+      expect(byCustomer.body.data.items[0].id).toBe(stopAId);
+
+      const byTrip = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ tripId: tripA })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byTrip.body.data.items).toHaveLength(1);
+      expect(byTrip.body.data.items[0].id).toBe(stopAId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripA}/delivery-stops/${stopAId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      const byStatus = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ status: 'IN_PROGRESS' })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byStatus.body.data.items).toHaveLength(1);
+      expect(byStatus.body.data.items[0].id).toBe(stopAId);
+    });
+
+    it('busca por nome de cliente/local, filtra por periodo (plannedFrom/plannedTo) e por atrasada (late)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CrossTripSearch');
+      const { customerA, stopAId } = await setupTwoTripsWithStops(adminAuth);
+      const customerRes = await request(app.getHttpServer())
+        .get(`/api/v1/customers/${customerA}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const customerName = customerRes.body.data.name as string;
+
+      const bySearch = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ search: customerName })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(bySearch.body.data.items).toHaveLength(1);
+      expect(bySearch.body.data.items[0].id).toBe(stopAId);
+
+      // stopA tem plannedArrival em 2020 (passado) -- unica dentro do periodo/atrasada.
+      const byPeriod = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ plannedFrom: '2019-01-01', plannedTo: '2021-01-01' })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byPeriod.body.data.items).toHaveLength(1);
+      expect(byPeriod.body.data.items[0].id).toBe(stopAId);
+
+      const late = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ late: 'true' })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(late.body.data.items).toHaveLength(1);
+      expect(late.body.data.items[0].id).toBe(stopAId);
+    });
+
+    it('pagina server-side', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('CrossTripPagination');
+      await setupTwoTripsWithStops(adminAuth);
+
+      const page1 = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .query({ page: 1, pageSize: 1 })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(page1.body.data.items).toHaveLength(1);
+      expect(page1.body.data.meta.total).toBe(2);
+      expect(page1.body.data.meta.totalPages).toBe(2);
+    });
+
+    it('isolamento multi-tenant: tenant B nunca ve entregas do tenant A na listagem cross-trip', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('CrossTripIsolA');
+      await setupTwoTripsWithStops(tenantA.adminAuth);
+      const tenantB = await createTenantAndLoginAsAdmin('CrossTripIsolB');
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(0);
+    });
+
+    it('RBAC: DRIVER bloqueado (403); AUDITOR le normalmente', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('CrossTripRbac');
+      await setupTwoTripsWithStops(adminAuth);
+      const driverAuth = await createUserWithRole(tenantId, adminAuth, 'DRIVER');
+      const auditorAuth = await createUserWithRole(tenantId, adminAuth, 'AUDITOR');
+
+      await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .set('Authorization', driverAuth)
+        .expect(403);
+      await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops')
+        .set('Authorization', auditorAuth)
+        .expect(200);
+    });
+  });
+
+  // ==========================================================================
+  // GET /delivery-stops/dashboard -- resumo operacional (Fase 99)
+  // ==========================================================================
+  describe('GET /delivery-stops/dashboard', () => {
+    it('conta entregas por status e quantidade atrasada', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Dashboard');
+      const { tripId } = await setupPlannedTrip(adminAuth);
+      const locationLate = await createLocation(adminAuth, `Local atrasado ${randomUUID()}`);
+      const locationFuture = await createLocation(adminAuth, `Local futuro ${randomUUID()}`);
+
+      const lateStop = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId: locationLate, plannedArrival: '2020-01-01T00:00:00.000Z' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId: locationFuture, plannedArrival: '2099-01-01T00:00:00.000Z' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${lateStop.body.data.id}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/delivery-stops/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.totalCount).toBe(2);
+      expect(res.body.data.pendingCount).toBe(1);
+      expect(res.body.data.inProgressCount).toBe(1);
+      expect(res.body.data.completedCount).toBe(0);
+      expect(res.body.data.failedCount).toBe(0);
+      expect(res.body.data.cancelledCount).toBe(0);
+      // A parada IN_PROGRESS com plannedArrival em 2020 esta atrasada; a
+      // outra (PENDING, plannedArrival em 2099) nao.
+      expect(res.body.data.lateCount).toBe(1);
     });
   });
 
@@ -738,6 +1011,89 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
       // O(1): a contagem de queries do GET em si nao pode crescer com o
       // numero de paradas -- sempre a mesma consulta com JOIN (customer +
       // location), nunca 1 query adicional por parada.
+      expect(queriesFor30).toBeLessThanOrEqual(queriesFor5 + 1);
+    }, 180000);
+
+    it('a contagem de queries de GET /delivery-stops (cross-trip) nao cresce com o numero de viagens/entregas', async () => {
+      const { adminAuth } = await createTenantAndLoginOnCountingApp('N1CrossTrip');
+
+      async function seedTripWithStop(): Promise<void> {
+        const vehicleRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/vehicles')
+          .set('Authorization', adminAuth)
+          .send({ plate: randomPlate(), brand: 'Volvo', model: 'FH 540', type: 'TRACTOR_UNIT' })
+          .expect(201);
+        const driverRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/drivers')
+          .set('Authorization', adminAuth)
+          .send({
+            name: 'Jose da Silva',
+            cpf: randomValidCpf(),
+            cnhNumber: String(Math.floor(10000000000 + Math.random() * 89999999999)),
+            cnhCategory: 'AE',
+            cnhExpiresAt: '2027-06-30',
+          })
+          .expect(201);
+        const compositionRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/trip-compositions')
+          .set('Authorization', adminAuth)
+          .send({ vehicleId: vehicleRes.body.data.id, trailers: [] })
+          .expect(201);
+        const originRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/locations')
+          .set('Authorization', adminAuth)
+          .send({ name: `Origem ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+          .expect(201);
+        const destinationRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/locations')
+          .set('Authorization', adminAuth)
+          .send({ name: `Destino ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+          .expect(201);
+        const tripRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', adminAuth)
+          .send({
+            driverId: driverRes.body.data.id,
+            compositionId: compositionRes.body.data.id,
+            originLocationId: originRes.body.data.id,
+            destinationLocationId: destinationRes.body.data.id,
+            plannedDeparture: '2026-09-01T08:00:00.000Z',
+            plannedArrival: '2026-09-02T18:00:00.000Z',
+          })
+          .expect(201);
+        const stopLocationRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/locations')
+          .set('Authorization', adminAuth)
+          .send({ name: `Parada ${randomUUID()}`, type: 'CUSTOMER_SITE' })
+          .expect(201);
+        await request(countingApp.getHttpServer())
+          .post(`/api/v1/trips/${tripRes.body.data.id}/delivery-stops`)
+          .set('Authorization', adminAuth)
+          .send({ locationId: stopLocationRes.body.data.id })
+          .expect(201);
+      }
+
+      const checkpoints = [5, 15, 30];
+      const queriesByCheckpoint: number[] = [];
+      let seeded = 0;
+      for (const checkpoint of checkpoints) {
+        while (seeded < checkpoint) {
+          await seedTripWithStop();
+          seeded += 1;
+        }
+        queryCount = 0;
+        await request(countingApp.getHttpServer())
+          .get('/api/v1/delivery-stops')
+          .query({ pageSize: 100 })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        queriesByCheckpoint.push(queryCount);
+      }
+
+      const [queriesFor5, , queriesFor30] = queriesByCheckpoint;
+      expect(queriesFor5).toBeGreaterThan(0);
+      // O(1): 1 query com JOIN (customer/local/viagem/motorista/origem/
+      // destino) + 1 count, nunca 1 query adicional por entrega/viagem.
       expect(queriesFor30).toBeLessThanOrEqual(queriesFor5 + 1);
     }, 180000);
   });

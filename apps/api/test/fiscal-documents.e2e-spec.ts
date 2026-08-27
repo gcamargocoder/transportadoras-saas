@@ -237,6 +237,61 @@ describe('Fiscal Documents (e2e)', () => {
     return res.body.data.id as string;
   }
 
+  // Fase 100 -- vincula um usuario DRIVER a este motorista e faz login, para
+  // testar o fluxo do Driver App (POST /driver/trips/:id/delivery-proof).
+  async function loginAsDriver(tenantId: string, adminAuth: string, driverId: string) {
+    const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+    const email = `driver-${unique}@teste.com`;
+    const password = 'SenhaForte123!';
+    const userRes = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set('Authorization', adminAuth)
+      .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .patch(`/api/v1/drivers/${driverId}/user-link`)
+      .set('Authorization', adminAuth)
+      .send({ userAccountId: userRes.body.data.id })
+      .expect(200);
+    const loginRes = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ tenantId, email, password })
+      .expect(200);
+    return `Bearer ${loginRes.body.data.accessToken as string}`;
+  }
+
+  // Fase 100 -- cria uma parada/entrega (TripDeliveryStop, Fase 88) para a
+  // viagem e a leva ate COMPLETED (unico status que permite registrar POD
+  // vinculado a ela). Reaproveita integralmente os endpoints ja existentes
+  // de Fase 88/99 -- nenhuma logica de status duplicada aqui.
+  async function createCompletedDeliveryStop(auth: string, tripId: string) {
+    const locationId = await createLocation(auth, `Parada ${randomUUID()}`);
+    const stopRes = await request(app.getHttpServer())
+      .post(`/api/v1/trips/${tripId}/delivery-stops`)
+      .set('Authorization', auth)
+      .send({ locationId })
+      .expect(201);
+    const stopId = stopRes.body.data.id as string;
+    await request(app.getHttpServer())
+      .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
+      .set('Authorization', auth)
+      .send({ status: 'COMPLETED' })
+      .expect(200);
+    return stopId;
+  }
+
+  // Fase 102 -- cria uma ocorrencia (TripOccurrence, Fase 67/101) para a
+  // viagem, reaproveitando o endpoint administrativo ja existente -- nenhuma
+  // logica de criacao duplicada aqui.
+  async function createOccurrence(auth: string, tripId: string) {
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/trips/${tripId}/occurrences`)
+      .set('Authorization', auth)
+      .send({ type: 'CARGO_DAMAGE', severity: 'HIGH', description: 'Avaria identificada na carga', occurredAt: '2026-08-20T10:00:00.000Z' })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   // ==========================================================================
   // Upload
   // ==========================================================================
@@ -740,7 +795,9 @@ describe('Fiscal Documents (e2e)', () => {
 
       expect(res.body.data.totalDocuments).toBe(0);
       expect(res.body.data.presentTypes).toEqual([]);
-      expect(res.body.data.absentTypes).toHaveLength(8);
+      // Fase 102 -- catalogo de FiscalDocumentType cresceu para 9 valores
+      // (OCCURRENCE_EVIDENCE), entao "todo o catalogo ausente" agora e 9.
+      expect(res.body.data.absentTypes).toHaveLength(9);
     });
   });
 
@@ -1108,7 +1165,8 @@ describe('Fiscal Documents (e2e)', () => {
         .set('Authorization', adminAuth)
         .expect(200);
       expect(res.body.data.complianceStatus).toBe('UNAVAILABLE');
-      expect(res.body.data.matrix).toHaveLength(8);
+      // Fase 102 -- catalogo de FiscalDocumentType cresceu para 9 valores (OCCURRENCE_EVIDENCE).
+      expect(res.body.data.matrix).toHaveLength(9);
       expect(res.body.data.matrix.every((row: { totalCount: number; present: boolean }) => row.totalCount === 0 && row.present === false)).toBe(true);
     });
 
@@ -1456,6 +1514,688 @@ describe('Fiscal Documents (e2e)', () => {
       expect(dashboard.body.data.deliveryProofCoverageAvailable).toBe(true);
       expect(dashboard.body.data.deliveryProofCoveragePercent).not.toBeNull();
       expect(dashboard.body.data.deliveryProofMonthlyEvolution).toBeInstanceOf(Array);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 100 -- POD vinculado diretamente a TripDeliveryStop
+  // ==========================================================================
+  describe('Fase 100 -- comprovante de entrega vinculado a TripDeliveryStop', () => {
+    it('upload (admin) com tripDeliveryStopId de uma parada COMPLETED vincula corretamente', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodLinkOk');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+      expect(res.body.data.tripDeliveryStopId).toBe(stopId);
+      expect(res.body.data.tripDeliveryStopSequence).toBe(1);
+    });
+
+    it('bloqueia (409) vincular POD a uma parada que ainda nao esta COMPLETED', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodLinkNotCompleted');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const locationId = await createLocation(adminAuth, `Parada ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+      const stopId = stopRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(409);
+
+      expect(await prisma.fiscalDocument.count({ where: { tripDeliveryStopId: stopId } })).toBe(0);
+
+      // Depois de concluida, o mesmo upload passa a funcionar.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'COMPLETED' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+    });
+
+    it('rejeita (400) quando tripDeliveryStopId pertence a outra viagem', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodLinkWrongTrip');
+      const { tripId: tripA } = await setupTripAndVehicle(adminAuth);
+      const { tripId: tripB } = await setupTripAndVehicle(adminAuth);
+      const stopOfTripB = await createCompletedDeliveryStop(adminAuth, tripB);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripA)
+        .field('tripDeliveryStopId', stopOfTripB)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(400);
+    });
+
+    it('rejeita (404) tripDeliveryStopId inexistente', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodLinkMissing');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', randomUUID())
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(404);
+    });
+
+    it('permite multiplas evidencias (varios arquivos) para a MESMA parada', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodMultiple');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'foto1.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_JPEG, 'foto2.jpg')
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripDeliveryStopId: stopId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(2);
+      expect(res.body.data.meta.total).toBe(2);
+    });
+
+    it('consulta "na entrega": GET /fiscal/documents?tripDeliveryStopId filtra so os comprovantes daquela parada', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodQueryByStop');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopA = await createCompletedDeliveryStop(adminAuth, tripId);
+      const stopB = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopA)
+        .attach('file', VALID_PDF, 'comprovante-a.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopB)
+        .attach('file', VALID_PDF, 'comprovante-b.pdf')
+        .expect(201);
+
+      const resA = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripDeliveryStopId: stopA })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(resA.body.data.items).toHaveLength(1);
+      expect(resA.body.data.items[0].tripDeliveryStopId).toBe(stopA);
+
+      // "na viagem" continua funcionando -- ve as duas.
+      const byTrip = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byTrip.body.data.items).toHaveLength(2);
+    });
+
+    it('PATCH permite vincular/desvincular a parada depois do upload; exige a mesma regra de COMPLETED', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodPatchLink');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+      expect(uploadRes.body.data.tripDeliveryStopId).toBeNull();
+
+      const linked = await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ tripDeliveryStopId: stopId })
+        .expect(200);
+      expect(linked.body.data.tripDeliveryStopId).toBe(stopId);
+
+      const unlinked = await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ tripDeliveryStopId: null })
+        .expect(200);
+      expect(unlinked.body.data.tripDeliveryStopId).toBeNull();
+    });
+
+    it('preserva historico: DELETE de um comprovante de entrega e sempre bloqueado (409), vinculado ou nao a uma parada', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PodNoDelete');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/fiscal/documents/${res.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+
+      expect(await prisma.fiscalDocument.findUnique({ where: { id: res.body.data.id } })).not.toBeNull();
+
+      // Outros tipos de documento continuam removiveis normalmente (regressao).
+      const ciotRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'CIOT')
+        .attach('file', VALID_PDF, 'ciot.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .delete(`/api/v1/fiscal/documents/${ciotRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(204);
+    });
+
+    it('Driver App: POST /driver/trips/:id/delivery-proof com tripDeliveryStopId exige a parada COMPLETED', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PodDriverStop');
+      const { tripId, driverId } = await setupTripAndVehicle(adminAuth);
+      const driverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+
+      const locationId = await createLocation(adminAuth, `Parada ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+      const stopId = stopRes.body.data.id as string;
+
+      // Ainda PENDING -- bloqueado.
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-pod-stop-1')
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(409);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'COMPLETED' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-pod-stop-2')
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(201);
+      expect(res.body.data.tripDeliveryStopId).toBe(stopId);
+      expect(res.body.data.tripId).toBe(tripId);
+      expect(res.body.data.origin).toBe('DRIVER');
+    });
+
+    it('Driver App: continua funcionando SEM tripDeliveryStopId (viagem sem paradas planejadas -- regressao Fase 56)', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PodDriverNoStop');
+      const { tripId, driverId } = await setupTripAndVehicle(adminAuth);
+      const driverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/delivery-proof`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-pod-no-stop')
+        .attach('file', VALID_JPEG, 'comprovante.jpg')
+        .expect(201);
+      expect(res.body.data.tripDeliveryStopId).toBeNull();
+    });
+
+    it('auditoria registra o vinculo com a parada na submissao pelo Driver App e no upload administrativo', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PodAudit');
+      void tenantId;
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+
+      const historyRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${uploadRes.body.data.id}/history`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const uploadEntry = historyRes.body.data.items.find((i: { action: string }) => i.action === 'fiscal.document_uploaded');
+      expect(uploadEntry).toBeTruthy();
+      expect(uploadEntry.newValue).toMatchObject({ tripDeliveryStopId: stopId });
+    });
+
+    it('isolamento multi-tenant: tenant B nunca consegue vincular POD a uma parada do tenant A, nem consulta-la via filtro', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('PodIsolA');
+      const { tripId: tripA } = await setupTripAndVehicle(tenantA.adminAuth);
+      const stopA = await createCompletedDeliveryStop(tenantA.adminAuth, tripA);
+
+      const tenantB = await createTenantAndLoginAsAdmin('PodIsolB');
+      const { tripId: tripB } = await setupTripAndVehicle(tenantB.adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', tenantB.adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripB)
+        .field('tripDeliveryStopId', stopA)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(404);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripDeliveryStopId: stopA })
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(0);
+    });
+
+    it('RBAC: AUDITOR consulta por tripDeliveryStopId mas nao pode enviar/remover comprovante', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PodRbac');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+      const auditorAuth = await createUserWithRole(tenantId, adminAuth, 'AUDITOR');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', auditorAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripDeliveryStopId: stopId })
+        .set('Authorization', auditorAuth)
+        .expect(200);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 102 -- documentos/evidencias vinculados diretamente a TripOccurrence
+  // ==========================================================================
+  describe('Fase 102 -- documentos/anexos vinculados a TripOccurrence', () => {
+    it('upload (admin) com tripOccurrenceId vincula corretamente, mesmo com a ocorrencia ainda OPEN', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocLinkOk');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceId)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(201);
+      expect(res.body.data.tripOccurrenceId).toBe(occurrenceId);
+      expect(res.body.data.tripOccurrenceType).toBe('CARGO_DAMAGE');
+      expect(res.body.data.tripOccurrenceSeverity).toBe('HIGH');
+    });
+
+    it('nenhuma exigencia de status da ocorrencia -- funciona igual apos resolvida/cancelada', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocAnyStatus');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId}/resolve`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceId)
+        .attach('file', VALID_PDF, 'evidencia-pos-resolucao.pdf')
+        .expect(201);
+    });
+
+    it('rejeita (400) quando tripOccurrenceId pertence a outra viagem', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocWrongTrip');
+      const { tripId: tripA } = await setupTripAndVehicle(adminAuth);
+      const { tripId: tripB } = await setupTripAndVehicle(adminAuth);
+      const occurrenceOfTripB = await createOccurrence(adminAuth, tripB);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripA)
+        .field('tripOccurrenceId', occurrenceOfTripB)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(400);
+    });
+
+    it('rejeita (404) tripOccurrenceId inexistente', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocMissing');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', randomUUID())
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(404);
+    });
+
+    it('permite multiplos documentos para a MESMA ocorrencia; "consulta na ocorrencia" filtra so os dela', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocMultiple');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const occurrenceA = await createOccurrence(adminAuth, tripId);
+      const occurrenceB = await createOccurrence(adminAuth, tripId);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceA)
+        .attach('file', VALID_PDF, 'foto1.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceA)
+        .attach('file', VALID_JPEG, 'foto2.jpg')
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceB)
+        .attach('file', VALID_PDF, 'foto-b.pdf')
+        .expect(201);
+
+      const resA = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripOccurrenceId: occurrenceA })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(resA.body.data.items).toHaveLength(2);
+      expect(resA.body.data.items.every((i: { tripOccurrenceId: string }) => i.tripOccurrenceId === occurrenceA)).toBe(true);
+
+      // "na viagem" continua funcionando -- ve os tres.
+      const byTrip = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(byTrip.body.data.items).toHaveLength(3);
+    });
+
+    it('PATCH permite vincular/desvincular a ocorrencia depois do upload', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocPatchLink');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(201);
+      expect(uploadRes.body.data.tripOccurrenceId).toBeNull();
+
+      const linked = await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ tripOccurrenceId: occurrenceId })
+        .expect(200);
+      expect(linked.body.data.tripOccurrenceId).toBe(occurrenceId);
+
+      const unlinked = await request(app.getHttpServer())
+        .patch(`/api/v1/fiscal/documents/${uploadRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .send({ tripOccurrenceId: null })
+        .expect(200);
+      expect(unlinked.body.data.tripOccurrenceId).toBeNull();
+    });
+
+    it('preserva historico: DELETE de uma evidencia de ocorrencia e sempre bloqueado (409); outros tipos continuam removiveis (regressao)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocNoDelete');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceId)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/fiscal/documents/${res.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+      expect(await prisma.fiscalDocument.findUnique({ where: { id: res.body.data.id } })).not.toBeNull();
+
+      const otherRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OTHER')
+        .attach('file', VALID_PDF, 'outro.pdf')
+        .expect(201);
+      await request(app.getHttpServer())
+        .delete(`/api/v1/fiscal/documents/${otherRes.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(204);
+    });
+
+    it('Driver App: POST /driver/trips/:id/occurrences/:occurrenceId/evidence registra evidencia (idempotente por deviceEventId)', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('OccDocDriver');
+      const { tripId, driverId } = await setupTripAndVehicle(adminAuth);
+      const driverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/occurrences/${occurrenceId}/evidence`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-occ-evidence-1')
+        .attach('file', VALID_JPEG, 'evidencia.jpg')
+        .expect(201);
+      expect(res.body.data.documentType).toBe('OCCURRENCE_EVIDENCE');
+      expect(res.body.data.tripOccurrenceId).toBe(occurrenceId);
+      expect(res.body.data.tripId).toBe(tripId);
+      expect(res.body.data.origin).toBe('DRIVER');
+
+      // Reenvio com o MESMO deviceEventId (fila offline) -- idempotente,
+      // nunca cria uma segunda evidencia.
+      const retryRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/occurrences/${occurrenceId}/evidence`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-occ-evidence-1')
+        .attach('file', VALID_JPEG, 'evidencia-retry.jpg')
+        .expect(201);
+      expect(retryRes.body.data.id).toBe(res.body.data.id);
+      expect(await prisma.fiscalDocument.count({ where: { tripOccurrenceId: occurrenceId } })).toBe(1);
+    });
+
+    it('Driver App: rejeita (404) ocorrencia que pertence a outra viagem do mesmo motorista', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('OccDocDriverWrongTrip');
+      const { tripId: tripA, driverId } = await setupTripAndVehicle(adminAuth);
+      const { tripId: tripB } = await setupTripAndVehicle(adminAuth);
+      const driverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+      const occurrenceOfTripB = await createOccurrence(adminAuth, tripB);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripA}/occurrences/${occurrenceOfTripB}/evidence`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-occ-evidence-wrong-trip')
+        .attach('file', VALID_JPEG, 'evidencia.jpg')
+        .expect(400);
+    });
+
+    it('auditoria registra o vinculo com a ocorrencia no upload administrativo e na submissao pelo Driver App', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('OccDocAudit');
+      const { tripId, driverId } = await setupTripAndVehicle(adminAuth);
+      const driverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceId)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(201);
+      const uploadHistory = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${uploadRes.body.data.id}/history`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const uploadEntry = uploadHistory.body.data.items.find((i: { action: string }) => i.action === 'fiscal.document_uploaded');
+      expect(uploadEntry.newValue).toMatchObject({ tripDeliveryStopId: null });
+
+      const driverRes = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/occurrences/${occurrenceId}/evidence`)
+        .set('Authorization', driverAuth)
+        .field('deviceEventId', 'dev-occ-evidence-audit')
+        .attach('file', VALID_JPEG, 'evidencia.jpg')
+        .expect(201);
+      const driverHistory = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${driverRes.body.data.id}/history`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const submittedEntry = driverHistory.body.data.items.find(
+        (i: { action: string }) => i.action === 'fiscal.occurrence_evidence_submitted',
+      );
+      expect(submittedEntry).toBeTruthy();
+      expect(submittedEntry.newValue).toMatchObject({ tripOccurrenceId: occurrenceId });
+    });
+
+    it('isolamento multi-tenant: tenant B nunca consegue vincular documento a uma ocorrencia do tenant A, nem consulta-la via filtro', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('OccDocIsolA');
+      const { tripId: tripA } = await setupTripAndVehicle(tenantA.adminAuth);
+      const occurrenceA = await createOccurrence(tenantA.adminAuth, tripA);
+
+      const tenantB = await createTenantAndLoginAsAdmin('OccDocIsolB');
+      const { tripId: tripB } = await setupTripAndVehicle(tenantB.adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', tenantB.adminAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripB)
+        .field('tripOccurrenceId', occurrenceA)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(404);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripOccurrenceId: occurrenceA })
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(0);
+    });
+
+    it('RBAC: AUDITOR consulta por tripOccurrenceId mas nao pode enviar/remover documento', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('OccDocRbac');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const occurrenceId = await createOccurrence(adminAuth, tripId);
+      const auditorAuth = await createUserWithRole(tenantId, adminAuth, 'AUDITOR');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', auditorAuth)
+        .field('documentType', 'OCCURRENCE_EVIDENCE')
+        .field('tripId', tripId)
+        .field('tripOccurrenceId', occurrenceId)
+        .attach('file', VALID_PDF, 'evidencia.pdf')
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripOccurrenceId: occurrenceId })
+        .set('Authorization', auditorAuth)
+        .expect(200);
+    });
+
+    it('regressao: o POD (Fase 100, vinculado a TripDeliveryStop) continua funcionando exatamente como antes, sem interferencia do vinculo com ocorrencia', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('OccDocPodRegression');
+      const { tripId } = await setupTripAndVehicle(adminAuth);
+      const stopId = await createCompletedDeliveryStop(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/fiscal/documents/upload')
+        .set('Authorization', adminAuth)
+        .field('documentType', 'DELIVERY_PROOF')
+        .field('tripId', tripId)
+        .field('tripDeliveryStopId', stopId)
+        .attach('file', VALID_PDF, 'comprovante.pdf')
+        .expect(201);
+      expect(res.body.data.tripDeliveryStopId).toBe(stopId);
+      expect(res.body.data.tripOccurrenceId).toBeNull();
+      expect(res.body.data.tripOccurrenceType).toBeNull();
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/fiscal/documents/${res.body.data.id}`)
+        .set('Authorization', adminAuth)
+        .expect(409);
     });
   });
 
@@ -2123,6 +2863,109 @@ describe('Fiscal Documents (e2e)', () => {
       const queriesFor50 = queryCount;
 
       expect(queriesFor50).toBeLessThanOrEqual(queriesFor10 + 1);
+    }, 180000);
+
+    // Fase 100 -- o novo include (tripDeliveryStop) e sempre um JOIN dentro
+    // da MESMA query de FISCAL_DOCUMENT_INCLUDE, nunca uma query por linha
+    // -- este teste comprova isso especificamente para o padrao de consulta
+    // "na entrega/na viagem" com paradas concluidas e comprovantes vinculados.
+    it('a contagem de queries de GET /fiscal/documents?tripId nao cresce com paradas concluidas + comprovantes vinculados', async () => {
+      const { adminAuth } = await createTenantAndLoginOnCountingApp('N1PodStops');
+      const tripId = await setupTripOnCountingApp(adminAuth);
+
+      async function seedCompletedStopWithProof(index: number): Promise<void> {
+        const locationRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/locations')
+          .set('Authorization', adminAuth)
+          .send({ name: `Parada ${index} ${randomUUID()}`, type: 'CUSTOMER_SITE' })
+          .expect(201);
+        const stopRes = await request(countingApp.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/delivery-stops`)
+          .set('Authorization', adminAuth)
+          .send({ locationId: locationRes.body.data.id })
+          .expect(201);
+        const stopId = stopRes.body.data.id as string;
+        await request(countingApp.getHttpServer())
+          .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
+          .set('Authorization', adminAuth)
+          .send({ status: 'COMPLETED' })
+          .expect(200);
+        await request(countingApp.getHttpServer())
+          .post('/api/v1/fiscal/documents/upload')
+          .set('Authorization', adminAuth)
+          .field('documentType', 'DELIVERY_PROOF')
+          .field('tripId', tripId)
+          .field('tripDeliveryStopId', stopId)
+          .attach('file', VALID_PDF, `comprovante-${index}.pdf`)
+          .expect(201);
+      }
+
+      for (let i = 0; i < 5; i += 1) await seedCompletedStopWithProof(i);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor5 = queryCount;
+
+      for (let i = 5; i < 20; i += 1) await seedCompletedStopWithProof(i);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor20 = queryCount;
+
+      expect(queriesFor5).toBeGreaterThan(0);
+      expect(queriesFor20).toBeLessThanOrEqual(queriesFor5 + 1);
+    }, 180000);
+
+    // Fase 102 -- o novo include (tripOccurrence) e sempre um JOIN dentro da
+    // MESMA query de FISCAL_DOCUMENT_INCLUDE, nunca uma query por linha --
+    // mesmo principio ja comprovado para tripDeliveryStop (N1PodStops acima).
+    it('a contagem de queries de GET /fiscal/documents?tripId nao cresce com ocorrencias + evidencias vinculadas', async () => {
+      const { adminAuth } = await createTenantAndLoginOnCountingApp('N1OccEvidence');
+      const tripId = await setupTripOnCountingApp(adminAuth);
+
+      async function seedOccurrenceWithEvidence(index: number): Promise<void> {
+        const occurrenceRes = await request(countingApp.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'OTHER', description: `Ocorrencia ${index}`, occurredAt: '2026-08-20T10:00:00.000Z' })
+          .expect(201);
+        const occurrenceId = occurrenceRes.body.data.id as string;
+        await request(countingApp.getHttpServer())
+          .post('/api/v1/fiscal/documents/upload')
+          .set('Authorization', adminAuth)
+          .field('documentType', 'OCCURRENCE_EVIDENCE')
+          .field('tripId', tripId)
+          .field('tripOccurrenceId', occurrenceId)
+          .attach('file', VALID_PDF, `evidencia-${index}.pdf`)
+          .expect(201);
+      }
+
+      for (let i = 0; i < 5; i += 1) await seedOccurrenceWithEvidence(i);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor5 = queryCount;
+
+      for (let i = 5; i < 20; i += 1) await seedOccurrenceWithEvidence(i);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/fiscal/documents')
+        .query({ tripId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor20 = queryCount;
+
+      expect(queriesFor5).toBeGreaterThan(0);
+      expect(queriesFor20).toBeLessThanOrEqual(queriesFor5 + 1);
     }, 180000);
   });
 });

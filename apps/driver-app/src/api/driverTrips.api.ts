@@ -11,8 +11,10 @@ import {
   DriverTrip,
   FuelSupply,
   NearbyTollPlaza,
+  OccurrenceEvidence,
   RouteComparison,
   SubmitDeliveryProofInput,
+  SubmitOccurrenceEvidenceInput,
   TrackingPointInput,
   TrackingPointsSyncResult,
   TripDeliveryStop,
@@ -206,6 +208,7 @@ export function submitDeliveryProof(
 ): Promise<DeliveryProof> {
   const fields: Record<string, string | undefined> = {
     deviceEventId: input.deviceEventId,
+    tripDeliveryStopId: input.tripDeliveryStopId,
     observation: input.observation,
     capturedAt: input.capturedAt,
   };
@@ -226,6 +229,24 @@ export function createOccurrence(tripId: string, input: CreateOccurrenceInput): 
 
 export function getOccurrences(tripId: string): Promise<TripOccurrence[]> {
   return apiRequest<TripOccurrence[]>(`/driver/trips/${tripId}/occurrences`);
+}
+
+// Fase 102 -- documento/evidencia de uma ocorrencia. Mesmo mecanismo
+// generico de FiscalDocument ja usado por submitDeliveryProof acima --
+// nenhum storage paralelo. `file` e o path local persistido, mesmo padrao
+// de submitDeliveryProof.
+export function submitOccurrenceEvidence(
+  tripId: string,
+  occurrenceId: string,
+  input: SubmitOccurrenceEvidenceInput,
+  file: UploadFilePart,
+): Promise<OccurrenceEvidence> {
+  const fields: Record<string, string | undefined> = {
+    deviceEventId: input.deviceEventId,
+    observation: input.observation,
+    capturedAt: input.capturedAt,
+  };
+  return apiUpload<OccurrenceEvidence>(`/driver/trips/${tripId}/occurrences/${occurrenceId}/evidence`, fields, file);
 }
 
 // ==========================================================================

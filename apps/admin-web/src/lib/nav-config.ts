@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowLeftRight,
   Bell,
   Building2,
@@ -20,6 +21,7 @@ import {
   LayoutGrid,
   ListChecks,
   Package,
+  PackageCheck,
   Percent,
   ShieldAlert,
   ShieldCheck,
@@ -118,6 +120,28 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Viagens',
         href: '/trips',
         icon: Route,
+        roles: TRIP_READ_ROLES,
+        module: TenantModule.TRIPS,
+      },
+      // Fase 99 -- visao CROSS-TRIP das entregas (TripDeliveryStop, Fase
+      // 88), mesmo modulo/roles de Viagens (nunca uma segunda fonte de
+      // dados nem um modulo novo).
+      {
+        label: 'Entregas',
+        href: '/operations/deliveries',
+        icon: PackageCheck,
+        roles: TRIP_READ_ROLES,
+        module: TenantModule.TRIPS,
+      },
+      // Fase 101 -- visao CROSS-TRIP das ocorrencias de ENTREGA (TripOccurrence
+      // vinculada a TripDeliveryStop), mesmo modulo/roles de Entregas/Viagens
+      // (nunca uma segunda fonte de dados nem um modulo novo). Distinta do
+      // dashboard geral de ocorrencias de frota em /operations/fleet/occurrences
+      // (todas as ocorrencias, nao so as vinculadas a uma entrega).
+      {
+        label: 'Ocorrências de Entrega',
+        href: '/operations/delivery-occurrences',
+        icon: AlertTriangle,
         roles: TRIP_READ_ROLES,
         module: TenantModule.TRIPS,
       },

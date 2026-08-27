@@ -142,6 +142,8 @@ export class FiscalDocumentsController {
         recipientName: { type: 'string' },
         recipientDocument: { type: 'string' },
         tripId: { type: 'string', format: 'uuid' },
+        tripDeliveryStopId: { type: 'string', format: 'uuid' },
+        tripOccurrenceId: { type: 'string', format: 'uuid' },
         vehicleId: { type: 'string', format: 'uuid' },
         driverId: { type: 'string', format: 'uuid' },
         customerId: { type: 'string', format: 'uuid' },

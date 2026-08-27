@@ -116,7 +116,7 @@ export class EmptyTripsService {
       entity.customerName = trip.customer?.name ?? null;
       entity.reason = classifyEmptyTripReason(counts);
       entity.hasDeliveryStops =
-        counts.completed + counts.cancelled + counts.pending + counts.inProgress > 0;
+        counts.completed + counts.cancelled + counts.pending + counts.inProgress + counts.failed > 0;
       entity.distanceKm = toNumberOrNull(metrics?.actualDistanceKm ?? null);
       entity.totalCost = toNumberOrNull(metrics?.actualTotalCost ?? null);
       return entity;

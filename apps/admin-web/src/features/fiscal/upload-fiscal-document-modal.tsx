@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UploadCloud } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '../../components/ui/button';
@@ -15,7 +15,7 @@ import { toFriendlyMessage } from '../../lib/api/errors';
 import { uploadFiscalDocument } from '../../lib/api/fiscal.api';
 import { listVehicles } from '../../lib/api/fleet.api';
 import { listDrivers } from '../../lib/api/drivers.api';
-import { listCustomers } from '../../lib/api/trips.api';
+import { getTripDeliveryStops, listCustomers } from '../../lib/api/trips.api';
 import { FISCAL_DOCUMENT_TYPE_LABELS } from '../../lib/labels';
 import type { FiscalDocumentType } from '../../types/enums';
 
@@ -32,6 +32,8 @@ const EMPTY_FORM = {
   vehicleId: '',
   driverId: '',
   customerId: '',
+  // Fase 100 -- so usado quando documentType=DELIVERY_PROOF e ha tripId fixo.
+  tripDeliveryStopId: '',
 };
 
 // Upload direto (PDF/XML/JPG/JPEG/PNG) -- sem parser, metadados sempre
@@ -41,6 +43,7 @@ export function UploadFiscalDocumentModal({
   onClose,
   tripId: fixedTripId,
   defaultDocumentType,
+  tripOccurrenceId: fixedTripOccurrenceId,
 }: {
   open: boolean;
   onClose: () => void;
@@ -48,11 +51,24 @@ export function UploadFiscalDocumentModal({
   tripId?: string;
   /** Fase 57 -- pre-seleciona o tipo (ex: CIOT, aberto a partir da secao dedicada da aba fiscal). O usuario ainda pode trocar. */
   defaultDocumentType?: FiscalDocumentType;
+  /** Fase 102 -- quando informado (aberto a partir do detalhe de uma ocorrencia), o documento e sempre vinculado a essa ocorrencia. */
+  tripOccurrenceId?: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [form, setForm] = useState(() => (defaultDocumentType ? { ...EMPTY_FORM, documentType: defaultDocumentType } : EMPTY_FORM));
+
+  // Fase 100 -- so busca quando faz sentido (POD com viagem fixa): permite
+  // vincular o comprovante diretamente a UMA parada ja concluida, sem exigir
+  // isso (viagens sem paradas planejadas continuam funcionando sem vinculo).
+  const isDeliveryProof = form.documentType === 'DELIVERY_PROOF';
+  const deliveryStopsQuery = useQuery({
+    queryKey: ['trip-delivery-stops', fixedTripId],
+    queryFn: () => getTripDeliveryStops(fixedTripId as string),
+    enabled: open && isDeliveryProof && Boolean(fixedTripId),
+  });
+  const completedStops = (deliveryStopsQuery.data ?? []).filter((s) => s.status === 'COMPLETED');
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -68,6 +84,8 @@ export function UploadFiscalDocumentModal({
         recipientName: form.recipientName || undefined,
         recipientDocument: form.recipientDocument || undefined,
         tripId: fixedTripId,
+        tripDeliveryStopId: isDeliveryProof ? form.tripDeliveryStopId || undefined : undefined,
+        tripOccurrenceId: fixedTripOccurrenceId,
         vehicleId: form.vehicleId || undefined,
         driverId: form.driverId || undefined,
         customerId: form.customerId || undefined,
@@ -107,6 +125,11 @@ export function UploadFiscalDocumentModal({
       }
     >
       <div className="flex flex-col gap-4">
+        {fixedTripOccurrenceId && (
+          <p className="rounded-md bg-surface-muted p-2.5 text-xs text-ink-subtle">
+            Este documento será vinculado diretamente à ocorrência selecionada.
+          </p>
+        )}
         <FormField label="Arquivo (PDF, XML, JPG/JPEG ou PNG)" htmlFor="fiscal-upload-file" required>
           <input
             id="fiscal-upload-file"
@@ -141,6 +164,27 @@ export function UploadFiscalDocumentModal({
           <FormField label="Série" htmlFor="fiscal-upload-series">
             <Input id="fiscal-upload-series" value={form.series} onChange={(e) => setForm({ ...form, series: e.target.value })} />
           </FormField>
+          {isDeliveryProof && fixedTripId && (
+            <FormField
+              label="Parada/entrega (opcional)"
+              htmlFor="fiscal-upload-stop"
+              hint={completedStops.length === 0 ? 'Nenhuma parada concluída ainda nesta viagem.' : undefined}
+            >
+              <Select
+                id="fiscal-upload-stop"
+                value={form.tripDeliveryStopId}
+                onChange={(e) => setForm({ ...form, tripDeliveryStopId: e.target.value })}
+                disabled={completedStops.length === 0}
+              >
+                <option value="">Sem parada específica</option>
+                {completedStops.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    #{s.sequence} · {s.locationName}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+          )}
           <FormField label="Data de emissão" htmlFor="fiscal-upload-issue-date">
             <DatePicker id="fiscal-upload-issue-date" value={form.issueDate} onChange={(e) => setForm({ ...form, issueDate: e.target.value })} />
           </FormField>

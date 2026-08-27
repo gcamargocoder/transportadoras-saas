@@ -28,8 +28,13 @@ const schema = z.object({
     'FUEL_PROBLEM',
     'TIRE_PROBLEM',
     'OTHER',
+    // Fase 101 -- categorias de ocorrencia de ENTREGA.
+    'RECIPIENT_ABSENT',
+    'WRONG_ADDRESS',
+    'DELIVERY_REFUSED',
+    'CARGO_DAMAGE',
   ]),
-  severity: z.enum(['INFO', 'WARNING', 'CRITICAL']),
+  severity: z.enum(['INFO', 'WARNING', 'CRITICAL', 'LOW', 'MEDIUM', 'HIGH']),
   description: z.string().min(1, 'Descreva a ocorrência.').max(2000),
   occurredAt: z.string().min(1, 'Informe quando aconteceu.'),
   driverId: z.string().optional(),
@@ -42,10 +47,16 @@ export function CreateOccurrenceModal({
   open,
   onClose,
   tripId,
+  tripDeliveryStopId,
+  stopLabel,
 }: {
   open: boolean;
   onClose: () => void;
   tripId: string;
+  // Fase 101 -- quando aberto a partir de uma parada especifica (aba de
+  // Entregas), pre-vincula a ocorrencia a essa parada.
+  tripDeliveryStopId?: string | undefined;
+  stopLabel?: string | undefined;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -67,6 +78,7 @@ export function CreateOccurrenceModal({
         severity: values.severity,
         description: values.description,
         occurredAt: new Date(values.occurredAt).toISOString(),
+        tripDeliveryStopId,
         driverId: values.driverId || undefined,
         vehicleId: values.vehicleId || undefined,
       }),
@@ -74,6 +86,7 @@ export function CreateOccurrenceModal({
       toast.success('Ocorrência registrada.');
       queryClient.invalidateQueries({ queryKey: ['trip-occurrences', tripId] });
       queryClient.invalidateQueries({ queryKey: ['trips', tripId, 'timeline'] });
+      queryClient.invalidateQueries({ queryKey: ['delivery-occurrences'] });
       handleClose();
     },
     onError: (error) => toast.error('Não foi possível registrar a ocorrência.', toFriendlyMessage(error)),
@@ -88,7 +101,7 @@ export function CreateOccurrenceModal({
     <Modal
       open={open}
       onClose={handleClose}
-      title="Nova ocorrência"
+      title={stopLabel ? `Nova ocorrência — ${stopLabel}` : 'Nova ocorrência'}
       size="lg"
       footer={
         <>

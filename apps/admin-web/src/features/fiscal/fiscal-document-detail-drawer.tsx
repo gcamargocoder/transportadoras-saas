@@ -29,6 +29,8 @@ import {
   FISCAL_DOCUMENT_STATUS_TONE,
   FISCAL_DOCUMENT_TYPE_LABELS,
   FISCAL_ISSUE_CODE_LABELS,
+  TRIP_OCCURRENCE_SEVERITY_LABELS,
+  TRIP_OCCURRENCE_TYPE_LABELS,
 } from '../../lib/labels';
 import type { FiscalDocumentEntity } from '../../types/entities';
 import type { FiscalDocumentStatus } from '../../types/enums';
@@ -41,6 +43,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'fiscal.document_linked': 'Vínculo alterado',
   'fiscal.document_deleted': 'Documento removido',
   'fiscal.delivery_proof_submitted': 'Comprovante de entrega registrado (app do motorista)',
+  'fiscal.occurrence_evidence_submitted': 'Evidência de ocorrência registrada (app do motorista)',
 };
 
 // Fase 68 -- mesmo criterio do backend (FiscalDocumentsService.getFile):
@@ -275,6 +278,26 @@ export function FiscalDocumentDetailDrawer({
                 </dd>
               </div>
             )}
+            {document.tripDeliveryStopId && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-muted">Parada/entrega</dt>
+                <dd className="text-right text-ink">
+                  {document.tripDeliveryStopSequence !== null ? `#${document.tripDeliveryStopSequence}` : document.tripDeliveryStopId.slice(0, 8)}
+                </dd>
+              </div>
+            )}
+            {document.tripOccurrenceId && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-ink-muted">Ocorrência</dt>
+                <dd className="text-right text-ink">
+                  {document.tripOccurrenceType
+                    ? `${TRIP_OCCURRENCE_TYPE_LABELS[document.tripOccurrenceType]}${
+                        document.tripOccurrenceSeverity ? ` (${TRIP_OCCURRENCE_SEVERITY_LABELS[document.tripOccurrenceSeverity]})` : ''
+                      }`
+                    : document.tripOccurrenceId.slice(0, 8)}
+                </dd>
+              </div>
+            )}
           </dl>
 
           {document.metadata && Object.keys(document.metadata).length > 0 && (
@@ -343,12 +366,19 @@ export function FiscalDocumentDetailDrawer({
             </Button>
           </div>
 
-          <div className="border-t border-border pt-4">
-            <Button variant="danger" onClick={() => deleteMutation.mutate()} loading={deleteMutation.isPending}>
-              <Trash2 size={14} />
-              Remover documento
-            </Button>
-          </div>
+          {document.documentType === 'DELIVERY_PROOF' || document.documentType === 'OCCURRENCE_EVIDENCE' ? (
+            <p className="border-t border-border pt-4 text-xs text-ink-subtle">
+              Documentos de evidência operacional (comprovante de entrega ou evidência de ocorrência) não podem ser removidos — o histórico é sempre
+              preservado.
+            </p>
+          ) : (
+            <div className="border-t border-border pt-4">
+              <Button variant="danger" onClick={() => deleteMutation.mutate()} loading={deleteMutation.isPending}>
+                <Trash2 size={14} />
+                Remover documento
+              </Button>
+            </div>
+          )}
 
           <p className="text-xs text-ink-subtle">
             Criado por {document.creatorName ?? '—'} em {formatDateTime(document.createdAt)}

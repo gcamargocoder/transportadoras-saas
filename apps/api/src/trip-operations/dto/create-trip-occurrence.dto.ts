@@ -24,6 +24,16 @@ export class CreateTripOccurrenceDto {
   @IsDateString({}, { message: 'occurredAt deve ser uma data valida (ISO 8601).' })
   occurredAt!: string;
 
+  // Fase 101 -- vinculo direto com a parada/entrega especifica (Fase 88),
+  // quando a ocorrencia e sobre uma entrega em particular (nao a viagem
+  // inteira). Opcional -- validado no service (deve pertencer a esta
+  // viagem); nenhuma restricao de status da parada (uma ocorrencia pode
+  // acontecer antes, durante ou depois da tentativa de entrega).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Parada/entrega especifica (TripDeliveryStop) desta viagem.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'tripDeliveryStopId deve ser um UUID valido.' })
+  tripDeliveryStopId?: string;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID('4')

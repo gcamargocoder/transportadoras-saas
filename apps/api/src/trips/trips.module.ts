@@ -5,6 +5,7 @@ import { TripOperationsModule } from '../trip-operations/trip-operations.module'
 import { TripExpensesModule } from '../trip-expenses/trip-expenses.module';
 import { TripSettlementsModule } from '../trip-settlements/trip-settlements.module';
 import { CustomersController } from './controllers/customers.controller';
+import { DeliveryStopsController } from './controllers/delivery-stops.controller';
 import { LocationsController } from './controllers/locations.controller';
 import { TripsController } from './controllers/trips.controller';
 import { CustomerContactsService } from './services/customer-contacts.service';
@@ -29,7 +30,7 @@ import { TripsService } from './services/trips.service';
 // nunca importa TripsModule).
 @Module({
   imports: [TripExpensesModule, TripSettlementsModule, TollRoutesModule, TripOperationsModule, RoutingModule],
-  controllers: [TripsController, CustomersController, LocationsController],
+  controllers: [TripsController, CustomersController, LocationsController, DeliveryStopsController],
   providers: [
     TripsService,
     RouteVersionsService,

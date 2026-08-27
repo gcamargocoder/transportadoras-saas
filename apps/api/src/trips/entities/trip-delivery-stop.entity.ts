@@ -32,6 +32,15 @@ export class TripDeliveryStopEntity {
   @ApiProperty({ nullable: true, description: 'Previsao de chegada informada manualmente no planejamento.' })
   plannedArrival!: Date | null;
 
+  @ApiProperty({ nullable: true, description: 'Execucao real -- gravado automaticamente ao entrar em IN_PROGRESS.' })
+  actualArrival!: Date | null;
+
+  @ApiProperty({ nullable: true, description: 'Execucao real -- gravado automaticamente ao entrar em COMPLETED.' })
+  deliveredAt!: Date | null;
+
+  @ApiProperty({ nullable: true, description: 'Motivo da falha, gravado ao entrar em FAILED.' })
+  failureReason!: string | null;
+
   @ApiProperty({ nullable: true })
   notes!: string | null;
 

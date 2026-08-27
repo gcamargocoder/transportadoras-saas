@@ -2273,10 +2273,12 @@ export interface TripStopListItemEntity extends TripStopEntity {
 }
 
 // Fase 67 -- espelha apps/api/src/trip-operations/entities/trip-occurrence.entity.ts.
-// status e SEMPRE derivado pelo backend (resolvedAt/cancelledAt), nunca recalculado aqui.
+// status e SEMPRE derivado pelo backend (resolvedAt/cancelledAt/inProgressAt), nunca recalculado aqui.
 export interface TripOccurrenceEntity {
   id: string;
   tripId: string;
+  // Fase 101 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  tripDeliveryStopId: string | null;
   driverShiftId: string | null;
   driverId: string | null;
   vehicleId: string | null;
@@ -2288,6 +2290,8 @@ export interface TripOccurrenceEntity {
   latitude: number | null;
   longitude: number | null;
   locationLabel: string | null;
+  // Fase 101 -- marca a transicao para IN_PROGRESS.
+  inProgressAt: string | null;
   resolvedAt: string | null;
   resolvedBy: string | null;
   cancelledAt: string | null;
@@ -2297,6 +2301,59 @@ export interface TripOccurrenceEntity {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 101 -- espelha apps/api/src/trip-operations/entities/delivery-occurrence-list-item.entity.ts.
+// Linha da listagem CROSS-TRIP de ocorrencias de entrega (GET /delivery-occurrences)
+// -- mesmo padrao de DeliveryStopListItemEntity (Fase 99).
+export interface DeliveryOccurrenceListItemEntity {
+  id: string;
+  tripId: string;
+  tripStatus: TripStatus;
+  tripOriginName: string;
+  tripDestinationName: string;
+  tripDeliveryStopId: string;
+  tripDeliveryStopSequence: number;
+  driverId: string | null;
+  driverName: string | null;
+  vehicleId: string | null;
+  vehiclePlate: string | null;
+  type: TripOccurrenceType;
+  severity: TripOccurrenceSeverity;
+  status: TripOccurrenceStatus;
+  description: string;
+  occurredAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolverName: string | null;
+  cancelledAt: string | null;
+  attachmentId: string | null;
+  createdBy: string;
+  creatorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 101 -- espelha apps/api/src/trip-operations/entities/delivery-occurrences-dashboard.entity.ts.
+export interface DeliveryOccurrenceTypeCountEntity {
+  type: TripOccurrenceType;
+  count: number;
+}
+
+export interface DeliveryOccurrenceSeverityCountEntity {
+  severity: TripOccurrenceSeverity;
+  count: number;
+}
+
+export interface DeliveryOccurrencesDashboardEntity {
+  totalCount: number;
+  openCount: number;
+  inProgressCount: number;
+  resolvedCount: number;
+  cancelledCount: number;
+  criticalOpenCount: number;
+  bySeverity: DeliveryOccurrenceSeverityCountEntity[];
+  byType: DeliveryOccurrenceTypeCountEntity[];
 }
 
 // Fase 88 -- espelha apps/api/src/trips/entities/trip-delivery-stop.entity.ts.
@@ -2313,9 +2370,53 @@ export interface TripDeliveryStopEntity {
   locationAddress: string | null;
   status: TripDeliveryStopStatus;
   plannedArrival: string | null;
+  // Fase 99 -- execucao real, sempre DERIVADA pelo backend da propria
+  // transicao de status (nunca informada manualmente pelo frontend).
+  actualArrival: string | null;
+  deliveredAt: string | null;
+  failureReason: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Fase 99 -- espelha apps/api/src/trips/entities/delivery-stop-list-item.entity.ts.
+// Linha da listagem CROSS-TRIP de entregas (GET /delivery-stops) -- mesmos
+// campos de TripDeliveryStopEntity acima, mais o contexto minimo da viagem
+// (necessario numa visao que atravessa varias viagens ao mesmo tempo).
+export interface DeliveryStopListItemEntity {
+  id: string;
+  tripId: string;
+  tripStatus: TripStatus;
+  tripOriginName: string;
+  tripDestinationName: string;
+  driverId: string | null;
+  driverName: string | null;
+  sequence: number;
+  customerId: string | null;
+  customerName: string | null;
+  locationId: string;
+  locationName: string;
+  locationAddress: string | null;
+  status: TripDeliveryStopStatus;
+  plannedArrival: string | null;
+  actualArrival: string | null;
+  deliveredAt: string | null;
+  failureReason: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Fase 99 -- espelha apps/api/src/trips/entities/delivery-stops-dashboard.entity.ts.
+export interface DeliveryStopsDashboardEntity {
+  pendingCount: number;
+  inProgressCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  lateCount: number;
+  totalCount: number;
 }
 
 // Fase 91 -- espelha apps/api/src/trips/entities/trip-eta.entity.ts. SEMPRE
@@ -2648,6 +2749,13 @@ export interface FiscalDocumentEntity {
   metadata: Record<string, unknown> | null;
   tripId: string | null;
   tripLabel: string | null;
+  // Fase 100 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  tripDeliveryStopId: string | null;
+  tripDeliveryStopSequence: number | null;
+  // Fase 102 -- vinculo direto com a ocorrencia especifica (Fase 67/101).
+  tripOccurrenceId: string | null;
+  tripOccurrenceType: TripOccurrenceType | null;
+  tripOccurrenceSeverity: TripOccurrenceSeverity | null;
   vehicleId: string | null;
   vehiclePlate: string | null;
   driverId: string | null;

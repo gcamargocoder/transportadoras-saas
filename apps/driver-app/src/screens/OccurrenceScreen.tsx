@@ -25,6 +25,11 @@ const OCCURRENCE_TYPE_LABELS: Record<TripOccurrenceType, string> = {
   FUEL_PROBLEM: 'Problema de combustivel',
   TIRE_PROBLEM: 'Problema de pneu',
   OTHER: 'Outro',
+  // Fase 101 -- categorias de ocorrencia de ENTREGA.
+  RECIPIENT_ABSENT: 'Destinatario ausente',
+  WRONG_ADDRESS: 'Endereco incorreto',
+  DELIVERY_REFUSED: 'Recusa',
+  CARGO_DAMAGE: 'Avaria',
 };
 
 const OCCURRENCE_TYPES = Object.keys(OCCURRENCE_TYPE_LABELS) as TripOccurrenceType[];
@@ -33,6 +38,10 @@ const SEVERITY_LABELS: Record<TripOccurrenceSeverity, string> = {
   INFO: 'Informativa',
   WARNING: 'Atencao',
   CRITICAL: 'Critica',
+  // Fase 101 -- escala LOW/MEDIUM/HIGH usada pelas ocorrencias de entrega.
+  LOW: 'Baixa',
+  MEDIUM: 'Media',
+  HIGH: 'Alta',
 };
 
 // Fase 67 -- registro de ocorrencias pelo motorista. Mesmo padrao

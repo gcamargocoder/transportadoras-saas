@@ -596,6 +596,8 @@ export const FISCAL_DOCUMENT_TYPE_LABELS: Record<FiscalDocumentType, string> = {
   DAMDFE: 'DAMDFE',
   DELIVERY_PROOF: 'Comprovante de entrega',
   OTHER: 'Outro',
+  // Fase 102 -- evidencia documental de uma ocorrencia.
+  OCCURRENCE_EVIDENCE: 'Evidência de ocorrência',
 };
 
 // VALID significa apenas "estrutura/conteudo basico reconhecido pelo
@@ -785,6 +787,8 @@ export const DRIVER_STATUS_TONE: Record<DriverStatus, 'success' | 'warning' | 'd
 };
 
 // Fase 67 -- Timeline Operacional, Ocorrências e Jornada da Viagem.
+// Fase 101 -- categorias de ocorrência de ENTREGA (4 novas) + escala
+// LOW/MEDIUM/HIGH (convive com INFO/WARNING/CRITICAL) + status IN_PROGRESS.
 export const TRIP_OCCURRENCE_TYPE_LABELS: Record<TripOccurrenceType, string> = {
   ACCIDENT: 'Acidente',
   BREAKDOWN: 'Quebra/pane',
@@ -796,16 +800,24 @@ export const TRIP_OCCURRENCE_TYPE_LABELS: Record<TripOccurrenceType, string> = {
   FUEL_PROBLEM: 'Problema de combustível',
   TIRE_PROBLEM: 'Problema de pneu',
   OTHER: 'Outro',
+  RECIPIENT_ABSENT: 'Destinatário ausente',
+  WRONG_ADDRESS: 'Endereço incorreto',
+  DELIVERY_REFUSED: 'Recusa',
+  CARGO_DAMAGE: 'Avaria',
 };
 
 export const TRIP_OCCURRENCE_SEVERITY_LABELS: Record<TripOccurrenceSeverity, string> = {
   INFO: 'Informativa',
   WARNING: 'Atenção',
   CRITICAL: 'Crítica',
+  LOW: 'Baixa',
+  MEDIUM: 'Média',
+  HIGH: 'Alta',
 };
 
 export const TRIP_OCCURRENCE_STATUS_LABELS: Record<TripOccurrenceStatus, string> = {
   OPEN: 'Em aberto',
+  IN_PROGRESS: 'Em andamento',
   RESOLVED: 'Resolvida',
   CANCELLED: 'Cancelada',
 };
@@ -815,6 +827,7 @@ export const TRIP_DELIVERY_STOP_STATUS_LABELS: Record<TripDeliveryStopStatus, st
   IN_PROGRESS: 'Em andamento',
   COMPLETED: 'Concluída',
   CANCELLED: 'Cancelada',
+  FAILED: 'Com falha',
 };
 
 export const DRIVER_SHIFT_STATUS_LABELS: Record<DriverShiftStatus, string> = {

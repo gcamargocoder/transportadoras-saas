@@ -47,6 +47,20 @@ export class FindFiscalDocumentsQueryDto extends PaginationQueryDto {
   @IsUUID('4')
   tripId?: string;
 
+  // Fase 100 -- "consulta na entrega": lista os comprovantes/documentos de
+  // uma parada especifica, distinto de tripId (a viagem inteira).
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID('4')
+  tripDeliveryStopId?: string;
+
+  // Fase 102 -- "consulta na ocorrencia": lista os documentos/evidencias de
+  // uma ocorrencia especifica.
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID('4')
+  tripOccurrenceId?: string;
+
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID('4')

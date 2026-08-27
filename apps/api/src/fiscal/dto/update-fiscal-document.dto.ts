@@ -60,6 +60,22 @@ export class UpdateFiscalDocumentDto {
   @IsUUID('4', { message: 'tripId deve ser um UUID valido.' })
   tripId?: string | null;
 
+  // Fase 100 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  // Envie null para desvincular. Quando setado para um valor nao-nulo, exige
+  // a parada COMPLETED e pertencente a tripId (o informado neste mesmo PATCH,
+  // ou o ja gravado no documento quando tripId nao muda).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Envie null para desvincular. Exige a parada COMPLETED.', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'tripDeliveryStopId deve ser um UUID valido.' })
+  tripDeliveryStopId?: string | null;
+
+  // Fase 102 -- vinculo direto com a ocorrencia especifica (TripOccurrence).
+  // Envie null para desvincular. Nenhuma exigencia de status da ocorrencia.
+  @ApiPropertyOptional({ format: 'uuid', description: 'Envie null para desvincular.', nullable: true })
+  @IsOptional()
+  @IsUUID('4', { message: 'tripOccurrenceId deve ser um UUID valido.' })
+  tripOccurrenceId?: string | null;
+
   @ApiPropertyOptional({ format: 'uuid', nullable: true })
   @IsOptional()
   @IsUUID('4', { message: 'vehicleId deve ser um UUID valido.' })

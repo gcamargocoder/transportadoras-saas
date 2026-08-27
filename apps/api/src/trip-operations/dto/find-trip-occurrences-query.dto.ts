@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { TripOccurrenceSeverity, TripOccurrenceType } from '@prisma/client';
-import { IsEnum, IsIn, IsOptional } from 'class-validator';
+import { IsEnum, IsIn, IsOptional, IsUUID } from 'class-validator';
 import { TRIP_OCCURRENCE_STATUSES, TripOccurrenceStatus } from '../entities/trip-occurrence.entity';
 
 // GET /trips/:id/occurrences -- lista as ocorrencias desta viagem (nunca
@@ -20,4 +20,11 @@ export class FindTripOccurrencesQueryDto {
   @IsOptional()
   @IsIn(TRIP_OCCURRENCE_STATUSES, { message: 'status invalido.' })
   status?: TripOccurrenceStatus;
+
+  // Fase 101 -- "consulta na entrega": restringe as ocorrencias desta
+  // viagem a UMA parada especifica.
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID('4')
+  tripDeliveryStopId?: string;
 }

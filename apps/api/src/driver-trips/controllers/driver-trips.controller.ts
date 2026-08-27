@@ -58,6 +58,7 @@ import { CreateDriverFuelSupplyDto } from '../../fuel-supplies/dto/create-driver
 import { FuelSupplyEntity } from '../../fuel-supplies/entities/fuel-supply.entity';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
 import { SubmitDeliveryProofDto } from '../../fiscal/dto/submit-delivery-proof.dto';
+import { SubmitOccurrenceEvidenceDto } from '../../fiscal/dto/submit-occurrence-evidence.dto';
 import { FiscalDocumentEntity } from '../../fiscal/entities/fiscal-document.entity';
 import { FiscalDocumentsService } from '../../fiscal/services/fiscal-documents.service';
 import { FindNotificationsQueryDto } from '../../notifications/dto/find-notifications-query.dto';
@@ -722,6 +723,61 @@ export class DriverTripsController {
       tenantId,
       driverId,
       id,
+      dto,
+      file,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  // ==========================================================================
+  // DOCUMENTOS/EVIDENCIAS DE OCORRENCIA (Fase 102) -- mesmo mecanismo
+  // generico de FiscalDocument ja usado acima para comprovante de entrega,
+  // nenhum storage/servico paralelo. occurrenceId precisa pertencer a ESTA
+  // viagem (validado pelo service); vehicleId sempre derivado da viagem,
+  // driverId e o motorista autenticado.
+  // ==========================================================================
+
+  @Post('trips/:id/occurrences/:occurrenceId/evidence')
+  @Throttle(UPLOAD_THROTTLE)
+  @UseInterceptors(FileInterceptor('file', buildDriverDeliveryProofMulterOptions()))
+  @UseFilters(MulterExceptionFilter)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'deviceEventId'],
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Foto (camera/galeria) ou PDF da evidencia.' },
+        deviceEventId: { type: 'string' },
+        observation: { type: 'string' },
+        capturedAt: { type: 'string', format: 'date-time' },
+      },
+    },
+  })
+  @ApiOperation({
+    summary:
+      'Registra um documento/evidencia (OCCURRENCE_EVIDENCE) para uma ocorrencia desta viagem. Idempotente por ' +
+      'deviceEventId (fila offline) -- reenviar apos reconexao nunca cria uma segunda evidencia.',
+  })
+  @ApiOkResponse({ type: FiscalDocumentEntity })
+  async submitOccurrenceEvidence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('occurrenceId', ParseUUIDPipe) occurrenceId: string,
+    @Body() dto: SubmitOccurrenceEvidenceDto,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<FiscalDocumentEntity> {
+    if (!file) {
+      throw new BadRequestException('Arquivo obrigatorio. Extensoes aceitas: .pdf, .jpg, .jpeg, .png.');
+    }
+    const tenantId = this.tenantContext.requireTenantId();
+    const driverId = this.driverContext.requireDriverId();
+    await this.driverTripsService.getOne(tenantId, driverId, id);
+    return this.fiscalDocumentsService.submitOccurrenceEvidenceFromDriverApp(
+      tenantId,
+      driverId,
+      id,
+      occurrenceId,
       dto,
       file,
       { userId: this.tenantContext.requireUserId() },

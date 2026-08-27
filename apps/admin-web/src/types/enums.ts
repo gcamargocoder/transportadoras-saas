@@ -417,6 +417,9 @@ export const TripDeliveryStopStatus = {
   IN_PROGRESS: 'IN_PROGRESS',
   COMPLETED: 'COMPLETED',
   CANCELLED: 'CANCELLED',
+  // Fase 99 -- entrega tentada mas nao concluida (distinta de CANCELLED,
+  // removida do planejamento sem tentativa).
+  FAILED: 'FAILED',
 } as const;
 export type TripDeliveryStopStatus = (typeof TripDeliveryStopStatus)[keyof typeof TripDeliveryStopStatus];
 
@@ -569,6 +572,9 @@ export const FiscalDocumentType = {
   DAMDFE: 'DAMDFE',
   DELIVERY_PROOF: 'DELIVERY_PROOF',
   OTHER: 'OTHER',
+  // Fase 102 -- evidencia documental de uma TripOccurrence, distinta de
+  // DELIVERY_PROOF (evidencia de ENTREGA).
+  OCCURRENCE_EVIDENCE: 'OCCURRENCE_EVIDENCE',
 } as const;
 export type FiscalDocumentType = (typeof FiscalDocumentType)[keyof typeof FiscalDocumentType];
 
@@ -764,6 +770,9 @@ export type FleetAlertSeverity = (typeof FleetAlertSeverity)[keyof typeof FleetA
 
 // Fase 67 -- espelha TripOccurrenceType/Severity/Status do backend
 // (apps/api/src/trip-operations/entities/trip-occurrence.entity.ts).
+// Fase 101 -- catalogo de ocorrencias de ENTREGA: 4 novos tipos, escala
+// LOW/MEDIUM/HIGH (convive com a INFO/WARNING/CRITICAL ja existente, nunca
+// a redefine) e status IN_PROGRESS.
 export const TripOccurrenceType = {
   ACCIDENT: 'ACCIDENT',
   BREAKDOWN: 'BREAKDOWN',
@@ -775,6 +784,10 @@ export const TripOccurrenceType = {
   FUEL_PROBLEM: 'FUEL_PROBLEM',
   TIRE_PROBLEM: 'TIRE_PROBLEM',
   OTHER: 'OTHER',
+  RECIPIENT_ABSENT: 'RECIPIENT_ABSENT',
+  WRONG_ADDRESS: 'WRONG_ADDRESS',
+  DELIVERY_REFUSED: 'DELIVERY_REFUSED',
+  CARGO_DAMAGE: 'CARGO_DAMAGE',
 } as const;
 export type TripOccurrenceType = (typeof TripOccurrenceType)[keyof typeof TripOccurrenceType];
 
@@ -782,11 +795,15 @@ export const TripOccurrenceSeverity = {
   INFO: 'INFO',
   WARNING: 'WARNING',
   CRITICAL: 'CRITICAL',
+  LOW: 'LOW',
+  MEDIUM: 'MEDIUM',
+  HIGH: 'HIGH',
 } as const;
 export type TripOccurrenceSeverity = (typeof TripOccurrenceSeverity)[keyof typeof TripOccurrenceSeverity];
 
 export const TripOccurrenceStatus = {
   OPEN: 'OPEN',
+  IN_PROGRESS: 'IN_PROGRESS',
   RESOLVED: 'RESOLVED',
   CANCELLED: 'CANCELLED',
 } as const;

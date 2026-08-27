@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType } from '@prisma/client';
+import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType, TripOccurrenceSeverity, TripOccurrenceType } from '@prisma/client';
 import { FiscalIssueCode } from '../utils/fiscal-document-validation.util';
 
 // Fase 56 -- QUEM criou o documento, nunca uma coluna nova: derivado em
@@ -103,6 +103,23 @@ export class FiscalDocumentEntity {
 
   @ApiProperty({ nullable: true, example: 'São Paulo/SP → Curitiba/PR' })
   tripLabel!: string | null;
+
+  // Fase 100 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  @ApiProperty({ format: 'uuid', nullable: true })
+  tripDeliveryStopId!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'Sequencia (#N) da parada, quando vinculada.' })
+  tripDeliveryStopSequence!: number | null;
+
+  // Fase 102 -- vinculo direto com a ocorrencia especifica (Fase 67/101).
+  @ApiProperty({ format: 'uuid', nullable: true })
+  tripOccurrenceId!: string | null;
+
+  @ApiProperty({ enum: TripOccurrenceType, nullable: true, description: 'Tipo da ocorrencia vinculada, quando houver.' })
+  tripOccurrenceType!: TripOccurrenceType | null;
+
+  @ApiProperty({ enum: TripOccurrenceSeverity, nullable: true, description: 'Severidade da ocorrencia vinculada, quando houver.' })
+  tripOccurrenceSeverity!: TripOccurrenceSeverity | null;
 
   @ApiProperty({ format: 'uuid', nullable: true })
   vehicleId!: string | null;

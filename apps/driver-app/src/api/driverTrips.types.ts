@@ -94,7 +94,11 @@ export interface NearbyTollPlaza {
 // docs/trip-routing.md) -- nenhum campo/endpoint novo foi necessario aqui:
 // aplicar uma sugestao apenas reordena os MESMOS registros que este tipo ja
 // espelha.
-export type TripDeliveryStopStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+// Fase 99 -- FAILED: entrega tentada mas nao concluida (distinta de
+// CANCELLED, removida do planejamento sem tentativa). actualArrival/
+// deliveredAt sao a EXECUCAO real (previsao continua em plannedArrival),
+// sempre derivados pelo backend -- nunca informados pelo app.
+export type TripDeliveryStopStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'FAILED';
 
 export interface TripDeliveryStop {
   id: string;
@@ -107,6 +111,9 @@ export interface TripDeliveryStop {
   locationAddress: string | null;
   status: TripDeliveryStopStatus;
   plannedArrival: string | null;
+  actualArrival: string | null;
+  deliveredAt: string | null;
+  failureReason: string | null;
   notes: string | null;
 }
 
@@ -226,6 +233,9 @@ export type DeliveryProofStatus = 'PENDING' | 'VALID' | 'INVALID' | 'CANCELLED';
 export interface DeliveryProof {
   id: string;
   tripId: string | null;
+  // Fase 100 -- vinculo direto com a parada/entrega especifica (Fase 88),
+  // quando informado na submissao.
+  tripDeliveryStopId: string | null;
   status: DeliveryProofStatus;
   fileName: string | null;
   issueDate: string | null;
@@ -234,11 +244,20 @@ export interface DeliveryProof {
 
 export interface SubmitDeliveryProofInput {
   deviceEventId: string;
+  // Fase 100 -- parada/entrega especifica desta viagem (TripDeliveryStop),
+  // quando a viagem usa paradas planejadas. Precisa estar COMPLETED --
+  // validado pelo backend, nunca neste tipo. Opcional: viagens simples
+  // (sem paradas) continuam funcionando sem este campo.
+  tripDeliveryStopId?: string;
   observation?: string;
   capturedAt?: string;
 }
 
-// Fase 67 -- ocorrencias e jornada do motorista.
+// Fase 67 -- ocorrencias e jornada do motorista. Fase 101 -- catalogo de
+// ocorrencias de ENTREGA (4 novos tipos) + escala LOW/MEDIUM/HIGH (alem da
+// INFO/WARNING/CRITICAL ja existente -- as duas escalas convivem no mesmo
+// campo, nunca uma redefine a outra) + status IN_PROGRESS + vinculo com
+// tripDeliveryStopId.
 export type TripOccurrenceType =
   | 'ACCIDENT'
   | 'BREAKDOWN'
@@ -249,13 +268,19 @@ export type TripOccurrenceType =
   | 'VEHICLE_PROBLEM'
   | 'FUEL_PROBLEM'
   | 'TIRE_PROBLEM'
-  | 'OTHER';
-export type TripOccurrenceSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
-export type TripOccurrenceStatus = 'OPEN' | 'RESOLVED' | 'CANCELLED';
+  | 'OTHER'
+  | 'RECIPIENT_ABSENT'
+  | 'WRONG_ADDRESS'
+  | 'DELIVERY_REFUSED'
+  | 'CARGO_DAMAGE';
+export type TripOccurrenceSeverity = 'INFO' | 'WARNING' | 'CRITICAL' | 'LOW' | 'MEDIUM' | 'HIGH';
+export type TripOccurrenceStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED';
 
 export interface TripOccurrence {
   id: string;
   tripId: string;
+  // Fase 101 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  tripDeliveryStopId: string | null;
   type: TripOccurrenceType;
   severity: TripOccurrenceSeverity;
   status: TripOccurrenceStatus;
@@ -269,8 +294,30 @@ export interface CreateOccurrenceInput {
   severity?: TripOccurrenceSeverity;
   description: string;
   occurredAt: string;
+  // Fase 101 -- parada/entrega especifica desta viagem, quando aplicavel.
+  // Validado no backend (deve pertencer a esta viagem).
+  tripDeliveryStopId?: string;
   latitude?: number;
   longitude?: number;
+}
+
+// Fase 102 -- documento/evidencia (OCCURRENCE_EVIDENCE) vinculado a uma
+// ocorrencia especifica. Mesmo mecanismo generico de FiscalDocument ja
+// usado por DeliveryProof acima -- nunca um storage paralelo.
+export interface OccurrenceEvidence {
+  id: string;
+  tripId: string | null;
+  tripOccurrenceId: string | null;
+  status: DeliveryProofStatus;
+  fileName: string | null;
+  issueDate: string | null;
+  createdAt: string;
+}
+
+export interface SubmitOccurrenceEvidenceInput {
+  deviceEventId: string;
+  observation?: string;
+  capturedAt?: string;
 }
 
 // Jornada: status sempre derivado pelo backend (endedAt/cancelledAt),

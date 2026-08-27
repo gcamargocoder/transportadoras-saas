@@ -29,17 +29,22 @@ export const TRIP_STATUS_OPTIONS: TripStatus[] = [
   'CANCELLED',
 ];
 
-// Fase 67
+// Fase 67 (IN_PROGRESS adicionado na Fase 101)
 export const TRIP_OCCURRENCE_STATUS_TONE: Record<TripOccurrenceStatus, Tone> = {
   OPEN: 'warning',
+  IN_PROGRESS: 'info',
   RESOLVED: 'success',
   CANCELLED: 'neutral',
 };
 
+// LOW/MEDIUM/HIGH adicionados na Fase 101 (escala usada pelas ocorrencias de entrega).
 export const TRIP_OCCURRENCE_SEVERITY_TONE: Record<TripOccurrenceSeverity, Tone> = {
   INFO: 'info',
   WARNING: 'warning',
   CRITICAL: 'danger',
+  LOW: 'info',
+  MEDIUM: 'warning',
+  HIGH: 'danger',
 };
 
 export const DRIVER_SHIFT_STATUS_TONE: Record<DriverShiftStatus, Tone> = {
@@ -48,12 +53,13 @@ export const DRIVER_SHIFT_STATUS_TONE: Record<DriverShiftStatus, Tone> = {
   CANCELLED: 'neutral',
 };
 
-// Fase 88
+// Fase 88 (FAILED adicionado na Fase 99)
 export const TRIP_DELIVERY_STOP_STATUS_TONE: Record<TripDeliveryStopStatus, Tone> = {
   PENDING: 'neutral',
   IN_PROGRESS: 'info',
   COMPLETED: 'success',
   CANCELLED: 'danger',
+  FAILED: 'danger',
 };
 
 // Fase 92

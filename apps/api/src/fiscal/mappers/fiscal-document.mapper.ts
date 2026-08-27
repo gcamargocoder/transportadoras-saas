@@ -1,4 +1,4 @@
-import { Customer, Driver, FiscalDocument, Location, Trip, UserAccount, Vehicle } from '@prisma/client';
+import { Customer, Driver, FiscalDocument, Location, Trip, TripDeliveryStop, TripOccurrence, UserAccount, Vehicle } from '@prisma/client';
 import { FiscalDocumentEntity } from '../entities/fiscal-document.entity';
 
 export type FiscalDocumentWithRelations = FiscalDocument & {
@@ -7,6 +7,13 @@ export type FiscalDocumentWithRelations = FiscalDocument & {
   // validation.util.ts. Nunca usado pelo mapper em si, so repassado ao
   // classificador no service.
   trip: (Trip & { origin: Location; destination: Location; composition: { vehicleId: string } | null }) | null;
+  // Fase 100 -- so a sequencia (exibicao "Parada #N"), nunca a linha
+  // completa (evita inflar o payload/include para algo ja disponivel via
+  // GET /trips/:id/delivery-stops quando o detalhe completo for preciso).
+  tripDeliveryStop: Pick<TripDeliveryStop, 'sequence'> | null;
+  // Fase 102 -- so tipo/severidade (exibicao "Avaria (Alta)"), mesmo
+  // principio de tripDeliveryStop acima.
+  tripOccurrence: Pick<TripOccurrence, 'type' | 'severity'> | null;
   vehicle: Vehicle | null;
   driver: Driver | null;
   customer: Customer | null;
@@ -36,6 +43,11 @@ export function toFiscalDocumentEntity(document: FiscalDocumentWithRelations): F
   entity.metadata = (document.metadata as Record<string, unknown> | null) ?? null;
   entity.tripId = document.tripId;
   entity.tripLabel = document.trip ? `${document.trip.origin.name} → ${document.trip.destination.name}` : null;
+  entity.tripDeliveryStopId = document.tripDeliveryStopId;
+  entity.tripDeliveryStopSequence = document.tripDeliveryStop?.sequence ?? null;
+  entity.tripOccurrenceId = document.tripOccurrenceId;
+  entity.tripOccurrenceType = document.tripOccurrence?.type ?? null;
+  entity.tripOccurrenceSeverity = document.tripOccurrence?.severity ?? null;
   entity.vehicleId = document.vehicleId;
   entity.vehiclePlate = document.vehicle?.plate ?? null;
   entity.driverId = document.driverId;

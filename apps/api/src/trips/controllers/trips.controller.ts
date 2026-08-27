@@ -310,6 +310,23 @@ export class TripsController {
     );
   }
 
+  @Patch(':id/occurrences/:occurrenceId/start')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({ summary: 'Marca uma ocorrencia como em andamento (sendo tratada). Idempotente.' })
+  @ApiOkResponse({ type: TripOccurrenceEntity })
+  markOccurrenceInProgress(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('occurrenceId', ParseUUIDPipe) occurrenceId: string,
+  ): Promise<TripOccurrenceEntity> {
+    return this.tripOccurrencesService.markInProgress(
+      this.tenantContext.requireTenantId(),
+      id,
+      occurrenceId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
   @Patch(':id/occurrences/:occurrenceId/resolve')
   @Roles(...TRIP_WRITE_ROLES)
   @ApiOperation({ summary: 'Resolve uma ocorrencia em aberto. Idempotente.' })

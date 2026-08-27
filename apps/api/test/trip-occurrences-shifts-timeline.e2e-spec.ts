@@ -177,6 +177,19 @@ describe('Trip Occurrences, Driver Shifts e Timeline unificada (e2e)', () => {
     };
   }
 
+  // Fase 101 -- cria uma parada/entrega (Fase 88) para a viagem. Ocorrencias
+  // de entrega nao exigem nenhum status especifico da parada (distinto do
+  // POD, Fase 100) -- criada em PENDING mesmo, propositalmente.
+  async function createDeliveryStop(auth: string, tripId: string) {
+    const locationId = await createLocation(auth, `Parada ${randomUUID()}`);
+    const res = await request(app.getHttpServer())
+      .post(`/api/v1/trips/${tripId}/delivery-stops`)
+      .set('Authorization', auth)
+      .send({ locationId })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   // ==========================================================================
   // Ocorrencias
   // ==========================================================================
@@ -295,6 +308,465 @@ describe('Trip Occurrences, Driver Shifts e Timeline unificada (e2e)', () => {
         .get(`/api/v1/trips/${tripId}/occurrences`)
         .set('Authorization', auditorAuth)
         .expect(200);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 101 -- ocorrencias de entrega (vinculo com TripDeliveryStop, status
+  // IN_PROGRESS, categorias/severidade novas, listagem cross-trip)
+  // ==========================================================================
+  describe('Fase 101 -- Ocorrencias de Entrega', () => {
+    it('admin registra ocorrencia vinculada a uma parada (tripDeliveryStopId)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccLink');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({
+          type: 'RECIPIENT_ABSENT',
+          severity: 'HIGH',
+          description: 'Destinatario nao encontrado no endereco',
+          occurredAt: '2026-09-01T10:00:00.000Z',
+          tripDeliveryStopId: stopId,
+        })
+        .expect(201);
+      expect(res.body.data.tripDeliveryStopId).toBe(stopId);
+      expect(res.body.data.type).toBe('RECIPIENT_ABSENT');
+      expect(res.body.data.severity).toBe('HIGH');
+      expect(res.body.data.status).toBe('OPEN');
+    });
+
+    it('aceita as 4 novas categorias e as 3 novas severidades (LOW/MEDIUM/HIGH)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccCatalog');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const cases: Array<{ type: string; severity: string }> = [
+        { type: 'RECIPIENT_ABSENT', severity: 'LOW' },
+        { type: 'WRONG_ADDRESS', severity: 'MEDIUM' },
+        { type: 'DELIVERY_REFUSED', severity: 'HIGH' },
+        { type: 'CARGO_DAMAGE', severity: 'CRITICAL' },
+      ];
+      for (const { type, severity } of cases) {
+        const res = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type, severity, description: `${type}/${severity}`, occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+          .expect(201);
+        expect(res.body.data.type).toBe(type);
+        expect(res.body.data.severity).toBe(severity);
+      }
+    });
+
+    it('bloqueia (400) tripDeliveryStopId de outra viagem; rejeita (404) tripDeliveryStopId inexistente', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccWrongStop');
+      const { tripId: tripA } = await setupDriverWithTrip(adminAuth, tenantId);
+      const { tripId: tripB } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopOfTripB = await createDeliveryStop(adminAuth, tripB);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripA}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'OTHER', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopOfTripB })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripA}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'OTHER', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: randomUUID() })
+        .expect(404);
+    });
+
+    it('motorista registra ocorrencia de entrega vinculada a parada (tripDeliveryStopId)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccDriver');
+      const { tripId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/occurrences`)
+        .set('Authorization', driverAuth)
+        .send({
+          deviceEventId: `dev-${randomUUID()}`,
+          type: 'WRONG_ADDRESS',
+          description: 'Endereco nao localizado pelo GPS',
+          occurredAt: '2026-09-01T10:00:00.000Z',
+          tripDeliveryStopId: stopId,
+        })
+        .expect(201);
+      expect(res.body.data.tripDeliveryStopId).toBe(stopId);
+    });
+
+    it('transicao OPEN -> IN_PROGRESS -> RESOLVED; bloqueia start apos resolvida/cancelada; idempotente', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccProgress');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'OTHER', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+      const occurrenceId = createRes.body.data.id as string;
+
+      const startRes = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId}/start`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(startRes.body.data.status).toBe('IN_PROGRESS');
+
+      // Idempotente.
+      const startAgain = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId}/start`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(startAgain.body.data.status).toBe('IN_PROGRESS');
+
+      const resolveRes = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId}/resolve`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(resolveRes.body.data.status).toBe('RESOLVED');
+
+      // start apos resolvida -- bloqueado.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId}/start`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+
+      // Registro separado so para testar start apos cancelada.
+      const createRes2 = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'OTHER', description: 'y', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+      const occurrenceId2 = createRes2.body.data.id as string;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId2}/cancel`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId2}/start`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+    });
+
+    it('auditoria registra tripDeliveryStopId na criacao e a transicao para em andamento', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccAudit');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'CARGO_DAMAGE', severity: 'HIGH', description: 'Carga avariada', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+        .expect(201);
+      const occurrenceId = createRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${occurrenceId}/start`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      const created = await prisma.auditLog.findFirst({
+        where: { tenantId, entityName: 'TripOccurrence', entityId: occurrenceId, action: 'trip.occurrence_created' },
+      });
+      expect((created?.newValue as { tripDeliveryStopId?: string } | null)?.tripDeliveryStopId).toBe(stopId);
+
+      const inProgress = await prisma.auditLog.findFirst({
+        where: { tenantId, entityName: 'TripOccurrence', entityId: occurrenceId, action: 'trip.occurrence_in_progress' },
+      });
+      expect(inProgress).not.toBeNull();
+    });
+
+    it('notificacao CRITICAL_OCCURRENCE e gerada para uma ocorrencia de entrega critica, com tripDeliveryStopId no metadata', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccNotify');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'CARGO_DAMAGE', severity: 'CRITICAL', description: 'Carga seriamente avariada', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+        .expect(201);
+      const occurrenceId = createRes.body.data.id as string;
+
+      await request(app.getHttpServer()).post('/api/v1/notifications/process').set('Authorization', adminAuth).expect(200);
+
+      const notification = await prisma.notification.findFirst({
+        where: { tenantId, type: 'CRITICAL_OCCURRENCE', entityId: occurrenceId },
+      });
+      expect(notification).not.toBeNull();
+      expect((notification?.metadata as { tripDeliveryStopId?: string } | null)?.tripDeliveryStopId).toBe(stopId);
+    });
+
+    // ------------------------------------------------------------------------
+    // GET /delivery-occurrences -- listagem CROSS-TRIP
+    // ------------------------------------------------------------------------
+    describe('GET /delivery-occurrences (cross-trip)', () => {
+      it('lista somente ocorrencias vinculadas a uma parada -- exclui ocorrencias gerais da viagem (sem tripDeliveryStopId)', async () => {
+        const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccList');
+        const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+        const stopId = await createDeliveryStop(adminAuth, tripId);
+
+        const linked = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'WRONG_ADDRESS', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+          .expect(201);
+
+        // Ocorrencia GERAL da viagem (sem parada) -- ex: quebra em transito.
+        await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'BREAKDOWN', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+          .expect(201);
+
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(res.body.data.items).toHaveLength(1);
+        expect(res.body.data.items[0].id).toBe(linked.body.data.id);
+        expect(res.body.data.items[0].tripDeliveryStopSequence).toBe(1);
+        expect(res.body.data.items[0].tripOriginName).toEqual(expect.any(String));
+      });
+
+      it('filtra por type/severity/status/tripId/tripDeliveryStopId/search e pagina', async () => {
+        const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccFilters');
+        const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+        const stopA = await createDeliveryStop(adminAuth, tripId);
+        const stopB = await createDeliveryStop(adminAuth, tripId);
+
+        const occA = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'RECIPIENT_ABSENT', severity: 'HIGH', description: 'ninguem em casa', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopA })
+          .expect(201);
+        await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'DELIVERY_REFUSED', severity: 'MEDIUM', description: 'cliente recusou', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopB })
+          .expect(201);
+
+        const byType = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ type: 'RECIPIENT_ABSENT' })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(byType.body.data.items).toHaveLength(1);
+        expect(byType.body.data.items[0].id).toBe(occA.body.data.id);
+
+        const bySeverity = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ severity: 'MEDIUM' })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(bySeverity.body.data.items).toHaveLength(1);
+
+        const byStop = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ tripDeliveryStopId: stopA })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(byStop.body.data.items).toHaveLength(1);
+        expect(byStop.body.data.items[0].id).toBe(occA.body.data.id);
+
+        const byTrip = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ tripId })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(byTrip.body.data.items).toHaveLength(2);
+
+        const bySearch = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ search: 'recusou' })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(bySearch.body.data.items).toHaveLength(1);
+
+        const byStatus = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ status: 'OPEN' })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(byStatus.body.data.items).toHaveLength(2);
+
+        const page1 = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ page: 1, pageSize: 1 })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(page1.body.data.items).toHaveLength(1);
+        expect(page1.body.data.meta.total).toBe(2);
+        expect(page1.body.data.meta.totalPages).toBe(2);
+      });
+
+      it('acoes cross-trip: start/resolve/cancel funcionam sem precisar navegar ate a viagem', async () => {
+        const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccCrossActions');
+        const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+        const stopId = await createDeliveryStop(adminAuth, tripId);
+
+        const createRes = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'OTHER', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+          .expect(201);
+        const occurrenceId = createRes.body.data.id as string;
+
+        const detail = await request(app.getHttpServer())
+          .get(`/api/v1/delivery-occurrences/${occurrenceId}`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(detail.body.data.id).toBe(occurrenceId);
+
+        const started = await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${occurrenceId}/start`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(started.body.data.status).toBe('IN_PROGRESS');
+
+        const resolved = await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${occurrenceId}/resolve`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(resolved.body.data.status).toBe('RESOLVED');
+
+        // cancel apos resolvida -- ainda permitido (idempotente e a palavra final).
+        const cancelled = await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${occurrenceId}/cancel`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(cancelled.body.data.status).toBe('CANCELLED');
+      });
+
+      it('isolamento multi-tenant: tenant B nunca ve/acessa ocorrencias de entrega do tenant A', async () => {
+        const tenantA = await createTenantAndLoginAsAdmin('DelOccIsolA');
+        const { tripId } = await setupDriverWithTrip(tenantA.adminAuth, tenantA.tenantId);
+        const stopId = await createDeliveryStop(tenantA.adminAuth, tripId);
+        const createRes = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', tenantA.adminAuth)
+          .send({ type: 'OTHER', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+          .expect(201);
+        const occurrenceId = createRes.body.data.id as string;
+
+        const tenantB = await createTenantAndLoginAsAdmin('DelOccIsolB');
+
+        const list = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .set('Authorization', tenantB.adminAuth)
+          .expect(200);
+        expect(list.body.data.items).toHaveLength(0);
+
+        await request(app.getHttpServer())
+          .get(`/api/v1/delivery-occurrences/${occurrenceId}`)
+          .set('Authorization', tenantB.adminAuth)
+          .expect(404);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${occurrenceId}/resolve`)
+          .set('Authorization', tenantB.adminAuth)
+          .expect(404);
+      });
+
+      it('RBAC: DRIVER bloqueado (403); AUDITOR le mas nao resolve/cancela', async () => {
+        const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccRbac');
+        const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+        const stopId = await createDeliveryStop(adminAuth, tripId);
+        const createRes = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'OTHER', description: 'x', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+          .expect(201);
+        const occurrenceId = createRes.body.data.id as string;
+
+        const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+        const driverEmail = `driver-rbac-${unique}@teste.com`;
+        await request(app.getHttpServer())
+          .post('/api/v1/users')
+          .set('Authorization', adminAuth)
+          .send({ name: 'Driver User', email: driverEmail, password: 'SenhaForte123!', role: 'DRIVER' })
+          .expect(201);
+        const driverLogin = await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ tenantId, email: driverEmail, password: 'SenhaForte123!' })
+          .expect(200);
+        const driverAuth = `Bearer ${driverLogin.body.data.accessToken as string}`;
+
+        await request(app.getHttpServer()).get('/api/v1/delivery-occurrences').set('Authorization', driverAuth).expect(403);
+
+        const auditorEmail = `auditor-rbac-${unique}@teste.com`;
+        await request(app.getHttpServer())
+          .post('/api/v1/users')
+          .set('Authorization', adminAuth)
+          .send({ name: 'Auditor User', email: auditorEmail, password: 'SenhaForte123!', role: 'AUDITOR' })
+          .expect(201);
+        const auditorLogin = await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ tenantId, email: auditorEmail, password: 'SenhaForte123!' })
+          .expect(200);
+        const auditorAuth = `Bearer ${auditorLogin.body.data.accessToken as string}`;
+
+        await request(app.getHttpServer()).get('/api/v1/delivery-occurrences').set('Authorization', auditorAuth).expect(200);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${occurrenceId}/resolve`)
+          .set('Authorization', auditorAuth)
+          .expect(403);
+      });
+    });
+
+    // ------------------------------------------------------------------------
+    // GET /delivery-occurrences/dashboard
+    // ------------------------------------------------------------------------
+    describe('GET /delivery-occurrences/dashboard', () => {
+      it('conta por status, severidade critica em aberto e por tipo', async () => {
+        const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccDashboard');
+        const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+        const stopA = await createDeliveryStop(adminAuth, tripId);
+        const stopB = await createDeliveryStop(adminAuth, tripId);
+        const stopC = await createDeliveryStop(adminAuth, tripId);
+
+        const open = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'RECIPIENT_ABSENT', severity: 'CRITICAL', description: 'a', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopA })
+          .expect(201);
+        void open;
+
+        const inProgress = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'WRONG_ADDRESS', severity: 'LOW', description: 'b', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopB })
+          .expect(201);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${inProgress.body.data.id}/start`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+
+        const resolved = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'DELIVERY_REFUSED', severity: 'MEDIUM', description: 'c', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopC })
+          .expect(201);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/delivery-occurrences/${resolved.body.data.id}/resolve`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences/dashboard')
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(res.body.data.totalCount).toBe(3);
+        expect(res.body.data.openCount).toBe(1);
+        expect(res.body.data.inProgressCount).toBe(1);
+        expect(res.body.data.resolvedCount).toBe(1);
+        expect(res.body.data.cancelledCount).toBe(0);
+        expect(res.body.data.criticalOpenCount).toBe(1);
+        expect(res.body.data.bySeverity.length).toBeGreaterThan(0);
+        expect(res.body.data.byType.length).toBeGreaterThan(0);
+      });
     });
   });
 
@@ -740,5 +1212,57 @@ describe('Trip Occurrences, Driver Shifts e Timeline unificada (e2e)', () => {
       // de existencia da viagem), nunca 1 query por evento.
       expect(queriesFor50).toBeLessThanOrEqual(queriesFor10 + 1);
     }, 120000);
+
+    // Fase 101 -- o include (trip/origin/destination/tripDeliveryStop/
+    // driver/vehicle/creator/resolver) e sempre um JOIN dentro da MESMA
+    // query, nunca uma consulta adicional por linha.
+    it('a contagem de queries de GET /delivery-occurrences nao cresce com paradas/ocorrencias crescentes', async () => {
+      const { adminAuth } = await createTenantAndLoginOnCountingApp('N1DelOcc');
+      const tripId = await setupTripOnCountingApp(adminAuth);
+
+      async function seedDeliveryOccurrence(index: number): Promise<void> {
+        const locationRes = await request(countingApp.getHttpServer())
+          .post('/api/v1/locations')
+          .set('Authorization', adminAuth)
+          .send({ name: `Parada ${index} ${randomUUID()}`, type: 'CUSTOMER_SITE' })
+          .expect(201);
+        const stopRes = await request(countingApp.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/delivery-stops`)
+          .set('Authorization', adminAuth)
+          .send({ locationId: locationRes.body.data.id })
+          .expect(201);
+        await request(countingApp.getHttpServer())
+          .post(`/api/v1/trips/${tripId}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({
+            type: 'OTHER',
+            description: `del-oc-${index}`,
+            occurredAt: '2026-09-01T10:00:00.000Z',
+            tripDeliveryStopId: stopRes.body.data.id,
+          })
+          .expect(201);
+      }
+
+      for (let i = 0; i < 5; i += 1) await seedDeliveryOccurrence(i);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/delivery-occurrences')
+        .query({ pageSize: 100 })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor5 = queryCount;
+      expect(queriesFor5).toBeGreaterThan(0);
+
+      for (let i = 5; i < 20; i += 1) await seedDeliveryOccurrence(i);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/delivery-occurrences')
+        .query({ pageSize: 100 })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor20 = queryCount;
+
+      expect(queriesFor20).toBeLessThanOrEqual(queriesFor5 + 1);
+    }, 180000);
   });
 });

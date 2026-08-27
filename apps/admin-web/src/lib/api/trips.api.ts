@@ -5,6 +5,10 @@ import type {
   CustomerEntity,
   CustomerNoteEntity,
   CustomerSummaryEntity,
+  DeliveryOccurrenceListItemEntity,
+  DeliveryOccurrencesDashboardEntity,
+  DeliveryStopListItemEntity,
+  DeliveryStopsDashboardEntity,
   DriverShiftEntity,
   EmptyTripEntity,
   FleetOptimizationResultEntity,
@@ -30,6 +34,7 @@ import type {
   LocationType,
   TripDeliveryStopStatus,
   TripOccurrenceSeverity,
+  TripOccurrenceStatus,
   TripOccurrenceType,
   TripPriority,
   TripStatus,
@@ -127,6 +132,8 @@ export interface CreateTripOccurrencePayload {
   severity?: TripOccurrenceSeverity | undefined;
   description: string;
   occurredAt: string;
+  // Fase 101 -- vinculo direto com a parada/entrega especifica (Fase 88).
+  tripDeliveryStopId?: string | undefined;
   driverId?: string | undefined;
   vehicleId?: string | undefined;
   latitude?: number | undefined;
@@ -143,12 +150,61 @@ export function createTripOccurrence(id: string, payload: CreateTripOccurrencePa
   return api.post<TripOccurrenceEntity>(`/trips/${id}/occurrences`, payload);
 }
 
+// Fase 101
+export function markTripOccurrenceInProgress(id: string, occurrenceId: string) {
+  return api.patch<TripOccurrenceEntity>(`/trips/${id}/occurrences/${occurrenceId}/start`);
+}
+
 export function resolveTripOccurrence(id: string, occurrenceId: string) {
   return api.patch<TripOccurrenceEntity>(`/trips/${id}/occurrences/${occurrenceId}/resolve`);
 }
 
 export function cancelTripOccurrence(id: string, occurrenceId: string) {
   return api.patch<TripOccurrenceEntity>(`/trips/${id}/occurrences/${occurrenceId}/cancel`);
+}
+
+// --- Ocorrencias de Entrega: visao CROSS-TRIP (Fase 101) ---
+// Reutiliza a MESMA TripOccurrence do backend -- so acrescenta o contexto
+// de viagem/parada, necessario numa listagem que atravessa varias viagens
+// (mesmo padrao de listDeliveryStops/getDeliveryStopsDashboard acima).
+export interface FindDeliveryOccurrencesQuery extends PaginationParams {
+  type?: TripOccurrenceType | undefined;
+  severity?: TripOccurrenceSeverity | undefined;
+  status?: TripOccurrenceStatus | undefined;
+  tripId?: string | undefined;
+  tripDeliveryStopId?: string | undefined;
+  driverId?: string | undefined;
+  vehicleId?: string | undefined;
+  search?: string | undefined;
+  occurredFrom?: string | undefined;
+  occurredTo?: string | undefined;
+}
+
+export function listDeliveryOccurrences(query: FindDeliveryOccurrencesQuery = {}, signal?: AbortSignal) {
+  return api.get<Paginated<DeliveryOccurrenceListItemEntity>>('/delivery-occurrences', query, signal);
+}
+
+export function getDeliveryOccurrencesDashboard(
+  query: Omit<FindDeliveryOccurrencesQuery, 'status' | 'page' | 'pageSize'> = {},
+  signal?: AbortSignal,
+) {
+  return api.get<DeliveryOccurrencesDashboardEntity>('/delivery-occurrences/dashboard', query, signal);
+}
+
+export function getDeliveryOccurrence(id: string) {
+  return api.get<DeliveryOccurrenceListItemEntity>(`/delivery-occurrences/${id}`);
+}
+
+export function markDeliveryOccurrenceInProgress(id: string) {
+  return api.patch<DeliveryOccurrenceListItemEntity>(`/delivery-occurrences/${id}/start`);
+}
+
+export function resolveDeliveryOccurrence(id: string) {
+  return api.patch<DeliveryOccurrenceListItemEntity>(`/delivery-occurrences/${id}/resolve`);
+}
+
+export function cancelDeliveryOccurrence(id: string) {
+  return api.patch<DeliveryOccurrenceListItemEntity>(`/delivery-occurrences/${id}/cancel`);
 }
 
 // --- Jornada do motorista (Fase 67, leitura administrativa) ---
@@ -341,13 +397,16 @@ export function updateTripDeliveryStop(
   return api.patch<TripDeliveryStopEntity>(`/trips/${tripId}/delivery-stops/${stopId}`, payload);
 }
 
+// reason (Fase 99): obrigatorio quando status=FAILED, validado no backend.
 export function updateTripDeliveryStopStatus(
   tripId: string,
   stopId: string,
   status: TripDeliveryStopStatus,
+  reason?: string,
 ) {
   return api.patch<TripDeliveryStopEntity>(`/trips/${tripId}/delivery-stops/${stopId}/status`, {
     status,
+    ...(reason ? { reason } : {}),
   });
 }
 
@@ -357,6 +416,28 @@ export function removeTripDeliveryStop(tripId: string, stopId: string) {
 
 export function reorderTripDeliveryStops(tripId: string, items: { id: string; sequence: number }[]) {
   return api.put<TripDeliveryStopEntity[]>(`/trips/${tripId}/delivery-stops/reorder`, { items });
+}
+
+// --- Gestao de Entregas: visao CROSS-TRIP (Fase 99) ---
+export interface FindDeliveryStopsQuery extends PaginationParams {
+  status?: TripDeliveryStopStatus | undefined;
+  customerId?: string | undefined;
+  tripId?: string | undefined;
+  search?: string | undefined;
+  plannedFrom?: string | undefined;
+  plannedTo?: string | undefined;
+  late?: boolean | undefined;
+}
+
+export function listDeliveryStops(query: FindDeliveryStopsQuery = {}, signal?: AbortSignal) {
+  return api.get<Paginated<DeliveryStopListItemEntity>>('/delivery-stops', query, signal);
+}
+
+export function getDeliveryStopsDashboard(
+  query: Omit<FindDeliveryStopsQuery, 'status' | 'late' | 'page' | 'pageSize'> = {},
+  signal?: AbortSignal,
+) {
+  return api.get<DeliveryStopsDashboardEntity>('/delivery-stops/dashboard', query, signal);
 }
 
 // --- Roteirização de paradas/entregas (Fase 89) ---
