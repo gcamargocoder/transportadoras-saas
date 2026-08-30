@@ -16,8 +16,9 @@
 | Indicadores de vida útil por pneu (custo total, intervenções, dias instalado, custo/km) | ❌ → ✅ (novo, gap real) |
 | "Pneus por posição" e "custo médio por pneu" no dashboard | ❌ → ✅ (novo, gap real) |
 | Correção do payload de movimentação no admin-web (bug pré-existente) | ❌ → ✅ (corrigido) |
-| Integração relacional pneu ↔ manutenção (`VehicleMaintenance`) | ❌ (limitação real, ver seção 9) |
+| Integração relacional pneu ↔ manutenção (`VehicleMaintenance`) | ❌ → ✅ (Fase 109, ver seção 9) |
 | Taxonomia estruturada de eixo/lado | ❌ (decisão deliberada de não criar, ver seção 5) |
+| Atomicidade/concorrência real na movimentação (`createMovement`) | ❌ → ✅ (Fase 109, ver seção 2) |
 
 ## Auditoria prévia (o que já existia vs. o que foi criado)
 
@@ -89,6 +90,54 @@ pré-existente" acima) -- `apps/admin-web/src/lib/api/tires.api.ts` e
 `newLocationType`/`newVehicleId`/`newTrailerId`/`newPosition`, alinhados ao
 DTO do backend.
 
+### Fase 109 -- atomicidade / concorrência (gap real fechado)
+
+**Lacuna real identificada na auditoria**: `createMovement` fazia a leitura
+do pneu, a checagem `assertPositionAvailable` e as duas escritas
+(`TireMovement.create` + `Tire.update`) como chamadas soltas sequenciais,
+sem nenhuma transação. Como `Tire.position` é texto livre (sem constraint
+única de banco -- seção 5), duas requisições concorrentes movendo pneus
+DIFERENTES para a MESMA posição do MESMO veículo podiam ambas passar pela
+checagem antes de qualquer uma commitar, violando a invariante "uma
+posição, um pneu".
+
+Fechado envolvendo a leitura+checagem+escrita numa única transação
+`SERIALIZABLE` (`runSerializable`, `apps/api/src/tenants/utils/plan-limit.util.ts`
+-- **mesmo utilitário já usado por `PartsService.applyMovement`** desde a
+Fase 83, nenhum mecanismo novo). Sob conflito real, o Postgres aborta a
+transação perdedora com `40001` e `runSerializable` reexecuta
+automaticamente uma vez; a segunda tentativa então vê o estado já
+committado e recebe o 409 esperado de `assertPositionAvailable` -- nunca um
+lock explícito, nunca um mutex em memória. Comprovado com um teste real de
+concorrência (duas requisições disparadas em paralelo via `Promise.all`,
+não apenas sequenciais), ver seção 17.
+
+### Fase 110 -- `odometerKm` da movimentação propaga para `Vehicle.odometerKm`
+
+**Lacuna real identificada na auditoria**: `POST /tires/:id/movements` já
+aceitava um `odometerKm` opcional (usado desde a Fase 64 só para calcular
+`costPerKm`), mas essa leitura nunca era propagada para `Vehicle.odometerKm`
+-- a mesma leitura real que o mecânico anota ao trocar um pneu ficava presa
+no histórico do pneu, mesmo sendo, na prática, uma leitura do veículo tão
+válida quanto a de um abastecimento. Resultado: o odômetro do veículo podia
+ficar desatualizado mesmo com uma troca de pneu recente registrada.
+
+Fechado reaproveitando **integralmente** a mesma regra "quilometragem só
+anda para frente" já usada por abastecimento
+(`assertOdometerNotBelowVehicle`/`computeBumpedOdometer`,
+`apps/api/src/common/utils/odometer.util.ts`) -- nenhuma segunda regra de
+odômetro. O veículo relevante é o de **destino** quando a movimentação
+instala/transfere o pneu para um veículo, senão o veículo **atual** do pneu
+quando a retirada é dele (volta ao estoque, troca para carreta); sem nenhum
+veículo envolvido (ex.: estoque → carreta), não há o que checar -- nunca
+inventa um veículo. Carreta nunca é candidata (não tem `odometerKm` no
+schema). A leitura+checagem+escrita do odômetro roda **dentro da mesma
+transação `SERIALIZABLE`** da subseção anterior, então também fica protegida
+contra concorrência. `odometerKm` menor que o atual do veículo continua
+rejeitado com 409 (mesmo comportamento de abastecimento); movimentação sem
+`odometerKm` nunca altera `Vehicle.odometerKm` (regressão coberta por
+teste).
+
 ## 3. Histórico de movimentação
 
 Sem alteração -- `TireMovement` já é insert-only (nenhum `update`/`delete`
@@ -157,14 +206,37 @@ para não introduzir N+1 real):
   com menos de 2 leituras distintas, mesmo padrão já estabelecido em
   `FleetMaintenanceCostPerKmEntity`/`FleetFuelCostPerKmEntity`.
 
-Cálculo extraído para uma função pura testável:
-`apps/api/src/tires/utils/tire-lifecycle.util.ts` (`computeTireLifecycle`,
-9 casos de teste unitário).
+**Fase 110 -- indicadores por distância vs. vida útil esperada (NOVO)**:
+`Tire.expectedLifespanKm` (campo já existente no cadastro desde a Fase
+20/64) nunca era comparado contra o uso real até esta fase. Agora:
 
-Performance: 3 queries adicionais fixas em `TiresService.findOne` (agregar
-recapagens, contar inspeções, buscar movimentações com odômetro), bounded a
-UM pneu -- nunca escalam com o tamanho da frota, e nunca são executadas em
-`findAll`.
+- `distanceTraveledSinceInstallKm`: `Vehicle.odometerKm` atual −
+  `odometerKm` da movimentação que trouxe o pneu para a posição atual. Só
+  calculado com o pneu **atualmente montado em VEÍCULO** (carreta não tem
+  odômetro no schema) e com as duas leituras disponíveis; `null` quando a
+  leitura atual é menor que a de instalação (dado inconsistente -- nunca
+  mostra km negativo).
+- `remainingLifespanKm`: `expectedLifespanKm − distanceTraveledSinceInstallKm`.
+  Pode ser **negativo** (pneu já rodou além do esperado) -- isso é
+  informação válida, não um erro.
+- `lifespanUsedPercent`: `distanceTraveledSinceInstallKm / expectedLifespanKm
+  × 100`. Pode passar de 100.
+
+Todos os 3 ficam `null` sem `expectedLifespanKm` cadastrado ou sem as
+leituras necessárias -- nunca estimados/inventados. Exibidos em
+`/tires/[id]` junto aos indicadores existentes.
+
+Cálculo extraído para funções puras testáveis:
+`apps/api/src/tires/utils/tire-lifecycle.util.ts` (`computeTireLifecycle`
+delega a `computeTireDistanceLifespan`, reaproveitada **integralmente**
+pelo coletor de notificações e pelo dashboard de frota -- ver
+`docs/notifications.md` seção 14 e `docs/fleet-operations-dashboard.md`;
+15 casos de teste unitário no total).
+
+Performance: **nenhuma query nova** em `TiresService.findOne` -- `Vehicle`
+já vinha incluído (`TIRE_INCLUDE.vehicle`) e a movimentação de instalação
+mais recente já era buscada para `daysInstalled`; só passou a também
+selecionar `odometerKm`.
 
 ## 8. Overview do veículo (NOVO)
 
@@ -188,21 +260,50 @@ descartar) já existem -- **decisão deliberada de não duplicar os 5 modais
 de ação dentro da página do veículo**, evitando refatoração ampla e dois
 lugares diferentes fazendo a mesma coisa.
 
-## 9. Integração com manutenção (Fase 63) -- limitação real, não implementada
+## 9. Integração com manutenção -- fechado na Fase 109
 
-Reconfirmado: **não existe `tireId` em `VehicleMaintenance`, nem
+**Até a Fase 108**: não existia `tireId` em `VehicleMaintenance`, nem
 `maintenanceId`/`vehicleMaintenanceId` em `Tire`/`TireMovement`/
-`TireRetread`**. O enum `MaintenanceComponent` tem o valor `TIRES`, mas é
-só uma categoria textual (sem FK real para um pneu específico). Criar esse
-vínculo relacional exigiria uma migration e uma decisão de modelagem (uma
-manutenção pode envolver múltiplos pneus? como registrar isso?) que o
-pedido não especifica -- documentado como limitação real, nenhum dado foi
-inventado para simular essa integração.
+`TireRetread`. O enum `MaintenanceComponent` tem o valor `TIRES`, mas era
+só uma categoria textual (sem FK real para um pneu específico).
 
-Conforme a seção 12 do pedido: quando um pneu está em manutenção/recapagem,
-`Vehicle.status` **nunca** é alterado por isso -- só `VehicleMaintenance`
-com status `IN_PROGRESS` controla a indisponibilidade do veículo (regra da
-Fase 63, preservada sem alteração).
+**Fase 109** -- fechado com a MESMA decisão de modelagem já usada por
+`PartStockMovement.maintenanceId` (Fase 83, "peças consumidas por uma OS"):
+`TireMovement` ganhou um `maintenanceId` **opcional** (migration
+exclusivamente aditiva -- coluna nullable + índice + FK
+`ON DELETE SET NULL`, `20260909000000_tire_movement_maintenance_link`),
+respondendo a pergunta que a Fase 64 tinha deixado em aberto ("uma
+manutenção pode envolver múltiplos pneus? como registrar isso?") do mesmo
+jeito que peças já respondem: múltiplas linhas de `TireMovement`, cada uma
+com o mesmo `maintenanceId` -- nunca uma segunda máquina de estados
+"pneu em manutenção" (a decisão da Fase 64 de não criar um sub-estado
+"enviado para manutenção/retornou" continua válida, ver seção 4).
+
+- `POST /tires/:id/movements` aceita `maintenanceId` opcional (validado
+  contra o tenant, mesmo padrão de `PartsService.assertPartsBelongToTenant`
+  -- só existência, sem checagem cruzada de veículo).
+- `TireMovementEntity` ganhou `maintenanceId`/`maintenanceServiceOrderNumber`
+  (rótulo denormalizado, mesmo padrão de `FuelSupplyEntity.tripLabel`,
+  Fase 107) -- visível na aba "Movimentações" do pneu (`/tires/[id]`) e no
+  histórico consolidado (`GET /tires/:id/history`, descrição ganha o
+  sufixo `(OS ...)`).
+- `MaintenanceEntity` ganhou `tireMovements: MaintenanceTireMovementEntity[]`,
+  populado **somente** em `GET /maintenances/:id` (nunca em `findAll`,
+  mesmo princípio de `TireEntity.lifecycle`/Fase 64 -- 1 query adicional
+  bounded a UMA OS, nunca N+1) -- visível como card "Pneus" na tela da OS
+  (`/maintenances/[id]`) quando há pelo menos uma movimentação vinculada.
+- **Nenhum novo endpoint cross-pneu** foi criado -- reaproveita
+  integralmente `GET /maintenances/:id` já existente, mesmo espírito de
+  "reutilize o que já existe" desde a Fase 64.
+
+Conforme a seção 12 do pedido original (Fase 64): quando um pneu está em
+manutenção/recapagem, `Vehicle.status` **nunca** é alterado por isso -- só
+`VehicleMaintenance` com status `IN_PROGRESS` controla a indisponibilidade
+do veículo (regra da Fase 63, preservada sem alteração nesta fase também).
+O vínculo `maintenanceId` é puramente de **rastreabilidade** -- não altera
+`totalCost`/`partsCost` da OS nem o custo do pneu (`Tire.purchasePrice`/
+`TireRetread.cost` continuam a única fonte de custo de pneu, ver seção 11 e
+`docs/cost-per-km.md`) -- **sem dupla contagem**, conforme exigido.
 
 ## 10. Integração com viagem
 
@@ -228,13 +329,23 @@ alterado** -- os dois indicadores novos só fazem sentido no dashboard com
 filtros (`/operations/fleet/tires`), que é o que a seção 14 do pedido
 efetivamente evolui.
 
+**Fase 110** -- `nearReplacementCount`/alerta `TIRE_NEAR_REPLACEMENT` deste
+mesmo dashboard passaram a também contar/alertar pneus próximos da troca
+**por distância percorrida** (não só por sulco), reaproveitando a mesma
+`computeTireDistanceLifespan` da seção 7 -- adiciona 1 query em lote
+(movimentações de instalação dos pneus elegíveis), ainda bounded e sem
+N+1 (verificado por teste de contagem de queries). Ver
+`docs/fleet-operations-dashboard.md` para o detalhe completo.
+
 ## 12. Alertas
 
 `FleetAlertType` ganhou `VEHICLE_TIRE_NEAR_REPLACEMENT` (ver seção 8).
-`TIRE_NEAR_REPLACEMENT` (nível de frota, já existente) não foi alterado.
-Nenhum alerta "posição sem pneu" foi criado -- exigiria saber a
-configuração esperada de eixos do veículo, que não existe no sistema (ver
-seção 5); inventar isso violaria a regra "nunca inventar dados".
+`TIRE_NEAR_REPLACEMENT` (nível de frota) **passou a também considerar
+distância percorrida a partir da Fase 110** (ver seção 11) -- mesmo tipo de
+alerta, sem enum novo. Nenhum alerta "posição sem pneu" foi criado --
+exigiria saber a configuração esperada de eixos do veículo, que não existe
+no sistema (ver seção 5); inventar isso violaria a regra "nunca inventar
+dados".
 
 ## 13. API
 
@@ -303,8 +414,14 @@ Reaproveita `AuditService` integralmente -- `tire.created`, `tire.updated`,
 
 ## 18. Limitações reais
 
-- Sem vínculo relacional pneu ↔ manutenção do veículo (seção 9) -- exigiria
-  decisão de modelagem fora do escopo desta fase.
+- ~~Sem vínculo relacional pneu ↔ manutenção do veículo~~ -- **fechado na
+  Fase 109**, ver seção 9.
+- ~~Sem atomicidade real em `createMovement`~~ -- **fechado na Fase 109**,
+  ver seção 2.
+- ~~`TireMovement.odometerKm` nunca propagava para `Vehicle.odometerKm`~~ --
+  **fechado na Fase 110**, ver seção 2.
+- ~~`Tire.expectedLifespanKm` nunca era comparado contra o uso real~~ --
+  **fechado na Fase 110**, ver seção 7.
 - `Tire.position` continua texto livre, sem taxonomia de eixo/lado (seção
   5) -- decisão deliberada de não migrar dado real já cadastrado sem
   requisito de negócio explícito.
@@ -312,11 +429,109 @@ Reaproveita `AuditService` integralmente -- `tire.created`, `tire.updated`,
   montados em **veículo** (nunca carreta) -- mesma limitação já documentada
   desde antes desta fase para `byFleet`.
 - Não existe fluxo "enviar para manutenção → retornar" distinto da
-  recapagem (seção 4/8) -- decisão deliberada, ver seção 4.
+  recapagem (seção 4/8) -- decisão deliberada, ver seção 4; o vínculo
+  `maintenanceId` (Fase 109) é rastreabilidade sobre o evento pontual já
+  existente (movimentação/recapagem), não um novo sub-estado.
 - `costPerKm` por pneu depende de `TireMovement.odometerKm` ter sido
   preenchido em pelo menos 2 movimentações -- campo opcional, nem toda
   movimentação registrada historicamente tem esse dado.
+- `maintenanceId` valida só existência no tenant, sem checar se o veículo
+  da OS é o mesmo veículo da movimentação -- decisão deliberada (a OS pode
+  legitimamente ser de um veículo relacionado, ex.: cavalo vs. carreta da
+  mesma composição), mesmo princípio já usado para `MaintenancePartInputDto.partId`.
+- **Decisão deliberada (Fase 110)**: `createMovement` não bloqueia
+  movimentação de pneu enquanto o veículo está em viagem ativa (`Trip`
+  `IN_PROGRESS`) -- bloquear isso impediria uma troca legítima de pneu
+  furado na estrada (o cenário operacional mais comum de troca fora da
+  base). Nenhum requisito explícito do pedido pede esse bloqueio; a
+  consistência entre pneus instalados/removidos/transferidos já é garantida
+  pela atomicidade `SERIALIZABLE` da Fase 109 (seção 2), independente do
+  estado da viagem.
 
 ## 19. Pendências reais
 
-Nenhuma pendência de escopo desta fase.
+Nenhuma pendência de escopo conhecida ao final da Fase 110 para o pedido
+avaliado.
+
+## 20. Fase 109 -- auditoria prévia e testes
+
+Antes de qualquer código, todo o módulo (`Tire`/`TireMovement`/
+`TireRetread`/`TireInspection`/`TireDisposal`, `TiresService`, os dois
+dashboards, o frontend completo) foi reauditado a partir desta própria
+documentação (Fase 64) -- confirmado que **praticamente tudo pedido já
+existia**: posição/localização, instalação/remoção/transferência,
+histórico completo, quilometragem, desgaste, indicadores por veículo/frota,
+integração com custo/km (`docs/cost-per-km.md`, linha "Pneus"), alertas
+(`TIRE_NEAR_REPLACEMENT`, já ligado ao Centro de Notificações desde a Fase
+69 -- `NotificationsService.collectTireNearReplacement`) e visão
+operacional no veículo (`/vehicles/[id]`, aba "Pneus"). Só 2 gaps reais
+foram encontrados e fechados (seções 2 e 9); nenhuma estrutura de estoque
+de pneus paralela foi criada (o "estoque" de pneu já é o próprio
+`TireLocationType.STOCK`, reaproveitado como sempre); nenhum ledger
+financeiro novo; nenhuma regra financeira alterada.
+
+- **E2E** (`tire-management.e2e-spec.ts`, estendido): +4 casos --
+  concorrência real (duas requisições simultâneas para a mesma posição via
+  `Promise.all`, não apenas sequenciais), vínculo de movimentação com OS
+  (aparece em `GET /maintenances/:id`), movimentação sem `maintenanceId`
+  nunca aparece em nenhuma OS (regressão), `maintenanceId`
+  inexistente/de outro tenant rejeitado (404). Suíte completa: 19/19.
+- **Regressão confirmada verde**: `fleet-operations-tires.e2e-spec.ts`,
+  `tire-vehicle-integration.e2e-spec.ts`, `maintenances.e2e-spec.ts`,
+  `work-orders.e2e-spec.ts`, `fleet-maintenance.e2e-spec.ts` (73 casos).
+- **Frontend** (novo): `create-movement-modal.test.tsx` (2 testes -- envio
+  condicional de `maintenanceId`), `maintenances/[id]/page.test.tsx` (+2 --
+  card "Pneus" aparece/some conforme `tireMovements`).
+
+## 21. Fase 110 -- auditoria prévia e testes
+
+Módulo reauditado especificamente contra o que a Fase 109 (recém-concluída)
+**não** cobria -- evitando reimplementar qualquer coisa. Confirmado por
+leitura de código (não só desta documentação) que: (a) `TireMovement.odometerKm`
+nunca era propagado para `Vehicle.odometerKm` (grep por
+`assertOdometerNotBelowVehicle`/`computeBumpedOdometer` em `tires.service.ts`
+não retornava nenhum resultado antes desta fase, apesar do padrão já existir
+em `FuelSuppliesService` desde a Fase 18/27); (b) `Tire.expectedLifespanKm`
+nunca era comparado contra `TireMovement.odometerKm`/`Vehicle.odometerKm`
+(leitura completa de `tire-lifecycle.util.ts`). Só esses 2 gaps reais foram
+encontrados e fechados (seções 2 e 7), com efeito propagado para o Centro de
+Notificações (`docs/notifications.md` seção 14) e o dashboard de frota
+(`docs/fleet-operations-dashboard.md`) -- reaproveitando a mesma fórmula em
+todos os 3 pontos (`computeTireDistanceLifespan`), nunca uma segunda regra.
+Nenhuma estrutura de estoque/ledger financeiro nova; nenhuma regra
+financeira alterada; nenhuma migration (nenhum campo novo era necessário --
+`Tire.expectedLifespanKm`/`Vehicle.odometerKm`/`TireMovement.odometerKm` já
+existiam todos).
+
+- **Unitário** (`tire-lifecycle.util.spec.ts`, estendido): 15 casos no
+  total (+7 -- `computeTireDistanceLifespan` extraída e testada
+  isoladamente: sem veículo montado, sem uma das 2 leituras, leitura atual
+  menor que a de instalação, cálculo normal, sem `expectedLifespanKm`,
+  cálculo de `remainingLifespanKm`/`lifespanUsedPercent`, valor negativo
+  quando já passou da vida útil esperada).
+- **E2E** (`tire-vehicle-integration.e2e-spec.ts`, estendido): +8 casos --
+  bump de odômetro na instalação/remoção, rejeição de `odometerKm` menor
+  que o atual do veículo, nenhuma alteração sem `odometerKm` (regressão),
+  nenhuma tentativa de alterar odômetro em movimentação estoque↔carreta,
+  indicadores de distância/vida útil (indisponível, calculado, `null` em
+  carreta). Suíte completa: 16/16.
+- **E2E** (`notifications.e2e-spec.ts`, estendido): +3 casos --
+  `collectTireLifespanNearReplacement` gera `TIRE_NEAR_REPLACEMENT` com
+  `entityType='TireLifespan'` quando ≥90% da vida útil, nunca gera abaixo do
+  limiar, nunca gera sem `expectedLifespanKm` cadastrado. Suíte completa:
+  30/30.
+- **E2E** (`fleet-operations-tires.e2e-spec.ts`, estendido): +2 casos --
+  `nearReplacementCount`/`tireAlerts` também reagem à distância percorrida,
+  nunca contam pneu sem `expectedLifespanKm`/abaixo do limiar. Suíte
+  completa: 13/13 (inclui o teste de ausência de N+1 já existente,
+  confirmado verde com a nova query em lote).
+- **Regressão confirmada verde**: `tire-management.e2e-spec.ts` (19/19,
+  isolado -- falha isolada observada rodando em paralelo com outra suíte
+  pesada foi resource contention, não regressão, confirmada reexecutando
+  sozinho), `maintenances.e2e-spec.ts` + `maintenance-vehicle-integration.e2e-spec.ts`
+  (24/24), `fleet-maintenance.e2e-spec.ts` + `work-orders.e2e-spec.ts`
+  (39/39), `maintenance-providers.e2e-spec.ts` + `cost-per-km.e2e-spec.ts`
+  (17/17), `trips.e2e-spec.ts` (27/27, nenhum código de viagem foi tocado
+  nesta fase -- checagem de sanidade).
+- **Frontend** (novo): `tires/[id]/page.test.tsx` (2 testes -- indicadores
+  de distância/vida útil exibidos como "Indisponível" ou calculados).

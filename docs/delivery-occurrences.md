@@ -167,6 +167,11 @@ se desejada, fica para fase futura).
 Todas as rotas novas reaproveitam o mesmo `TripOccurrencesService` das rotas de escopo de viagem — nenhum
 serviço/lógica duplicada.
 
+**Fase 115** -- as rotas `/delivery-occurrences` acima permanecem **inalteradas** (mesmo contrato, mesmo
+comportamento, sempre restritas a `tripDeliveryStopId != null`). Uma nova família de rotas irmã,
+`GET/PATCH /trip-occurrences...`, reaproveita o MESMO service/entidade/mapper para cobrir também as
+ocorrências GERAIS da viagem (sem parada vinculada) -- ver `docs/trip-occurrences.md` seção 12.
+
 ## 9. Frontend (`apps/admin-web`)
 
 - **`CreateOccurrenceModal`**: catálogo de tipo/severidade estendido; aceita `tripDeliveryStopId` opcional

@@ -220,6 +220,19 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
     return res.body.data.id as string;
   }
 
+  // Fase Fiscal/XML -- documento fiscal generico (upload manual, sem XML)
+  // para testar o vinculo Receivable.fiscalDocumentId.
+  const VALID_PDF = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF');
+  async function createFiscalDocument(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/fiscal/documents/upload')
+      .set('Authorization', auth)
+      .field('documentType', 'CTE')
+      .attach('file', VALID_PDF, 'cte.pdf')
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function generateReceivable(auth: string, billingId: string, dueDate: string, description?: string) {
     return request(app.getHttpServer())
       .post(`/api/v1/receivables/from-billing/${billingId}`)
@@ -278,7 +291,176 @@ describe('Contas a Receber (Fase 72, e2e)', () => {
     });
   });
 
+  describe('titulo manual (Fase Financeiro CP/CR)', () => {
+    it('cria um titulo manual sem viagem/faturamento de origem, a vista', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('ManualCreate');
+      const customerId = await createCustomer(adminAuth, 'Cliente Avulso');
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', adminAuth)
+        .send({
+          customerId,
+          description: 'Servico avulso de transporte',
+          originalAmount: 2200,
+          issueDate: '2026-09-01',
+          dueDate: '2026-09-10',
+        })
+        .expect(201);
+
+      expect(res.body.data).toHaveLength(1);
+      const created = res.body.data[0];
+      expect(created.tripId).toBeNull();
+      expect(created.billingId).toBeNull();
+      expect(created.tripLabel).toBeNull();
+      expect(created.customerId).toBe(customerId);
+      expect(created.originalAmount).toBe(2200);
+      expect(created.status).toBe('OPEN');
+      expect(created.installmentGroupId).toBeNull();
+    });
+
+    it('parcelamento: gera N titulos com o mesmo installmentGroupId, vencimento mensal e soma exata', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('ManualInstallments');
+      const customerId = await createCustomer(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', adminAuth)
+        .send({
+          customerId,
+          description: 'Locacao de equipamento',
+          originalAmount: 100,
+          issueDate: '2026-09-01',
+          dueDate: '2026-09-15',
+          installments: 3,
+        })
+        .expect(201);
+
+      const created = res.body.data as Array<Record<string, unknown>>;
+      expect(created).toHaveLength(3);
+      const groupId = created[0]?.installmentGroupId;
+      expect(groupId).toBeTruthy();
+      expect(created.every((c) => c.installmentGroupId === groupId)).toBe(true);
+      expect(created.map((c) => c.installmentNumber)).toEqual([1, 2, 3]);
+      const amounts = created.map((c) => c.originalAmount as number);
+      expect(amounts).toEqual([33.33, 33.33, 33.34]);
+      expect(Math.round(amounts.reduce((a, b) => a + b, 0) * 100) / 100).toBe(100);
+      expect(created.map((c) => (c.dueDate as string).slice(0, 10))).toEqual(['2026-09-15', '2026-10-15', '2026-11-15']);
+    });
+  });
+
+  describe('titulo a partir de documento fiscal (Fase Fiscal/XML)', () => {
+    it('gera o titulo vinculado ao documento fiscal (autopreenchimento)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('FiscalCreate');
+      const customerId = await createCustomer(adminAuth);
+      const fiscalDocumentId = await createFiscalDocument(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', adminAuth)
+        .send({
+          customerId,
+          description: 'CT-e 5678',
+          originalAmount: 850.5,
+          issueDate: '2026-09-01',
+          dueDate: '2026-09-10',
+          fiscalDocumentId,
+        })
+        .expect(201);
+      expect(res.body.data[0].fiscalDocumentId).toBe(fiscalDocumentId);
+
+      const docRes = await request(app.getHttpServer())
+        .get(`/api/v1/fiscal/documents/${fiscalDocumentId}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(docRes.body.data.receivable).toEqual({ id: res.body.data[0].id, originalAmount: 850.5, status: 'OPEN' });
+      expect(docRes.body.data.payable).toBeNull();
+    });
+
+    it('idempotencia: bloqueia gerar um segundo titulo para o mesmo documento fiscal', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('FiscalIdempotent');
+      const customerId = await createCustomer(adminAuth);
+      const fiscalDocumentId = await createFiscalDocument(adminAuth);
+      const payload = { customerId, description: 'CT-e', originalAmount: 500, issueDate: '2026-09-01', dueDate: '2026-09-10', fiscalDocumentId };
+
+      await request(app.getHttpServer()).post('/api/v1/receivables').set('Authorization', adminAuth).send(payload).expect(201);
+      await request(app.getHttpServer()).post('/api/v1/receivables').set('Authorization', adminAuth).send(payload).expect(409);
+
+      const count = await prisma.receivable.count({ where: { fiscalDocumentId } });
+      expect(count).toBe(1);
+    });
+
+    it('rejeita fiscalDocumentId inexistente e mutua exclusividade com parcelamento', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('FiscalGuards');
+      const customerId = await createCustomer(adminAuth);
+      const fiscalDocumentId = await createFiscalDocument(adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', adminAuth)
+        .send({ customerId, description: 'Invalido', originalAmount: 100, issueDate: '2026-09-01', dueDate: '2026-09-10', fiscalDocumentId: randomUUID() })
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', adminAuth)
+        .send({ customerId, description: 'Invalido', originalAmount: 100, issueDate: '2026-09-01', dueDate: '2026-09-10', fiscalDocumentId, installments: 3 })
+        .expect(400);
+    });
+
+    it('isolamento multi-tenant: nunca gera titulo a partir de documento fiscal de outro tenant', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('FiscalIsolA');
+      const tenantB = await createTenantAndLoginAsAdmin('FiscalIsolB');
+      const customerB = await createCustomer(tenantB.adminAuth);
+      const fiscalDocumentId = await createFiscalDocument(tenantA.adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', tenantB.adminAuth)
+        .send({ customerId: customerB, description: 'Invalido', originalAmount: 100, issueDate: '2026-09-01', dueDate: '2026-09-10', fiscalDocumentId })
+        .expect(404);
+    });
+  });
+
   describe('recebimentos', () => {
+    it('juros/multa/desconto: desconto abate o saldo, juros/multa somam so na movimentacao financeira', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PaymentInterestFineDiscount');
+      const financialAccountId = await createFinancialAccount(adminAuth);
+      const customerId = await createCustomer(adminAuth);
+
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/receivables')
+        .set('Authorization', adminAuth)
+        .send({ customerId, description: 'Titulo com encargos', originalAmount: 1000, issueDate: '2026-09-01', dueDate: '2026-09-10' })
+        .expect(201);
+      const id = createRes.body.data[0].id as string;
+
+      const payRes = await request(app.getHttpServer())
+        .post(`/api/v1/receivables/${id}/payments`)
+        .set('Authorization', adminAuth)
+        .send({
+          amount: 900,
+          paymentDate: '2026-09-10',
+          paymentMethod: 'PIX',
+          financialAccountId,
+          interestAmount: 50,
+          fineAmount: 20,
+          discountAmount: 100,
+        })
+        .expect(201);
+
+      expect(payRes.body.data.receivedAmount).toBe(1000);
+      expect(payRes.body.data.balance).toBe(0);
+      expect(payRes.body.data.status).toBe('PAID');
+      const payment = payRes.body.data.payments[0];
+      expect(payment.discountAmount).toBe(100);
+
+      const transaction = await prisma.financialTransaction.findUnique({
+        where: { id: payment.financialTransactionId },
+      });
+      expect(Number(transaction?.amount)).toBe(970);
+    });
+
     it('recebimento parcial e depois total -- saldo e status corretos, sem exceder', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('Payments');
       const financialAccountId = await createFinancialAccount(adminAuth);

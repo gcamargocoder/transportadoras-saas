@@ -113,7 +113,8 @@ quando a entrega acontece de verdade. Nenhuma lógica de início de viagem foi a
 | `PATCH` | `/trips/:id/delivery-stops/:stopId/status` | `TRIP_WRITE_ROLES`; 409 se viagem `COMPLETED`/`CANCELLED` |
 | `PUT` | `/trips/:id/delivery-stops/reorder` | `TRIP_WRITE_ROLES`; lista completa, valida `1..N` |
 | `DELETE` | `/trips/:id/delivery-stops/:stopId` | `TRIP_WRITE_ROLES`; renumera as remanescentes |
-| `GET` | `/driver/trips/:id/delivery-stops` | Driver App, somente leitura |
+| `GET` | `/driver/trips/:id/delivery-stops` | Driver App (`DRIVER`), leitura |
+| `PATCH` | `/driver/trips/:id/delivery-stops/:stopId/status` | **[Fase 106]** Driver App (`DRIVER`); mesmo `TripDeliveryStopsService.updateStatus` do admin, mesmas transições/validações — ver seção 7 |
 
 Nenhum papel/role novo foi criado — `TRIP_READ_ROLES`/`TRIP_WRITE_ROLES` (já existentes em
 `trips/constants/trip-roles.constants.ts`) foram reaproveitados integralmente.
@@ -143,33 +144,77 @@ disponível separadamente enquanto a viagem não estiver `COMPLETED`/`CANCELLED`
 
 ## 7. Driver App (`apps/driver-app`)
 
-Adicionado **somente leitura**: `TripDeliveryStop`/`TripDeliveryStopStatus` em
-`api/driverTrips.types.ts` e `getDeliveryStops(tripId)` em `api/driverTrips.api.ts`, consumindo
-`GET /driver/trips/:id/delivery-stops` (o mesmo `TripDeliveryStopsService` do admin, exportado por
-`TripsModule` e injetado em `DriverTripsController` exatamente como `TripsService` — nenhuma
-consulta paralela). Nenhuma tela nova, nenhuma navegação/roteirização/atualização de status pelo
-motorista nesta fase — a leitura fica pronta para a tela do Driver App consumir numa fase futura.
+Leitura (Fase 88): `TripDeliveryStop`/`TripDeliveryStopStatus` em `api/driverTrips.types.ts` e
+`getDeliveryStops(tripId)` em `api/driverTrips.api.ts`, consumindo `GET /driver/trips/:id/delivery-stops`
+(o mesmo `TripDeliveryStopsService` do admin, exportado por `TripsModule` e injetado em
+`DriverTripsController` exatamente como `TripsService` — nenhuma consulta paralela).
+
+**[Fase 106] Escrita de status pelo motorista** — fechou a lacuna real que existia desde a Fase 88
+("navegação/atualização de status pelo motorista fica para fase futura"): o motorista concluía a
+entrega em campo mas o sistema só sabia disso se alguém no escritório atualizasse manualmente, o
+que deixava a Torre de Controle (Fase 105, `deliverySummary`) e qualquer painel operacional
+mostrando um estado desatualizado.
+
+- Novo endpoint `PATCH /driver/trips/:id/delivery-stops/:stopId/status` em
+  `DriverTripsController.updateDeliveryStopStatus` — chama **o mesmo**
+  `TripDeliveryStopsService.updateStatus` já usado pelo admin (`UpdateTripDeliveryStopStatusDto`
+  reaproveitado tal como está), só trocando o RBAC (`DRIVER` em vez de `TRIP_WRITE_ROLES`) e
+  validando ownership com o mesmo padrão de todo endpoint deste controller
+  (`DriverTripsService.getOne(tenantId, driverId, tripId)` antes de qualquer escrita). Nenhuma
+  regra de transição/estado nova — `ALLOWED_STATUS_TRANSITIONS`, exigência de `reason` em `FAILED`
+  e o bloqueio quando a viagem já é `COMPLETED`/`CANCELLED` são exatamente os mesmos do admin.
+  Idempotente por **estado** (mesmo princípio de start/pause/resume/complete): reenviar a mesma
+  transição depois de reconectar é um no-op no service, nunca duplica.
+- Nova tela `DeliveryStopsScreen.tsx` ("Entregas", acessível pelo novo botão na Home durante a
+  viagem) lista as paradas planejadas e oferece "Iniciar entrega"/"Concluir entrega"/"Falha"
+  (com motivo). A transição passa pela **mesma fila offline** (`storage/syncQueue.ts`, novo kind
+  `delivery-stop-status`) já usada por todo o resto do app — nenhum mecanismo de sincronização
+  paralelo. Quando enfileirada (offline), a tela aplica uma atualização local **temporária e nunca
+  persistida** (perdida ao sair da tela) só para não esconder do motorista a ação que ele acabou de
+  registrar; a fila continua sendo a única fonte de verdade real até confirmar com o servidor —
+  quando confirmado, a tela sempre recarrega do backend (nunca confia no otimista para os campos
+  derivados `actualArrival`/`deliveredAt`).
+- **Comprovante de entrega vinculado à parada específica** — `SubmitDeliveryProofDto.tripDeliveryStopId`
+  já existia desde a Fase 100 (exige a parada `COMPLETED`) e o admin-web já tinha o modal
+  "Comprovantes" por parada (`delivery-stop-proofs-modal.tsx`, Fase 100) esperando por esse vínculo,
+  mas **nenhuma tela do Driver App jamais coletava/enviava esse campo** — o modal sempre mostrava
+  "Nenhum comprovante registrado". Corrigido de ponta a ponta: `DeliveryStopsScreen` oferece
+  "Anexar comprovante" só quando a parada já está `COMPLETED`, navegando para `DeliveryProofScreen`
+  com `tripDeliveryStopId`/`stopLabel`; a tela repassa o vínculo ao `submitOrQueue` (kind
+  `delivery-proof`, campo `tripDeliveryStopId` agora presente); nenhuma mudança de contrato HTTP foi
+  necessária (o campo já existia e sempre foi opcional — comprovante genérico da viagem, sem
+  parada, continua funcionando exatamente como antes pelo botão "Comprovante de entrega" já
+  existente na Home).
 
 ## 8. O que NÃO foi implementado (por escopo)
 
 - Roteirização/otimização automática de sequência (Fase 89).
 - Cálculo de ETA por algoritmo — `plannedArrival` é sempre informado manualmente.
-- Navegação GPS ou atualização de status da parada pelo motorista.
+- Navegação GPS pelo motorista (atualização de status pelo motorista foi implementada na Fase 106,
+  ver seção 7 — GPS/roteirização em si continuam fora de escopo).
 - Qualquer lógica financeira nova (paradas não têm valor/custo próprio nesta fase).
-- Vínculo direto entre `TripDeliveryStop` e `TripOccurrence`/`FiscalDocument` (comprovante de
-  entrega) — os dois seguem por `tripId` como hoje; um vínculo por parada específica fica para
-  quando o comprovante por entrega for de fato implementado, sem exigir mudança de modelo aqui
-  (o id estável de `TripDeliveryStop` já permite essa FK opcional no futuro sem migração de dados).
+- Vínculo entre `TripDeliveryStop` e `FiscalDocument` (comprovante de entrega) implementado desde a
+  Fase 100 no backend/admin-web; o Driver App passou a preencher esse vínculo na Fase 106 (ver
+  seção 7). Vínculo com `TripOccurrence` segue só por `tripId` (`tripDeliveryStopId` em
+  `TripOccurrence` já existe desde a Fase 101 para ocorrências de entrega, sem mudança aqui).
 - Exigência de pelo menos uma parada por viagem — viagens simples (só origem/destino) continuam
   funcionando exatamente como antes, sem nenhuma parada cadastrada.
 
 ## 9. Testes
 
-`apps/api/test/trip-delivery-stops.e2e-spec.ts` (13 testes, requests reais contra o Postgres):
+`apps/api/test/trip-delivery-stops.e2e-spec.ts` (28 testes, requests reais contra o Postgres):
 criação com sequência automática, rejeição de cliente/local inexistentes, trava de planejamento
 após a partida (create/update/reorder/delete bloqueados, status permanece editável), reordenação
 (sucesso, subconjunto inválido, sequência com lacuna/duplicada), remoção com renumeração, máquina
-de estados do status (avanço, idempotência, transição inválida), isolamento multi-tenant, RBAC de
-leitura/escrita, leitura pelo Driver App e ausência de N+1. As suítes `trips.e2e-spec.ts` (66
-testes) e `driver-trips.e2e-spec.ts` foram reexecutadas e continuam passando sem alteração —
-nenhuma regressão nas funcionalidades existentes de planejamento/execução de viagem.
+de estados do status pelo admin (avanço, idempotência, transição inválida), isolamento
+multi-tenant, RBAC de leitura/escrita, listagem cross-trip com filtros/paginação/dashboard, leitura
+pelo Driver App e ausência de N+1. **[Fase 106]** +6 cenários para
+`PATCH /driver/trips/:id/delivery-stops/:stopId/status`: avanço PENDING → IN_PROGRESS → COMPLETED
+pelo motorista (com o admin vendo a mesma mudança), `FAILED` sem `reason` rejeitado, transição
+inválida (409), idempotência ao reenviar a mesma transição, isolamento (motorista de outra
+viagem/tenant recebe 404) e RBAC (usuário administrativo recebe 403 neste endpoint). As suítes
+`trips.e2e-spec.ts`/`driver-trips.e2e-spec.ts` foram reexecutadas e continuam passando sem
+alteração — nenhuma regressão nas funcionalidades existentes de planejamento/execução de viagem.
+Driver App: `DeliveryStopsScreen.test.tsx` (novo, 7 testes) + `syncQueue.test.ts`/
+`DeliveryProofScreen.test.tsx` estendidos — ver `docs/delivery-proof.md` para o teste do vínculo
+com o comprovante.

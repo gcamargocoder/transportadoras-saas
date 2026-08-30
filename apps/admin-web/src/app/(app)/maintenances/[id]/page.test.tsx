@@ -86,7 +86,9 @@ function buildMaintenance(overrides: Partial<MaintenanceEntity> = {}): Maintenan
     downtimeMinutes: null,
     invoiceNumber: null,
     maintenancePlanId: null,
+    checklistExecutionId: null,
     parts: [],
+    tireMovements: [],
     createdAt: '2026-09-01T08:00:00.000Z',
     updatedAt: '2026-09-01T08:00:00.000Z',
     ...overrides,
@@ -116,6 +118,40 @@ describe('MaintenanceDetailPage (Fase 82)', () => {
     expect((await screen.findAllByText('OS-2026-001')).length).toBeGreaterThan(0);
     expect(screen.getByText('Ruído no motor.')).toBeInTheDocument();
     expect(screen.getAllByText('ABC1D23').length).toBeGreaterThan(0);
+  });
+
+  // Fase 109 -- fecha a lacuna real documentada em docs/tire-management.md
+  // secao 9 ("nao existe tireId em VehicleMaintenance"): a OS agora mostra
+  // os pneus trocados como parte dela (TireMovement.maintenanceId).
+  it('mostra o card "Pneus" quando ha movimentacoes vinculadas a esta OS', async () => {
+    getMaintenanceMock.mockResolvedValue(
+      buildMaintenance({
+        tireMovements: [
+          {
+            id: 'tm-1',
+            tireId: 'tire-1',
+            tireFireNumber: 'FG-001',
+            movementDate: '2026-09-01T10:00:00.000Z',
+            newLocationType: 'VEHICLE',
+            previousPosition: null,
+            newPosition: 'Dianteiro Esquerdo',
+            reason: null,
+          },
+        ],
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText('Pneus')).toBeInTheDocument();
+    expect(screen.getByText('FG-001')).toBeInTheDocument();
+  });
+
+  it('nao mostra o card "Pneus" quando a OS nao tem nenhuma movimentacao vinculada', async () => {
+    getMaintenanceMock.mockResolvedValue(buildMaintenance({ tireMovements: [] }));
+    renderPage();
+
+    await screen.findAllByText('OS-2026-001');
+    expect(screen.queryByText('Pneus')).toBeNull();
   });
 
   it('OS OPEN: mostra "Iniciar diagnóstico", nao mostra "Aprovar"', async () => {

@@ -11,9 +11,10 @@ import { Input } from '../../components/ui/input';
 import { Modal } from '../../components/ui/modal';
 import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
-import { listTrailers, listVehicles } from '../../lib/api/fleet.api';
+import { listMaintenances, listTrailers, listVehicles } from '../../lib/api/fleet.api';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { createTireMovement } from '../../lib/api/tires.api';
+import { MAINTENANCE_STATUS_LABELS } from '../../lib/labels';
 
 const schema = z
   .object({
@@ -23,6 +24,7 @@ const schema = z
     position: z.string().optional(),
     odometerKm: z.coerce.number().optional(),
     reason: z.string().optional(),
+    maintenanceId: z.string().optional(),
   })
   .superRefine((values, ctx) => {
     if (values.locationType === 'VEHICLE' && !values.vehicleId) {
@@ -77,6 +79,7 @@ export function CreateMovementModal({
         newPosition: values.position,
         odometerKm: values.odometerKm,
         reason: values.reason,
+        maintenanceId: values.maintenanceId || undefined,
       }),
     onSuccess: () => {
       toast.success('Movimentação registrada com sucesso.');
@@ -175,6 +178,35 @@ export function CreateMovementModal({
         </FormField>
         <FormField label="Motivo" htmlFor="reason" hint="Opcional">
           <Input id="reason" {...register('reason')} />
+        </FormField>
+        <FormField
+          label="Ordem de serviço"
+          htmlFor="maintenanceId"
+          hint="Opcional -- vincula esta troca a uma OS já registrada."
+        >
+          <Controller
+            control={control}
+            name="maintenanceId"
+            render={({ field }) => (
+              <EntitySelect
+                id="maintenanceId"
+                queryKey={['maintenances', 'select', locationType === 'VEHICLE' ? watch('vehicleId') : undefined]}
+                queryFn={() =>
+                  listMaintenances({
+                    vehicleId: locationType === 'VEHICLE' ? watch('vehicleId') || undefined : undefined,
+                    pageSize: 50,
+                  })
+                }
+                getOptionValue={(m) => m.id}
+                getOptionLabel={(m) =>
+                  `${m.serviceOrderNumber ?? `OS ${m.id.slice(0, 8)}`} · ${m.vehiclePlate ?? '—'} · ${MAINTENANCE_STATUS_LABELS[m.status]}`
+                }
+                value={field.value ?? ''}
+                onChange={field.onChange}
+                placeholder="Nenhuma"
+              />
+            )}
+          />
         </FormField>
       </form>
     </Modal>

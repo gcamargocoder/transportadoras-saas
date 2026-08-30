@@ -35,6 +35,13 @@ import { ChecklistTemplatesService } from './checklist-templates.service';
 const EXECUTION_INCLUDE = {
   answers: { include: { item: true, evidence: true } },
   evidence: true,
+  // Fase 111 -- denormalizados para o admin-web/driver-app (nenhuma query
+  // extra: sao selects minimos no MESMO include ja usado por toda leitura de
+  // execucao, nunca uma segunda chamada por execucao).
+  template: { select: { name: true, type: true } },
+  vehicle: { select: { plate: true } },
+  driver: { select: { name: true } },
+  trip: { select: { destination: { select: { name: true } } } },
 } satisfies Prisma.ChecklistExecutionInclude;
 
 // Fase 38 -- uma execucao real de checklist, feita pelo motorista.
@@ -388,17 +395,26 @@ export class ChecklistExecutionsService {
     ]);
 
     const result = new PaginatedChecklistExecutionsEntity();
-    result.items = items.map(toChecklistExecutionEntity);
+    result.items = items.map((item) => toChecklistExecutionEntity(item));
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
 
+  // Fase 111 -- maintenances buscado SOMENTE aqui (nunca em findAll/
+  // listagem), 1 query adicional bounded a UMA execucao (mesmo principio ja
+  // usado por MaintenancesService.findOne/tireMovements, Fase 109) -- nunca
+  // N+1.
   async findOne(tenantId: string, id: string): Promise<ChecklistExecutionEntity> {
     const execution = await this.prisma.checklistExecution.findFirst({ where: { id, tenantId }, include: EXECUTION_INCLUDE });
     if (!execution) {
       throw new NotFoundException('Checklist nao encontrado nesta empresa.');
     }
-    return toChecklistExecutionEntity(execution);
+    const maintenances = await this.prisma.vehicleMaintenance.findMany({
+      where: { tenantId, checklistExecutionId: id },
+      select: { id: true, serviceOrderNumber: true, status: true },
+      orderBy: { openedAt: 'desc' },
+    });
+    return toChecklistExecutionEntity(execution, maintenances);
   }
 
   private async findOwnedOrThrow(tenantId: string, driverId: string, id: string): Promise<ChecklistExecutionWithRelations> {

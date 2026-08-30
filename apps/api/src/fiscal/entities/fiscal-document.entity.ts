@@ -2,6 +2,23 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FiscalDocumentSource, FiscalDocumentStatus, FiscalDocumentType, TripOccurrenceSeverity, TripOccurrenceType } from '@prisma/client';
 import { FiscalIssueCode } from '../utils/fiscal-document-validation.util';
 
+// Fase Fiscal/XML -- projecao leve do titulo (Payable/Receivable) JA gerado
+// a partir deste documento fiscal (lado reverso de Payable/Receivable.
+// fiscalDocumentId, 1:1). Nunca a entity completa (evita inflar o payload,
+// mesmo principio de RelatedFiscalDocumentEntity). null = nenhum titulo
+// gerado ainda -- o frontend usa isso para alternar entre "Gerar conta a
+// pagar/receber" (formulario pre-preenchido) e "Ver titulo ja gerado".
+export class LinkedFinancialTitleEntity {
+  @ApiProperty({ format: 'uuid' })
+  id!: string;
+
+  @ApiProperty()
+  originalAmount!: number;
+
+  @ApiProperty({ description: 'PayableStatus ou ReceivableStatus, conforme o tipo do titulo gerado.' })
+  status!: string;
+}
+
 // Fase 56 -- QUEM criou o documento, nunca uma coluna nova: derivado em
 // tempo de leitura de creator.role (ja incluido em toda query via
 // FISCAL_DOCUMENT_INCLUDE) -- DRIVER = enviado pelo Driver App (comprovante
@@ -177,4 +194,15 @@ export class FiscalDocumentEntity {
 
   @ApiProperty({ description: 'false quando nao ha dados suficientes (chave/manifesto) para derivar relacionamento -- ver relatedDocuments.' })
   relatedDocumentsAvailable!: boolean;
+
+  // Fase Fiscal/XML -- titulo(s) financeiro(s) ja gerado(s) a partir deste
+  // documento (autopreenchimento, POST /payables|receivables com
+  // fiscalDocumentId). null = nenhum ainda -- nunca os dois preenchidos ao
+  // mesmo tempo (o usuario escolhe despesa OU receita, nunca ambas para o
+  // mesmo documento).
+  @ApiPropertyOptional({ type: LinkedFinancialTitleEntity, nullable: true })
+  payable!: LinkedFinancialTitleEntity | null;
+
+  @ApiPropertyOptional({ type: LinkedFinancialTitleEntity, nullable: true })
+  receivable!: LinkedFinancialTitleEntity | null;
 }

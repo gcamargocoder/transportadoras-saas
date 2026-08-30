@@ -66,6 +66,19 @@ describe('resolveNotificationLink', () => {
     expect(link).toBe('/trips/trip-3');
   });
 
+  // Fase 108 -- manutencao preventiva vencida/proxima sem OS aberta ainda.
+  it('MaintenancePlan com vehicleId no metadata leva para /vehicles/:vehicleId', () => {
+    const link = resolveNotificationLink(
+      buildNotification({ entityType: 'MaintenancePlan', entityId: 'plan-1', metadata: { vehicleId: 'veh-2' } }),
+    );
+    expect(link).toBe('/vehicles/veh-2');
+  });
+
+  it('MaintenancePlan sem vehicleId no metadata nao tem link', () => {
+    const link = resolveNotificationLink(buildNotification({ entityType: 'MaintenancePlan', metadata: null }));
+    expect(link).toBeNull();
+  });
+
   it('entityType desconhecido nunca inventa uma URL', () => {
     const link = resolveNotificationLink(buildNotification({ entityType: 'SomethingUnknown' }));
     expect(link).toBeNull();

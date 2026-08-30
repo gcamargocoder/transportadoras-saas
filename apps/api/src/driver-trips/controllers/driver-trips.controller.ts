@@ -22,6 +22,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { UPLOAD_THROTTLE } from '../../common/constants/throttle.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { CreateChecklistExecutionDto } from '../../checklists/dto/create-checklist-execution.dto';
+import { FindAvailableChecklistsQueryDto } from '../../checklists/dto/find-available-checklists-query.dto';
 import { SubmitChecklistAnswersDto } from '../../checklists/dto/submit-checklist-answers.dto';
 import { UploadChecklistEvidenceDto } from '../../checklists/dto/upload-checklist-evidence.dto';
 import { ChecklistAnswersSubmitResultEntity } from '../../checklists/entities/checklist-answers-submit-result.entity';
@@ -34,6 +35,7 @@ import { MulterExceptionFilter } from '../../toll-import/filters/multer-exceptio
 import { AxleEventEntity } from '../../trip-operations/entities/axle-event.entity';
 import { TrackingPointsSyncResultEntity } from '../../trip-operations/entities/tracking-point.entity';
 import { TripStopEntity } from '../../trip-operations/entities/trip-stop.entity';
+import { UpdateTripDeliveryStopStatusDto } from '../../trips/dto/update-trip-delivery-stop-status.dto';
 import { TripDeliveryStopEntity } from '../../trips/entities/trip-delivery-stop.entity';
 import { TripEtaResultEntity } from '../../trips/entities/trip-eta.entity';
 import { TripDeliveryStopsService } from '../../trips/services/trip-delivery-stops.service';
@@ -392,11 +394,15 @@ export class DriverTripsController {
   }
 
   // ==========================================================================
-  // PARADAS/ENTREGAS PLANEJADAS (Fase 88) -- somente LEITURA para o Driver
-  // App: reaproveita o MESMO TripDeliveryStopsService do admin (nenhuma
-  // consulta paralela). Escrita (adicionar/editar/remover/reordenar/mudar
-  // status) continua exclusiva do TripsController administrativo nesta fase
-  // -- navegacao/atualizacao de status pelo motorista fica para fase futura.
+  // PARADAS/ENTREGAS PLANEJADAS (Fase 88; escrita de status Fase 106) --
+  // reaproveita o MESMO TripDeliveryStopsService do admin (nenhuma
+  // consulta/regra paralela). Adicionar/editar/remover/reordenar continua
+  // exclusivo do TripsController administrativo (define O QUE sera
+  // entregue); so a TRANSICAO DE STATUS (PENDING/IN_PROGRESS/COMPLETED/
+  // CANCELLED/FAILED) passou a ser possivel tambem pelo motorista em campo,
+  // via updateStatus() -- MESMO metodo, MESMAS transicoes/validacoes
+  // (ALLOWED_STATUS_TRANSITIONS, reason obrigatorio em FAILED) ja aplicadas
+  // ao admin, nunca uma segunda regra de negocio.
   // ==========================================================================
   @Get('trips/:id/delivery-stops')
   @ApiOperation({ summary: 'Lista as paradas/entregas planejadas desta viagem, em ordem de sequencia.' })
@@ -405,6 +411,36 @@ export class DriverTripsController {
     const tenantId = this.tenantContext.requireTenantId();
     await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
     return this.tripDeliveryStopsService.findAllForTrip(tenantId, id);
+  }
+
+  // Fase 106 -- idempotente por ESTADO (mesmo principio de start/pause/
+  // resume/complete): reenviar a mesma transicao apos reconexao (fila
+  // offline do app) e um no-op no service (before.status === dto.status),
+  // nunca duplica nem lanca erro. Ownership validada da MESMA forma que
+  // todo endpoint deste controller (getOne confere tenant + motorista dono
+  // da viagem antes de qualquer escrita).
+  @Patch('trips/:id/delivery-stops/:stopId/status')
+  @ApiOperation({
+    summary:
+      'Atualiza o status de uma parada/entrega planejada desta viagem (PENDING -> IN_PROGRESS -> ' +
+      'COMPLETED/FAILED/CANCELLED). Mesma regra de transicao do painel administrativo.',
+  })
+  @ApiOkResponse({ type: TripDeliveryStopEntity })
+  async updateDeliveryStopStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('stopId', ParseUUIDPipe) stopId: string,
+    @Body() dto: UpdateTripDeliveryStopStatusDto,
+  ): Promise<TripDeliveryStopEntity> {
+    const tenantId = this.tenantContext.requireTenantId();
+    await this.driverTripsService.getOne(tenantId, this.driverContext.requireDriverId(), id);
+    return this.tripDeliveryStopsService.updateStatus(
+      tenantId,
+      id,
+      stopId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
   }
 
   // Fase 91 -- previsao de chegada (ETA), somente leitura, MESMO
@@ -578,10 +614,14 @@ export class DriverTripsController {
   // ==========================================================================
 
   @Get('checklists/available')
-  @ApiOperation({ summary: 'Templates de checklist PUBLISHED disponiveis para este motorista iniciar.' })
+  @ApiOperation({
+    summary:
+      'Templates de checklist PUBLISHED disponiveis para este motorista iniciar. ' +
+      'Com tripId, filtra pelo tipo de veiculo/carreta da composicao daquela viagem.',
+  })
   @ApiOkResponse({ type: ChecklistTemplateEntity, isArray: true })
-  findAvailableChecklists(): Promise<ChecklistTemplateEntity[]> {
-    return this.checklistTemplatesService.findPublishedForDriver(this.tenantContext.requireTenantId());
+  findAvailableChecklists(@Query() query: FindAvailableChecklistsQueryDto): Promise<ChecklistTemplateEntity[]> {
+    return this.checklistTemplatesService.findPublishedForDriver(this.tenantContext.requireTenantId(), query.tripId);
   }
 
   @Post('checklists')

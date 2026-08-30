@@ -24,11 +24,18 @@ export class DeliveryOccurrenceListItemEntity {
   @ApiProperty()
   tripDestinationName!: string;
 
-  @ApiProperty({ format: 'uuid' })
-  tripDeliveryStopId!: string;
+  // Fase 115 -- nullable: esta mesma entidade passou a ser reaproveitada
+  // tambem por GET /trip-occurrences (todas as ocorrencias, Fase 115), que
+  // inclui ocorrencias GERAIS da viagem (sem parada vinculada). Em
+  // GET /delivery-occurrences (Fase 101, inalterado) estes 2 campos
+  // continuam sempre preenchidos, na pratica -- a mudanca de tipo e so
+  // uma ampliacao, nunca uma remocao de garantia para quem ja consome
+  // aquele endpoint.
+  @ApiProperty({ format: 'uuid', nullable: true })
+  tripDeliveryStopId!: string | null;
 
-  @ApiProperty({ description: 'Sequencia (#N) da parada.' })
-  tripDeliveryStopSequence!: number;
+  @ApiProperty({ nullable: true, description: 'Sequencia (#N) da parada, quando a ocorrencia esta vinculada a uma.' })
+  tripDeliveryStopSequence!: number | null;
 
   @ApiProperty({ format: 'uuid', nullable: true })
   driverId!: string | null;

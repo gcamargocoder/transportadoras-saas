@@ -6,6 +6,7 @@ import {
   MaintenanceComponent,
   Prisma,
   RevenueCategory,
+  TireLocationType,
   TireStatus,
   TrailerType,
   TripLoadStatus,
@@ -34,7 +35,8 @@ import { FindFuelSuppliesQueryDto } from '../../fuel-supplies/dto/find-fuel-supp
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
 import { OPEN_MAINTENANCE_STATUSES } from '../../fleet/utils/maintenance-status-transition.util';
 import { PrismaService } from '../../prisma/prisma.service';
-import { NEAR_REPLACEMENT_THRESHOLD_MM, TiresService } from '../../tires/services/tires.service';
+import { NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT, NEAR_REPLACEMENT_THRESHOLD_MM, TiresService } from '../../tires/services/tires.service';
+import { computeTireDistanceLifespan } from '../../tires/utils/tire-lifecycle.util';
 import { TripStopStatus } from '../../trip-operations/entities/trip-stop.entity';
 import {
   buildDeliveryStopCountsByTrip,
@@ -2846,9 +2848,45 @@ export class FleetOperationsMetricsService {
 
     const vehicleIds = [...new Set(tires.map((t) => t.vehicleId).filter((id): id is string => id !== null))];
     const vehicles =
-      vehicleIds.length > 0 ? await this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true, fleetId: true } }) : [];
+      vehicleIds.length > 0
+        ? await this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true, fleetId: true, odometerKm: true } })
+        : [];
     const plateById = new Map(vehicles.map((v) => [v.id, v.plate]));
     const fleetIdByVehicle = new Map(vehicles.map((v) => [v.id, v.fleetId]));
+    const odometerKmByVehicle = new Map(vehicles.map((v) => [v.id, toNumberOrNull(v.odometerKm)]));
+
+    // Fase 110 -- mesmo calculo (computeTireDistanceLifespan) e mesmo padrao
+    // de lote (nunca 1 query por pneu) ja usados pelo coletor de
+    // notificacoes (collectTireLifespanNearReplacement) -- nunca uma
+    // segunda regra. So busca instalacao mais recente dos pneus IN_USE com
+    // expectedLifespanKm cadastrado (unicos que podem gerar o indicador).
+    const lifespanEligibleTireIds = tires
+      .filter((t) => t.status === TireStatus.IN_USE && t.vehicleId !== null && t.expectedLifespanKm !== null)
+      .map((t) => t.id);
+    const installMovements =
+      lifespanEligibleTireIds.length > 0
+        ? await this.prisma.tireMovement.findMany({
+            where: { tenantId, tireId: { in: lifespanEligibleTireIds }, newLocationType: { not: TireLocationType.STOCK } },
+            select: { tireId: true, odometerKm: true, movementDate: true },
+            orderBy: { movementDate: 'desc' },
+          })
+        : [];
+    const installOdometerByTire = new Map<string, number | null>();
+    for (const movement of installMovements) {
+      if (installOdometerByTire.has(movement.tireId)) continue;
+      installOdometerByTire.set(movement.tireId, toNumberOrNull(movement.odometerKm));
+    }
+    const lifespanUsedPercentByTire = new Map<string, number>();
+    for (const tire of tires) {
+      if (tire.status !== TireStatus.IN_USE || !tire.vehicleId || tire.expectedLifespanKm === null) continue;
+      const { lifespanUsedPercent } = computeTireDistanceLifespan({
+        currentLocationType: TireLocationType.VEHICLE,
+        expectedLifespanKm: toNumberOrNull(tire.expectedLifespanKm),
+        installedAtOdometerKm: installOdometerByTire.get(tire.id) ?? null,
+        currentOdometerKm: odometerKmByVehicle.get(tire.vehicleId) ?? null,
+      });
+      if (lifespanUsedPercent !== null) lifespanUsedPercentByTire.set(tire.id, lifespanUsedPercent);
+    }
     const fleetIds = [...new Set(vehicles.map((v) => v.fleetId).filter((id): id is string => id !== null))];
     const fleets = fleetIds.length > 0 ? await this.prisma.fleet.findMany({ where: { id: { in: fleetIds } }, select: { id: true, name: true } }) : [];
     const fleetNameById = new Map(fleets.map((f) => [f.id, f.name]));
@@ -2894,7 +2932,11 @@ export class FleetOperationsMetricsService {
       if (tire.status === TireStatus.IN_USE) {
         tireWear.push(this.buildTireWearEntity(tire, plateById));
         const currentTreadDepthMm = toNumberOrNull(tire.currentTreadDepthMm);
-        if (currentTreadDepthMm !== null && currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM) {
+        const nearByTread = currentTreadDepthMm !== null && currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM;
+        // Fase 110 -- mesmo pneu proximo por SULCO e por DISTANCIA conta uma
+        // unica vez (nunca duplicar no total exibido no dashboard).
+        const nearByDistance = (lifespanUsedPercentByTire.get(tire.id) ?? 0) >= NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT;
+        if (nearByTread || nearByDistance) {
           nearReplacementCount += 1;
         }
       }
@@ -2947,7 +2989,7 @@ export class FleetOperationsMetricsService {
     entity.monthlyTrendCost = monthlyTrendCost;
     entity.tireWear = tireWear;
     entity.topVehiclesByTireCost = this.toRankingEntities(rankTopVehicles(vehicleCostMap, TOP_VEHICLES_LIMIT, 'value', 'desc'), plateById);
-    entity.tireAlerts = this.computeTireAlerts(tires, plateById);
+    entity.tireAlerts = this.computeTireAlerts(tires, plateById, lifespanUsedPercentByTire);
 
     return entity;
   }
@@ -2994,23 +3036,42 @@ export class FleetOperationsMetricsService {
   }
 
   private computeTireAlerts(
-    tires: { fireNumber: string; status: TireStatus; vehicleId: string | null; currentTreadDepthMm: Prisma.Decimal | null }[],
+    tires: { id: string; fireNumber: string; status: TireStatus; vehicleId: string | null; currentTreadDepthMm: Prisma.Decimal | null }[],
     plateById: Map<string, string>,
+    lifespanUsedPercentByTire: Map<string, number>,
   ): FleetAlertEntity[] {
     const alerts: FleetAlertEntity[] = [];
     for (const tire of tires) {
       if (alerts.length >= ALERTS_LIMIT_PER_TYPE) break;
       if (tire.status !== TireStatus.IN_USE || !tire.vehicleId) continue;
       const currentTreadDepthMm = toNumberOrNull(tire.currentTreadDepthMm);
-      if (currentTreadDepthMm === null || currentTreadDepthMm > NEAR_REPLACEMENT_THRESHOLD_MM) continue;
+      if (currentTreadDepthMm !== null && currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM) {
+        alerts.push(
+          this.buildAlert(
+            'TIRE_NEAR_REPLACEMENT',
+            'ATTENTION',
+            tire.vehicleId,
+            plateById,
+            `Pneu ${tire.fireNumber} com ${currentTreadDepthMm.toFixed(1)}mm de sulco -- próximo da troca.`,
+            currentTreadDepthMm,
+          ),
+        );
+        continue;
+      }
+      // Fase 110 -- so alerta por distancia quando o sulco ainda nao acusou
+      // (evita 2 alertas para o mesmo pneu); mesmo limiar/formula do coletor
+      // de notificacoes (NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT,
+      // computeTireDistanceLifespan).
+      const lifespanUsedPercent = lifespanUsedPercentByTire.get(tire.id);
+      if (lifespanUsedPercent === undefined || lifespanUsedPercent < NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT) continue;
       alerts.push(
         this.buildAlert(
           'TIRE_NEAR_REPLACEMENT',
           'ATTENTION',
           tire.vehicleId,
           plateById,
-          `Pneu ${tire.fireNumber} com ${currentTreadDepthMm.toFixed(1)}mm de sulco -- próximo da troca.`,
-          currentTreadDepthMm,
+          `Pneu ${tire.fireNumber} já rodou ${lifespanUsedPercent.toFixed(0)}% da vida útil esperada -- próximo da troca.`,
+          lifespanUsedPercent,
         ),
       );
     }

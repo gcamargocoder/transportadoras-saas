@@ -288,9 +288,48 @@ describe('Conciliacao Financeira (Fase 75, e2e)', () => {
       expect(partialIssue).toBeTruthy();
       expect(partialIssue.severity).toBe('INFO');
     });
+
+    it('titulos MANUAIS (Fase Financeiro CP/CR, billingId nulo) nunca disparam falso DUPLICATE_RECEIVABLE nem RECEIVABLE_WITHOUT_BILLING', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('RecManualNoFalsePositive');
+      const customerId = await createCustomer(adminAuth);
+
+      // 3 titulos manuais (billingId nulo em todos) -- groupBy nao pode
+      // tratar os 3 NULLs como um unico "grupo duplicado".
+      for (let i = 0; i < 3; i += 1) {
+        await request(app.getHttpServer())
+          .post('/api/v1/receivables')
+          .set('Authorization', adminAuth)
+          .send({ customerId, description: `Manual ${i}`, originalAmount: 100, issueDate: '2026-09-01', dueDate: '2026-09-10' })
+          .expect(201);
+      }
+
+      const res = await request(app.getHttpServer()).get('/api/v1/finance/reconciliation').set('Authorization', adminAuth).expect(200);
+      const duplicateIssues = res.body.data.issues.items.filter((i: { type: string }) => i.type === 'DUPLICATE_RECEIVABLE');
+      const withoutBillingIssues = res.body.data.issues.items.filter((i: { type: string }) => i.type === 'RECEIVABLE_WITHOUT_BILLING');
+      expect(duplicateIssues).toHaveLength(0);
+      expect(withoutBillingIssues).toHaveLength(0);
+    });
   });
 
   describe('detectores de Payable', () => {
+    it('titulos MANUAIS (Fase Financeiro CP/CR, expenseId nulo) nunca disparam falso DUPLICATE_PAYABLE nem PAYABLE_WITHOUT_APPROVED_EXPENSE', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PayManualNoFalsePositive');
+
+      for (let i = 0; i < 3; i += 1) {
+        await request(app.getHttpServer())
+          .post('/api/v1/payables')
+          .set('Authorization', adminAuth)
+          .send({ category: 'OTHER', description: `Manual ${i}`, originalAmount: 100, issueDate: '2026-09-01', dueDate: '2026-09-10' })
+          .expect(201);
+      }
+
+      const res = await request(app.getHttpServer()).get('/api/v1/finance/reconciliation').set('Authorization', adminAuth).expect(200);
+      const duplicateIssues = res.body.data.issues.items.filter((i: { type: string }) => i.type === 'DUPLICATE_PAYABLE');
+      const withoutExpenseIssues = res.body.data.issues.items.filter((i: { type: string }) => i.type === 'PAYABLE_WITHOUT_APPROVED_EXPENSE');
+      expect(duplicateIssues).toHaveLength(0);
+      expect(withoutExpenseIssues).toHaveLength(0);
+    });
+
     it('PAYABLE_WITHOUT_APPROVED_EXPENSE: despesa cancelada apos gerar o titulo', async () => {
       const { adminAuth } = await createTenantAndLoginAsAdmin('PayNoApprovedExpense');
       const { expenseId } = await setupApprovedExpense(adminAuth, 800);

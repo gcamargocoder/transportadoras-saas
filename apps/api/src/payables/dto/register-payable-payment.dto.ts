@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ExpensePaymentMethod } from '@prisma/client';
-import { IsDateString, IsEnum, IsNumber, IsOptional, IsPositive, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsPositive, IsString, IsUUID, Min, MaxLength } from 'class-validator';
 
 // POST /payables/:id/payments -- amount sempre validado no backend contra
 // o saldo em aberto (nunca paidAmount > originalAmount). paymentMethod
@@ -37,4 +37,27 @@ export class RegisterPayablePaymentDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  // Sempre digitados manualmente -- nunca calculados a partir de uma taxa
+  // (o projeto nao possui regra de juros/multa definida). amount +
+  // discountAmount quitam o titulo (somam em paidAmount); amount +
+  // interestAmount + fineAmount e o valor real movimentado na conta
+  // financeira (o desconto nao movimenta caixa).
+  @ApiPropertyOptional({ description: 'Juros pagos alem do valor do titulo (nao abate o saldo, soma ao valor movimentado em caixa).' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  interestAmount?: number;
+
+  @ApiPropertyOptional({ description: 'Multa paga alem do valor do titulo (nao abate o saldo, soma ao valor movimentado em caixa).' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  fineAmount?: number;
+
+  @ApiPropertyOptional({ description: 'Desconto concedido no pagamento (abate o saldo junto com amount, mas nao movimenta caixa).' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  discountAmount?: number;
 }

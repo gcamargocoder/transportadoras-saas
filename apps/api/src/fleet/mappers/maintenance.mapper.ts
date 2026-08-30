@@ -1,7 +1,8 @@
-import { MaintenancePart, VehicleMaintenance } from '@prisma/client';
+import { MaintenancePart, TireMovement, VehicleMaintenance } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { MaintenanceEntity } from '../entities/maintenance.entity';
 import { MaintenancePartEntity } from '../entities/maintenance-part.entity';
+import { MaintenanceTireMovementEntity } from '../entities/maintenance-tire-movement.entity';
 
 function toMaintenancePartEntity(part: MaintenancePart): MaintenancePartEntity {
   const entity = new MaintenancePartEntity();
@@ -14,6 +15,22 @@ function toMaintenancePartEntity(part: MaintenancePart): MaintenancePartEntity {
   return entity;
 }
 
+// Fase 109 -- ver MaintenanceTireMovementEntity.
+function toMaintenanceTireMovementEntity(
+  movement: TireMovement & { tire: { fireNumber: string } },
+): MaintenanceTireMovementEntity {
+  const entity = new MaintenanceTireMovementEntity();
+  entity.id = movement.id;
+  entity.tireId = movement.tireId;
+  entity.tireFireNumber = movement.tire.fireNumber;
+  entity.movementDate = movement.movementDate;
+  entity.newLocationType = movement.newLocationType;
+  entity.previousPosition = movement.previousPosition;
+  entity.newPosition = movement.newPosition;
+  entity.reason = movement.reason;
+  return entity;
+}
+
 export function toMaintenanceEntity(
   maintenance: VehicleMaintenance & {
     parts?: MaintenancePart[];
@@ -21,6 +38,7 @@ export function toMaintenanceEntity(
     workshopProvider?: { name: string } | null;
     supplierProvider?: { name: string } | null;
   },
+  tireMovements: (TireMovement & { tire: { fireNumber: string } })[] = [],
 ): MaintenanceEntity {
   const entity = new MaintenanceEntity();
   entity.id = maintenance.id;
@@ -58,7 +76,9 @@ export function toMaintenanceEntity(
   entity.downtimeMinutes = maintenance.downtimeMinutes;
   entity.invoiceNumber = maintenance.invoiceNumber;
   entity.maintenancePlanId = maintenance.maintenancePlanId;
+  entity.checklistExecutionId = maintenance.checklistExecutionId;
   entity.parts = (maintenance.parts ?? []).map(toMaintenancePartEntity);
+  entity.tireMovements = tireMovements.map(toMaintenanceTireMovementEntity);
   entity.createdAt = maintenance.createdAt;
   entity.updatedAt = maintenance.updatedAt;
   return entity;

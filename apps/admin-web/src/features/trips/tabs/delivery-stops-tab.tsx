@@ -112,6 +112,10 @@ export function DeliveryStopsTab({
     const map = new Map<string, number>();
     for (const o of occurrencesQuery.data?.items ?? []) {
       if (o.status !== 'OPEN' && o.status !== 'IN_PROGRESS') continue;
+      // GET /delivery-occurrences (usado acima) so retorna ocorrencias com
+      // tripDeliveryStopId preenchido -- o guard e so para satisfazer o tipo
+      // agora nullable (Fase 115, reaproveitado tambem por /trip-occurrences).
+      if (!o.tripDeliveryStopId) continue;
       map.set(o.tripDeliveryStopId, (map.get(o.tripDeliveryStopId) ?? 0) + 1);
     }
     return map;
@@ -119,6 +123,7 @@ export function DeliveryStopsTab({
   const totalOccurrenceCountByStopId = useMemo(() => {
     const map = new Map<string, number>();
     for (const o of occurrencesQuery.data?.items ?? []) {
+      if (!o.tripDeliveryStopId) continue;
       map.set(o.tripDeliveryStopId, (map.get(o.tripDeliveryStopId) ?? 0) + 1);
     }
     return map;

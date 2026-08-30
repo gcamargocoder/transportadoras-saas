@@ -22,7 +22,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'DeliveryProof'>;
 // limitacao real desta fase; upload de PDF continua disponivel pelo painel
 // administrativo, ver docs/fiscal-documents.md).
 export function DeliveryProofScreen({ route, navigation }: Props): React.JSX.Element {
-  const { tripId } = route.params;
+  const { tripId, tripDeliveryStopId, stopLabel } = route.params;
   const [localUri, setLocalUri] = useState<string | null>(null);
   const [observation, setObservation] = useState('');
   const [capturing, setCapturing] = useState(false);
@@ -77,7 +77,7 @@ export function DeliveryProofScreen({ route, navigation }: Props): React.JSX.Ele
         localFileUri: localUri,
         fileName: `comprovante-${Date.now()}.jpg`,
         mimeType: 'image/jpeg',
-        ...compact({ observation: observation.trim() || undefined }),
+        ...compact({ observation: observation.trim() || undefined, tripDeliveryStopId }),
       });
       setFeedback(
         result.queued
@@ -96,6 +96,7 @@ export function DeliveryProofScreen({ route, navigation }: Props): React.JSX.Ele
       <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', marginTop: 20 }}>
         Comprovante de entrega
       </Text>
+      {stopLabel && <Text style={{ color: colors.textMuted }}>Parada: {stopLabel}</Text>}
 
       <Card>
         {localUri ? (

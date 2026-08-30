@@ -334,6 +334,111 @@ describe('Maintenances (e2e)', () => {
     });
   });
 
+  // Fase 111 -- "integracao com manutencao/OS quando uma irregularidade
+  // exigir manutencao": OS aberta explicitamente a partir de um checklist
+  // (VehicleMaintenance.checklistExecutionId), mesmo padrao ja usado por
+  // TireMovement.maintenanceId (Fase 109), so na direcao inversa.
+  describe('integracao com checklist (Fase 111)', () => {
+    async function createDriverWithChecklistExecution(adminAuth: string, tenantId: string, vehicleId: string) {
+      const driverRes = await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', adminAuth)
+        .send({
+          name: 'Jose da Silva',
+          cpf: '52998224725',
+          cnhNumber: String(Math.floor(10000000000 + Math.random() * 89999999999)),
+          cnhCategory: 'AE',
+          cnhExpiresAt: '2027-06-30',
+        })
+        .expect(201);
+      const driverId = driverRes.body.data.id as string;
+
+      const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+      const email = `driver-${unique}@teste.com`;
+      const password = 'SenhaForte123!';
+      const userRes = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/user-link`)
+        .set('Authorization', adminAuth)
+        .send({ userAccountId: userRes.body.data.id })
+        .expect(200);
+      const loginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email, password })
+        .expect(200);
+      const driverAuth = `Bearer ${loginRes.body.data.accessToken as string}`;
+
+      const templateRes = await request(app.getHttpServer())
+        .post('/api/v1/checklists/templates')
+        .set('Authorization', adminAuth)
+        .send({
+          name: `Pre-Viagem ${randomUUID()}`,
+          type: 'PRE_TRIP',
+          sections: [{ title: 'SEGURANCA', order: 1, items: [{ code: 'freio', label: 'Freio OK?', type: 'BOOLEAN', order: 1, required: true, critical: true }] }],
+        })
+        .expect(201);
+      const templateId = templateRes.body.data.id as string;
+      await request(app.getHttpServer()).post(`/api/v1/checklists/templates/${templateId}/publish`).set('Authorization', adminAuth).expect(200);
+
+      const execRes = await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, vehicleId })
+        .expect(201);
+      return execRes.body.data.id as string;
+    }
+
+    it('cria OS com checklistExecutionId -- aparece em GET /maintenances/:id e em GET /checklists/executions/:id.maintenances', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistLink');
+      const auth = `Bearer ${adminAccessToken}`;
+      const vehicleId = await createVehicle(auth);
+      const checklistExecutionId = await createDriverWithChecklistExecution(auth, tenantId, vehicleId);
+
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/maintenances')
+        .set('Authorization', auth)
+        .send(buildMaintenancePayload(vehicleId, { checklistExecutionId, description: 'Freio com defeito no checklist' }))
+        .expect(201);
+      expect(createRes.body.data.checklistExecutionId).toBe(checklistExecutionId);
+
+      const executionRes = await request(app.getHttpServer())
+        .get(`/api/v1/checklists/executions/${checklistExecutionId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(executionRes.body.data.maintenances).toHaveLength(1);
+      expect(executionRes.body.data.maintenances[0].id).toBe(createRes.body.data.id);
+    });
+
+    it('rejeita checklistExecutionId inexistente/de outro tenant com 404', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistMissing');
+      const auth = `Bearer ${adminAccessToken}`;
+      const vehicleId = await createVehicle(auth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/maintenances')
+        .set('Authorization', auth)
+        .send(buildMaintenancePayload(vehicleId, { checklistExecutionId: randomUUID() }))
+        .expect(404);
+    });
+
+    it('OS sem checklistExecutionId (fluxo normal, regressao) nunca aparece em nenhum checklist', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistNone');
+      const auth = `Bearer ${adminAccessToken}`;
+      const vehicleId = await createVehicle(auth);
+
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/maintenances')
+        .set('Authorization', auth)
+        .send(buildMaintenancePayload(vehicleId))
+        .expect(201);
+      expect(createRes.body.data.checklistExecutionId).toBeNull();
+    });
+  });
+
   describe('filtros, paginacao e ordenacao', () => {
     it('filtra por status, tipo, prioridade, veiculo, placa, oficina, fornecedor, periodo e busca livre', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('Filters');

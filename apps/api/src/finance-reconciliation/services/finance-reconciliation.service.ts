@@ -27,8 +27,10 @@ const TRIP_LABEL_SELECT = {
   select: { origin: { select: { name: true } }, destination: { select: { name: true } } },
 } satisfies { select: Prisma.TripSelect };
 
-function tripLabelOf(trip: { origin: { name: string }; destination: { name: string } }): string {
-  return `${trip.origin.name} → ${trip.destination.name}`;
+// Fase Financeiro CP/CR -- trip agora e opcional (titulo MANUAL, sem
+// viagem de origem). null aqui e um estado legitimo, nunca um erro.
+function tripLabelOf(trip: { origin: { name: string }; destination: { name: string } } | null): string | null {
+  return trip ? `${trip.origin.name} → ${trip.destination.name}` : null;
 }
 
 function round2(value: number): number {
@@ -155,7 +157,9 @@ export class FinanceReconciliationService {
             ),
           );
         }
-        if (r.billing.status === TripBillingStatus.CANCELLED) {
+        // Titulo MANUAL (billing nulo, Fase Financeiro CP/CR) nunca gera
+        // este alerta -- nao ha faturamento nenhum para estar cancelado.
+        if (r.billing && r.billing.status === TripBillingStatus.CANCELLED) {
           issues.push(
             this.buildIssue(
               'RECEIVABLE_WITHOUT_BILLING',
@@ -175,10 +179,14 @@ export class FinanceReconciliationService {
       }
     }
 
+    // billingId nulo (titulo MANUAL, Fase Financeiro CP/CR) nunca entra
+    // nesta deteccao -- Postgres/Prisma agrupariam todos os titulos manuais
+    // num unico "grupo NULL", gerando falsos positivos de duplicidade.
     const dupGroups = await this.prisma.receivable.groupBy({
       by: ['billingId'],
       where: {
         tenantId,
+        billingId: { not: null },
         ...(query.tripId ? { tripId: query.tripId } : {}),
         ...(query.customerId ? { customerId: query.customerId } : {}),
       },
@@ -186,9 +194,10 @@ export class FinanceReconciliationService {
       having: { billingId: { _count: { gt: 1 } } },
     });
     if (dupGroups.length > 0) {
+      const billingIds = dupGroups.map((g) => g.billingId).filter((id): id is string => id !== null);
       const countByBilling = new Map(dupGroups.map((g) => [g.billingId, g._count.billingId]));
       const dupRows = await this.prisma.receivable.findMany({
-        where: { tenantId, billingId: { in: dupGroups.map((g) => g.billingId) } },
+        where: { tenantId, billingId: { in: billingIds } },
         select: { id: true, tripId: true, customerId: true, billingId: true, originalAmount: true, trip: TRIP_LABEL_SELECT },
       });
       for (const row of dupRows) {
@@ -289,7 +298,9 @@ export class FinanceReconciliationService {
             ),
           );
         }
-        if (p.expense.status !== ExpenseStatus.APPROVED) {
+        // Titulo MANUAL (expense nulo, Fase Financeiro CP/CR) nunca gera
+        // este alerta -- nao ha despesa nenhuma para estar "nao aprovada".
+        if (p.expense && p.expense.status !== ExpenseStatus.APPROVED) {
           issues.push(
             this.buildIssue(
               'PAYABLE_WITHOUT_APPROVED_EXPENSE',
@@ -309,16 +320,19 @@ export class FinanceReconciliationService {
       }
     }
 
+    // expenseId nulo (titulo MANUAL, Fase Financeiro CP/CR) nunca entra
+    // nesta deteccao -- mesmo motivo do billingId em detectReceivableIssues.
     const dupGroups = await this.prisma.payable.groupBy({
       by: ['expenseId'],
-      where: { tenantId, ...(query.tripId ? { tripId: query.tripId } : {}) },
+      where: { tenantId, expenseId: { not: null }, ...(query.tripId ? { tripId: query.tripId } : {}) },
       _count: { expenseId: true },
       having: { expenseId: { _count: { gt: 1 } } },
     });
     if (dupGroups.length > 0) {
+      const expenseIds = dupGroups.map((g) => g.expenseId).filter((id): id is string => id !== null);
       const countByExpense = new Map(dupGroups.map((g) => [g.expenseId, g._count.expenseId]));
       const dupRows = await this.prisma.payable.findMany({
-        where: { tenantId, expenseId: { in: dupGroups.map((g) => g.expenseId) } },
+        where: { tenantId, expenseId: { in: expenseIds } },
         select: { id: true, tripId: true, expenseId: true, originalAmount: true, trip: TRIP_LABEL_SELECT },
       });
       for (const row of dupRows) {

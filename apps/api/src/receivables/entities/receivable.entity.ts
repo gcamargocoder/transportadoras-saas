@@ -16,14 +16,14 @@ export class ReceivableEntity {
   @ApiPropertyOptional({ nullable: true })
   customerName!: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  tripId!: string;
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Nulo em titulos manuais (sem viagem de origem).' })
+  tripId!: string | null;
 
   @ApiPropertyOptional({ nullable: true })
   tripLabel!: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  billingId!: string;
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Nulo em titulos manuais (sem faturamento de origem).' })
+  billingId!: string | null;
 
   @ApiProperty()
   description!: string;
@@ -72,4 +72,20 @@ export class ReceivableEntity {
 
   @ApiPropertyOptional({ type: [ReceivablePaymentEntity], description: 'Presente apenas no detalhe (GET /receivables/:id).' })
   payments?: ReceivablePaymentEntity[];
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, description: 'Presente apenas em titulos manuais parcelados -- compartilhado por todas as parcelas do mesmo lancamento.' })
+  installmentGroupId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  installmentNumber?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  installmentTotal?: number | null;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'Documento fiscal (NF-e/CT-e) de origem, quando este titulo foi gerado a partir de um documento importado.',
+  })
+  fiscalDocumentId?: string | null;
 }

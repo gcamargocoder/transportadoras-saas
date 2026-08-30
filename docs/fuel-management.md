@@ -73,7 +73,10 @@ Sem alteração. `assertOdometerNotBelowVehicle`/`computeBumpedOdometer`
 (`common/utils/odometer.util.ts`) já garantem que nenhum abastecimento
 (administrativo ou do app) aceite `odometerKm` menor que
 `Vehicle.odometerKm` atual, e que o odômetro do veículo seja avançado
-automaticamente quando o novo valor é maior.
+automaticamente quando o novo valor é maior. **Fase 110**: a mesma regra
+passou a ser reaproveitada também por `TiresService.createMovement`
+(`odometerKm` de uma troca de pneu também avança `Vehicle.odometerKm`) --
+ver `docs/tire-management.md` seção 2.
 
 ## 3. Vínculo com viagem/motorista/veículo
 
@@ -262,3 +265,114 @@ decisão de reuso documentada para manutenção/pneus).
 ## 18. Pendências reais
 
 Nenhuma pendência de escopo desta fase.
+
+## 19. Fase 107 — Integração de Abastecimento com Operação
+
+### Auditoria prévia
+
+Objetivo da fase: "conectar definitivamente o abastecimento à operação
+real" (vínculo com viagem, custo refletido nos dashboards, custo/km,
+Driver App na mesma fonte de dados, offline/idempotência, RBAC/multi-
+tenant/auditoria, sem N+1). A auditoria confirmou que **quase tudo já
+existia**, construído nas Fases 18/25/42/51/65/71 — o schema já tinha
+`FuelSupply.tripId` (opcional, com FK e índice), o service já derivava
+`vehicleId`/`driverId` da viagem, já impedia odômetro regressivo e já
+avançava `Vehicle.odometerKm` automaticamente, `fuelCost` já era somado
+por `tripId` em `getFinancialDashboard`/`getFinancialResult` (Fase 51/71,
+`docs/trip-financial-result.md`), custo/km já era calculado e exibido no
+dashboard de frota (`GET /fleet-operations/fuel`, `/operations/fleet/fuel`,
+`docs/fuel-operations-dashboard.md`), e o Driver App já registrava
+abastecimento vinculado à viagem pela fila offline existente
+(`syncQueue.ts`, idempotente por `deviceEventId`) desde a Fase 25.
+
+Só 2 lacunas reais foram encontradas — as duas são de **apresentação**,
+nunca de regra de negócio nova:
+
+1. **Sem visibilidade do vínculo no admin-web.** O backend já filtrava por
+   `tripId` (`FindFuelSuppliesQueryDto`), mas a tela `/fuel-supplies` não
+   expunha esse filtro nem uma coluna "Viagem"; a página de detalhe da
+   viagem não tinha nenhuma aba mostrando os abastecimentos vinculados a
+   ela — o único jeito de ver o "contexto de combustível" de UMA viagem
+   era ir à tela global e não havia como filtrar.
+2. **`costPerKm` calculado mas não exibido em `/fuel-supplies`.**
+   `FuelDashboardEntity.costPerKm` já existia no contrato HTTP (mesma
+   fórmula do dashboard de frota), mas a tela simples de abastecimentos só
+   mostrava consumo médio (km/L), não custo/km.
+
+Nenhuma migration foi necessária — `tripId` já existe desde a Fase 25.
+
+### Backend (aditivo, sem mudança de regra)
+
+- **`tripLabel` denormalizado** em `FuelSupplyEntity` ("origem → destino"),
+  mesma convenção já usada em `TripBillingEntity`/`FinanceReconciliationEntity`
+  — `SUPPLY_INCLUDE` (`FuelSuppliesService`) ganhou `trip: { select:
+  { origin: {select:{name:true}}, destination: {select:{name:true}} } } }`,
+  um `select` mínimo dentro da MESMA query já existente (nunca uma
+  consulta nova, nunca N+1 — é um `include`/join a mais na query única de
+  sempre). `null` quando `tripId` é `null` (nunca inventado).
+- Nenhum endpoint novo. `GET /fuel-supplies?tripId=...` (já existente,
+  Fase 18) é reaproveitado tanto pela nova aba da viagem quanto pelo novo
+  filtro da tela global.
+
+### Frontend
+
+- **Aba "Combustível" na viagem** (`apps/admin-web/src/features/trips/tabs/
+  fuel-tab.tsx`, novo) — lista os abastecimentos vinculados via
+  `GET /fuel-supplies?tripId=...` (mesmo endpoint/serviço da tela global,
+  nenhuma consulta nova), com totais de valor/litros e botão "Registrar
+  abastecimento" que abre o MESMO `CreateFuelSupplyModal` já existente, só
+  com a viagem pré-selecionada.
+- **`CreateFuelSupplyModal`** ganhou a prop opcional `defaultTripId` (mesmo
+  padrão já usado por `CreateTollModal.tripId`) — pré-preenche o campo
+  "Viagem" sem travá-lo, comportamento idêntico ao já existente quando
+  aberto a partir da tela global (sem prop).
+- **`/fuel-supplies`**: coluna "Viagem" (`tripLabel ?? '—'`), filtro por
+  viagem (`EntitySelect` + `listTrips`, mesmo padrão já usado em outros
+  filtros) e `StatCard` "Custo por km" (`costPerKm`, já calculado pelo
+  backend, só não estava sendo exibido).
+
+### Driver App
+
+**Sem alteração** — o fluxo (`FuelScreen.tsx` → `syncQueue.ts` `kind:
+'fuel-supply'` → `POST /driver/trips/:id/fuel-supplies`) já usa
+integralmente a MESMA tabela/serviço (`FuelSuppliesService.
+createFromDriverApp`) que o fluxo administrativo, já é idempotente por
+`deviceEventId` e já funciona offline (fila existente) — confirmado, não
+duplicado.
+
+### Testes
+
+- **Backend** (`test/fuel-management.e2e-spec.ts`, estendido): `tripLabel`
+  correto quando vinculado / `null` quando não vinculado (+ refletido na
+  listagem por `tripId`); RBAC novo — `DRIVER` (papel de usuário, distinto
+  do fluxo `/driver/*`) bloqueado 403 em leitura/escrita, `AUDITOR` lê mas
+  não escreve (403); N+1 novo — contagem de queries de `GET /fuel-supplies`
+  e `GET /fuel-supplies/dashboard` comprovadamente fixa (não cresce de 5
+  para 25 abastecimentos). Suíte completa: 18/18.
+- **Regressão confirmada verde**: `fuel-vehicle-integration.e2e-spec.ts`
+  (6), `fleet-operations-fuel.e2e-spec.ts` (18, N+1 de frota já existente),
+  `driver-trips.e2e-spec.ts` (39, fluxo de abastecimento do app), `trip-
+  finance.e2e-spec.ts` (19, `fuelCost` por `tripId` em
+  `getFinancialDashboard`/`getFinancialResult`).
+- **Frontend** (novo): `fuel-supplies/page.test.tsx` (5 testes — StatCard de
+  custo/km disponível/indisponível, coluna "Viagem" com/sem vínculo, filtro
+  por viagem reenviando `tripId`) e `features/trips/tabs/fuel-tab.test.tsx`
+  (4 testes — estado vazio, listagem com totais, RBAC de leitura para
+  `AUDITOR`, modal pré-preenchido). Suíte completa do admin-web: 246/247
+  (única falha pré-existente e não relacionada em `parts/page.test.tsx`).
+
+### Limitações reais (preexistentes, não alteradas nesta fase)
+
+- **Sem vínculo estrutural `FuelSupply` ↔ `TripExpense`** (categoria
+  `FUEL`) — já documentado na seção 5; se a operação lançar o mesmo
+  abastecimento nos dois lugares, `fuelCost` e `expenseCost` somam
+  separadamente (`docs/trip-financial-result.md`, seção "Limitações
+  conhecidas", item 3). Corrigir isso exigiria mudar uma regra de negócio
+  de um endpoint já usado por `TripMetrics.actualTotalCost`/
+  `FreightPricingService.getProfitability` — fora do escopo desta fase, que
+  pede explicitamente para **não** criar integração financeira automática
+  nova, apenas preservar a arquitetura existente e documentar o ponto (o
+  que esta seção faz).
+- `tripId` continua imutável após a criação (mesma decisão já tomada para
+  `TripExpense`/`TripRevenue`/`TripAdvance`) — não é possível vincular
+  retroativamente um abastecimento histórico a uma viagem pela UI.

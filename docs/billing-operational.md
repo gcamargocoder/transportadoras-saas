@@ -1,4 +1,4 @@
-# Faturamento Operacional e Conciliação Comercial (Fase 60)
+# Faturamento Operacional e Conciliação Comercial (Fase 60, evoluído na Fase 103)
 
 Camada de faturamento que conecta Operação → Contrato/Frete (Fase 59) →
 Viagem → Receita (Fase 51) → Financeiro, sem emissão fiscal, sem consulta
@@ -17,8 +17,12 @@ débito automático) e sem alterar nenhuma regra das Fases 52-59.
 | Dashboard (`/operations/fleet/billing`) | ✅ |
 | Seção "Faturamento" no detalhe do cliente (Fase 59) | ✅ |
 | Seção "Faturamento" na aba Comercial da viagem (Fase 59) | ✅ |
+| Descoberta de viagens elegíveis para faturamento (Fase 103) | ✅ |
+| Competência financeira / `FinancialPeriodGuard` no faturamento (Fase 103) | ✅ |
+| Snapshot congelado de `billableAmount` após o 1º lançamento (Fase 103) | ✅ |
 | Emissão de CT-e/NF-e/MDF-e, consulta SEFAZ, certificado digital | ❌ fora de escopo |
 | Stripe, PIX, débito automático, qualquer gateway de pagamento | ❌ fora de escopo |
+| Faturamento em lote (bulk) | ❌ fora de escopo (Fase 103) |
 
 ## 2. Modelagem (migration aditiva, sem alterar tabelas existentes)
 
@@ -30,12 +34,16 @@ faturamento parcial. Por isso, 1 enum + 2 models novos, mesmo espírito de
 ledger imutável):
 
 - **`TripBilling`** — container de faturamento, 1:1 com `Trip` (mesmo
-  padrão de `TripFreight`/`TripSettlement`). `billableAmount` é **sempre**
-  lido do snapshot já gravado em `TripFreight` (`contractedAmount` →
+  padrão de `TripFreight`/`TripSettlement`). `billableAmount` é lido do
+  snapshot já gravado em `TripFreight` (`contractedAmount` →
   `finalAmount` → `estimatedAmount`, mesma prioridade já usada por
   `FreightPricingService.applyRevenue`, Fase 59) — nunca recalculado pelo
-  motor de frete. `invoicedAmount` é a soma das `TripBillingEntry`, nunca
-  editado diretamente.
+  motor de frete. **Desde a Fase 103**, essa leitura só acontece na
+  **primeira** vez que um faturamento é iniciado para a viagem; a partir
+  daí `billableAmount` fica congelado no valor já persistido, mesmo que
+  `PATCH /freight/trips/:tripId` edite `contractedAmount`/`finalAmount`
+  depois (ver seção 5.1). `invoicedAmount` é a soma das `TripBillingEntry`,
+  nunca editado diretamente.
 - **`TripBillingEntry`** — lançamento **imutável** (ledger append-only,
   mesmo espírito de `SubscriptionPayment`): nenhum endpoint de
   update/delete existe. Cada entrada gera exatamente 1 `TripRevenue`
@@ -61,6 +69,15 @@ relations 1:1 opcionais (`Trip.billing`, `TripRevenue.billingEntry`).
 dos valores (`computeBillingStatusFromAmounts`, função pura testada
 isoladamente) — nunca setados manualmente. `PAID`/`CANCELLED` são sempre
 transições manuais explícitas, cada uma com seu próprio endpoint/guarda.
+
+**Nota (Fase 103)**: pedidos posteriores que mencionem um catálogo
+`DRAFT`/`ISSUED`/`CANCELLED` referem-se semanticamente a este mesmo
+catálogo — `INVOICED` (saldo zerado) e `PARTIALLY_INVOICED` (parte já
+faturada) já representam o momento em que o valor é reconhecido como
+receita ("emitido"). Não existe nenhuma etapa formal adicional de emissão
+fiscal por faturamento (sem integração com NF-e/CT-e); renomear o enum
+quebraria a Fase 60/72 inteira já em produção, então o catálogo existente
+foi mantido sem alteração.
 
 ## 4. Cálculo (reaproveita integralmente o motor da Fase 59)
 
@@ -107,6 +124,26 @@ viagem. Nenhum teste pré-existente da Fase 59 é afetado (a guarda só
 dispara quando um `TripBilling` já existe, o que nenhum teste da Fase 59
 provoca).
 
+### 5.1 Competência financeira (`FinancialPeriodGuard`, Fase 103)
+
+Auditoria da Fase 103 encontrou uma lacuna real: `invoice()` gerava a
+`TripRevenue` sem passar por `FinancialPeriodGuardService`
+(Fases 76/79), ao contrário de `ReceivablesService`/`PayablesService`/
+`FinancialTransactionsService`/`BankTransactionsService`, que já protegem
+toda mutação com data financeira desde a Fase 76. Um período fechado não
+impedia a geração de nova receita via faturamento operacional.
+
+Corrigido: `TripBillingService.invoice()` agora chama
+`periodGuard.assertPeriodOpenForDate(tenantId, financialDate)` — usando a
+mesma data (`financialDate = new Date()`) gravada como `receivedAt` da
+`TripRevenue` — **antes** de qualquer escrita. Período `CLOSED` bloqueia
+com 409 (nenhum `TripBilling`/`TripRevenue` é criado); período inexistente
+ou `OPEN` permite normalmente (mesma regra de Fase 76: "período inexistente
+= operação permitida"). `FinancialPeriodGuardModule` foi importado em
+`BillingOperationalModule` exatamente como já é feito em
+`ReceivablesModule`/`PayablesModule` — nenhuma lógica de guarda
+duplicada.
+
 ## 6. Faturamento parcial
 
 `POST .../invoice` com `amount` no corpo fatura parcialmente; omitido,
@@ -116,6 +153,30 @@ zero/negativo. Múltiplos lançamentos parciais são permitidos até o saldo
 zerar, cada um gerando sua própria `TripBillingEntry` + `TripRevenue`
 distintas — nenhuma delas é apagada/alterada depois (histórico completo
 sempre visível na aba Comercial da viagem).
+
+### 6.1 Snapshot do valor faturável (Fase 103)
+
+Antes desta fase, `invoice()` recalculava `billableAmount` a partir de
+`TripFreight` **a cada chamada**, inclusive em faturamentos parciais
+subsequentes — sobrescrevendo o valor já persistido. Como
+`PATCH /freight/trips/:tripId` permite edição humana de
+`contractedAmount`/`finalAmount` **depois** de aplicado (edição direta,
+distinta de revisar uma regra/tabela — ver seção 4), um faturamento
+parcial em andamento podia ter seu valor total silenciosamente alterado
+por uma edição posterior. Isso também divergia de `GET
+/operational-billing/trips/:tripId`, que **já** exibia o valor
+**persistido** (nunca recalculado) quando havia um `TripBilling` — ou
+seja, a tela mostrava um valor "congelado" que a próxima ação de
+faturar, na prática, não respeitava.
+
+Corrigido: `billableAmount` só é lido de `TripFreight` quando ainda **não
+existe** nenhum `TripBilling` para a viagem (primeiro lançamento). A
+partir daí, todo faturamento subsequente reaproveita o valor já
+persistido. Os campos informativos `contractedAmount`/`calculatedAmount`
+exibidos ao lado do faturável **continuam** sempre lidos ao vivo de
+`TripFreight` (propositalmente, para permitir comparar "o que está
+contratado hoje" com "o que foi de fato faturado") — só o valor
+efetivamente usado no cálculo de saldo é congelado.
 
 ## 7. Conciliação
 
@@ -165,6 +226,50 @@ queries fixas, independente da quantidade de clientes/frotas/veículos.
 Testado com 5 vs. 20 faturamentos (`billing-operational.e2e-spec.ts`,
 contagem real de queries via `$extends`) — sem crescimento.
 
+### 8.2 Viagens elegíveis para faturamento (`GET /operational-billing/eligible-trips`, Fase 103)
+
+Lacuna real encontrada na auditoria da Fase 103: `GET /operational-billing`
+(seção 8) só lista viagens que **já têm** um `TripBilling` persistido —
+não existia nenhuma forma de descobrir viagens **candidatas** (com valor
+comercial calculado e nenhum faturamento iniciado ainda) sem já saber o
+`tripId` de antemão. O preview ao vivo de `GET .../trips/:tripId` (seção
+7) só funciona para uma viagem por vez, já conhecida.
+
+`BillingListService.findEligibleTrips` consulta `Trip` (nunca
+`TripBilling`) com:
+
+- valor comercial calculado (`freight` com `contractedAmount` OU
+  `finalAmount` OU `estimatedAmount` não nulo — mesma exigência que já
+  bloqueia `invoice()` com 409 quando ausente);
+- saldo ainda a faturar: `billing` nulo (nunca faturada) OU
+  `billing.status = PARTIALLY_INVOICED` (`INVOICED`/`PAID` já têm saldo
+  zero; `CANCELLED` está bloqueado — nenhum dos três é elegível).
+
+**Nunca exige `Trip.status = COMPLETED`** — o faturamento já funciona
+independentemente do status da viagem desde a Fase 60 (confirmado pelos
+próprios testes desta fase, que faturam viagens `PLANNED`). O filtro
+opcional `tripStatus` é só uma conveniência de busca (a UI usa
+`COMPLETED` como valor inicial, refletindo a viagem "concluída" que o
+fluxo tipicamente fatura, mas o usuário pode limpá-lo).
+
+Filtros adicionais: `customerId`, `fleetId` (via `composition.vehicle`),
+`vehicleId`, `driverId` — mesmo escopo operacional das demais listagens
+do módulo (seção 8). Resposta paginada reaproveita
+`resolveTripFreightBestAmount` e `computeBillingBalance` (seção 4) —
+nenhuma fórmula de valor/saldo duplicada. 1 `findMany` (com `select`
+aninhado cobrindo cliente/motorista/veículo/frete/faturamento) + 1
+`count`, nunca uma consulta por linha (testado 5 vs. 20 viagens
+elegíveis).
+
+Frontend: nova aba "Viagens elegíveis" na página
+`/operations/fleet/billing` (componente `EligibleTripsPanel`), com os
+mesmos filtros e uma ação "Faturar" por linha que reaproveita
+integralmente `POST .../trips/:tripId/invoice` (a mesma ação já usada na
+aba Comercial da viagem) — nenhuma lógica de faturamento nova no
+frontend. Não existe faturamento em lote (bulk): cada linha dispara a
+ação individual já existente, evitando um novo mecanismo de transação em
+lote paralelo ao já testado desde a Fase 60.
+
 ## 9. Integração com a viagem e o cliente
 
 **Aba "Comercial" da viagem** (`features/trips/tabs/billing-section.tsx`,
@@ -209,8 +314,9 @@ em `findTripContext`.
   combinações DRAFT/READY/PARTIALLY_INVOICED/INVOICED), resolução de
   valor a faturar (total, parcial, bloqueio de excesso, valor inválido,
   idempotência quando saldo já é zero).
-- **E2e** (`billing-operational.e2e-spec.ts`, 18 testes): preview ao vivo
-  sem faturamento, faturamento total, faturamento parcial, dois parciais
+- **E2e** (`billing-operational.e2e-spec.ts`, 18 testes originais da Fase
+  60 + **16 novos na Fase 103 = 29 no total**): preview ao vivo sem
+  faturamento, faturamento total, faturamento parcial, dois parciais
   somando o total, bloqueio de excesso, idempotência (segunda tentativa
   409, nenhuma receita duplicada), viagem sem `TripFreight` nunca
   faturável, alteração de regra comercial depois nunca recalcula um
@@ -220,13 +326,28 @@ em `findTripContext`.
   contadores), filtros (status/cliente), isolamento multi-tenant
   (cross-tenant em GET/invoice/cancel/listagem), RBAC (DRIVER 403,
   AUDITOR leitura-only, SUPER_ADMIN nunca bloqueado), N+1 do dashboard (5
-  vs. 20 faturamentos).
-- **Regressão**: suíte completa `freight.e2e-spec.ts` (19) +
-  `fiscal-documents.e2e-spec.ts` (58) + `billing-operational.e2e-spec.ts`
-  (18) = **95/95 passando** junto. 545/545 testes unitários da API
-  (62 suítes). 200/200 testes do admin-web (34 arquivos) — inclusive
-  `fleet-section-tabs.test.tsx`, que já cobria a nova aba "Faturamento"
-  sem precisar de alteração.
+  vs. 20 faturamentos). **Fase 103**: viagens elegíveis (aparece com
+  frete aplicado e sem faturamento; nunca aparece sem frete; continua
+  elegível após parcial, some após total; nunca reaparece após
+  cancelamento; filtros/paginação; isolamento multi-tenant; RBAC),
+  competência financeira (bloqueia 409 com período do mês atual `CLOSED`,
+  nenhum `TripBilling`/`TripRevenue` criado; permite com período `OPEN`
+  ou inexistente), snapshot (`billableAmount` permanece o mesmo entre
+  dois parciais mesmo após editar `TripFreight.contractedAmount` via
+  `PATCH` no meio do processo), N+1 de `GET .../eligible-trips` (5 vs. 20
+  viagens elegíveis).
+- **Regressão (Fase 103)**: suíte completa de `billing-operational.
+  e2e-spec.ts` (29/29), `trips.e2e-spec.ts`, `receivables.e2e-spec.ts`,
+  `financial-periods.e2e-spec.ts`, `customer-crm.e2e-spec.ts`,
+  `quotations.e2e-spec.ts`, `proposals.e2e-spec.ts` e
+  `fiscal-documents.e2e-spec.ts` — todos passando sem alteração de
+  comportamento pré-existente.
+- **Regressão (Fase 60, histórico)**: suíte completa `freight.e2e-spec.ts`
+  (19) + `fiscal-documents.e2e-spec.ts` (58) + `billing-operational.
+  e2e-spec.ts` (18) = 95/95 passando junto. 545/545 testes unitários da
+  API (62 suítes). 200/200 testes do admin-web (34 arquivos) — inclusive
+  `fleet-section-tabs.test.tsx`, que já cobria a aba "Faturamento" sem
+  precisar de alteração.
 
 ## 13. Limitações reais / fora de escopo (declarado)
 
@@ -246,3 +367,11 @@ em `findTripContext`.
   ambas ler o mesmo saldo antes de uma commitar; nenhuma solução nova de
   concorrência foi criada especificamente para este caso, consistente com
   a tolerância já existente no projeto.
+- **(Fase 103)** Sem faturamento em lote (bulk) — a aba "Viagens
+  elegíveis" fatura uma viagem por vez, reaproveitando a mesma ação
+  individual já existente; nenhum endpoint/transação de faturamento em
+  lote foi criado.
+- **(Fase 103)** `tripStatus` no filtro de viagens elegíveis é só uma
+  conveniência de busca, nunca uma regra de negócio — o backend continua
+  aceitando faturar viagens em qualquer status, exatamente como antes
+  desta fase.

@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, Pencil } from 'lucide-react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { Badge } from '../../../../components/ui/badge';
 import { Button } from '../../../../components/ui/button';
@@ -25,6 +25,7 @@ import { FinancialTab } from '../../../../features/trips/tabs/financial-tab';
 import { FiscalTab } from '../../../../features/trips/tabs/fiscal-tab';
 import { FleetOptimizationTab } from '../../../../features/trips/tabs/fleet-optimization-tab';
 import { FreightTab } from '../../../../features/trips/tabs/freight-tab';
+import { FuelTab } from '../../../../features/trips/tabs/fuel-tab';
 import { OccurrencesTab } from '../../../../features/trips/tabs/occurrences-tab';
 import { OperacaoTab } from '../../../../features/trips/tabs/operacao-tab';
 import { OverviewTab } from '../../../../features/trips/tabs/overview-tab';
@@ -45,6 +46,7 @@ type TabValue =
   | 'shifts'
   | 'rota'
   | 'operacao'
+  | 'fuel'
   | 'tolls'
   | 'reconciliation'
   | 'expenses'
@@ -63,10 +65,38 @@ type TabValue =
 // valida).
 const TERMINAL_STATUSES = ['COMPLETED', 'CANCELLED'];
 
+const TAB_VALUES: TabValue[] = [
+  'overview',
+  'timeline',
+  'fleet-optimization',
+  'delivery-stops',
+  'occurrences',
+  'shifts',
+  'rota',
+  'operacao',
+  'fuel',
+  'tolls',
+  'reconciliation',
+  'expenses',
+  'revenues',
+  'advances',
+  'financial',
+  'fiscal',
+  'freight',
+];
+
 export default function TripDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
   const tripId = params.id;
-  const [tab, setTab] = useState<TabValue>('overview');
+  // Fase 105 -- "links rapidos para entrega/ocorrencia" (Torre de Controle):
+  // permite abrir a viagem ja na aba certa via ?tab=delivery-stops|occurrences.
+  // So afeta o estado INICIAL (nunca sincroniza de volta na URL durante a
+  // navegacao por abas) -- comportamento identico ao atual quando o
+  // parametro esta ausente ou invalido.
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const initialTab: TabValue = TAB_VALUES.includes(requestedTab as TabValue) ? (requestedTab as TabValue) : 'overview';
+  const [tab, setTab] = useState<TabValue>(initialTab);
   const [editOpen, setEditOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const { user } = useAuth();
@@ -140,6 +170,7 @@ export default function TripDetailPage(): JSX.Element {
           { value: 'shifts', label: 'Jornada' },
           { value: 'rota', label: 'Rota planejada' },
           { value: 'operacao', label: 'Operação' },
+          { value: 'fuel', label: 'Combustível' },
           { value: 'tolls', label: 'Pedágios' },
           { value: 'reconciliation', label: 'Conciliação de Pedágios' },
           { value: 'expenses', label: 'Despesas' },
@@ -162,8 +193,9 @@ export default function TripDetailPage(): JSX.Element {
         )}
         {tab === 'occurrences' && <OccurrencesTab tripId={trip.id} />}
         {tab === 'shifts' && <ShiftsTab tripId={trip.id} />}
-        {tab === 'rota' && <RotaTab tripId={trip.id} />}
+        {tab === 'rota' && <RotaTab tripId={trip.id} planningAllowed={planningAllowed} tripFinished={tripFinished} />}
         {tab === 'operacao' && <OperacaoTab tripId={trip.id} />}
+        {tab === 'fuel' && <FuelTab tripId={trip.id} />}
         {tab === 'tolls' && <TollsTab tripId={trip.id} />}
         {tab === 'reconciliation' && <ReconciliationTab tripId={trip.id} />}
         {tab === 'expenses' && <ExpensesTab tripId={trip.id} />}

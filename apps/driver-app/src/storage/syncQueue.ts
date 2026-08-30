@@ -5,6 +5,7 @@ import * as driverTripsApi from '../api/driverTrips.api';
 import {
   AxleEventSource,
   TrackingPointInput,
+  TripDeliveryStopStatus,
   TripOccurrenceSeverity,
   TripOccurrenceType,
   TripStopType,
@@ -67,6 +68,11 @@ type PendingAction =
   | { kind: 'pause'; tripId: string; latitude?: number; longitude?: number }
   | { kind: 'resume'; tripId: string; latitude?: number; longitude?: number }
   | { kind: 'complete'; tripId: string; finalOdometerKm?: number; latitude?: number; longitude?: number }
+  // Fase 106 -- transicao de status de parada/entrega planejada pelo
+  // motorista. Idempotente por ESTADO no backend (mesmo principio de pause/
+  // resume/complete acima, ver TripDeliveryStopsService.updateStatus: status
+  // repetido e no-op) -- nunca precisa de deviceEventId.
+  | { kind: 'delivery-stop-status'; tripId: string; stopId: string; status: TripDeliveryStopStatus; reason?: string }
   // Fase 39 -- checklist operacional. A CRIACAO da execucao (POST
   // driver/checklists) NUNCA entra nesta fila: ela devolve o id gerado
   // pelo servidor, que as 3 acoes abaixo precisam na URL -- enfileirar a
@@ -101,11 +107,15 @@ type PendingAction =
   // acima: localFileUri sempre o path persistido (ver storage/
   // deliveryProofFiles.ts), deviceEventId garante idempotencia no backend
   // (FiscalDocument.deviceEventId, unique) -- reenviar apos reconexao nunca
-  // cria um segundo comprovante.
+  // cria um segundo comprovante. Fase 106 -- tripDeliveryStopId opcional
+  // (vinculo com a parada especifica, ja suportado pelo backend desde a
+  // Fase 100/SubmitDeliveryProofDto; so nao era coletado por nenhuma tela
+  // ate agora).
   | {
       kind: 'delivery-proof';
       tripId: string;
       deviceEventId: string;
+      tripDeliveryStopId?: string;
       observation?: string;
       capturedAt: string;
       localFileUri: string;
@@ -210,6 +220,12 @@ async function runAction(action: PendingAction): Promise<void> {
         }),
       });
       return;
+    case 'delivery-stop-status':
+      await driverTripsApi.updateDeliveryStopStatus(action.tripId, action.stopId, {
+        status: action.status,
+        ...compact({ reason: action.reason }),
+      });
+      return;
     case 'checklist-answers':
       await driverChecklistApi.submitChecklistAnswers(action.executionId, action.answers);
       return;
@@ -239,7 +255,7 @@ async function runAction(action: PendingAction): Promise<void> {
         {
           deviceEventId: action.deviceEventId,
           capturedAt: action.capturedAt,
-          ...compact({ observation: action.observation }),
+          ...compact({ observation: action.observation, tripDeliveryStopId: action.tripDeliveryStopId }),
         },
         { uri: action.localFileUri, name: action.fileName, type: action.mimeType },
       );

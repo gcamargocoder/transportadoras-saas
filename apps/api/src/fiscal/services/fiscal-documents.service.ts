@@ -58,6 +58,10 @@ const FISCAL_DOCUMENT_INCLUDE = {
   customer: true,
   creator: true,
   updater: true,
+  // Fase Fiscal/XML -- 1:1 opcional, resolvido no MESMO include (sem N+1):
+  // "ja existe conta a pagar/receber gerada a partir deste documento?".
+  payable: { select: { id: true, originalAmount: true, status: true } },
+  receivable: { select: { id: true, originalAmount: true, status: true } },
 } satisfies Prisma.FiscalDocumentInclude;
 
 const RELATED_DOCUMENT_SELECT = {

@@ -7,6 +7,7 @@ import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
 import { Card } from '../../../components/ui/card';
 import { DataTable } from '../../../components/ui/data-table';
+import { useAuth } from '../../../hooks/use-auth';
 import { toFriendlyMessage } from '../../../lib/api/errors';
 import {
   computeRoutePlan,
@@ -16,7 +17,8 @@ import {
   recalculateRoutePlan,
   selectRoutePlan,
 } from '../../../lib/api/route-plan.api';
-import { getTripRouteEvents } from '../../../lib/api/trips.api';
+import { getTripRouteEvents, syncTripMetricsFromRoute } from '../../../lib/api/trips.api';
+import { TRIP_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
 import { ROUTE_TOLL_ESTIMATE_SOURCE_LABELS, TOLL_MATCH_STATUS_LABELS } from '../../../lib/labels';
 import type { RoutePlanEntity, RoutePlanTollEntity } from '../../../types/entities';
 import { formatCurrency, formatNumber } from '../../../utils/format';
@@ -59,9 +61,28 @@ function RoutePlanSummary({ routePlan }: { routePlan: RoutePlanEntity }): JSX.El
   );
 }
 
-export function RotaTab({ tripId }: { tripId: string }): JSX.Element {
+export function RotaTab({
+  tripId,
+  planningAllowed,
+  tripFinished,
+}: {
+  tripId: string;
+  // Fase 112 -- mesma regra ja usada pela pagina de detalhe da viagem
+  // (trip.status !== CANCELLED && !trip.actualDeparture) para decidir se o
+  // planejamento ainda pode ser alterado. Reaproveitada aqui para so exibir
+  // o botao de sincronizar metricas previstas antes da partida real.
+  planningAllowed: boolean;
+  // Fase 116 -- COMPLETED/CANCELLED (mesmo TERMINAL_STATUSES ja usado pela
+  // pagina de detalhe): a rota vira historico, o backend
+  // (RoutingService.assertRouteWritable) ja bloqueia calcular/recalcular/
+  // selecionar rota nesse caso -- os botoes abaixo refletem a MESMA regra,
+  // nunca uma segunda definicao de "viagem encerrada".
+  tripFinished: boolean;
+}): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const { user } = useAuth();
+  const canWrite = hasRole(user?.role, TRIP_WRITE_ROLES);
   const [alternatives, setAlternatives] = useState<RoutePlanEntity[] | null>(null);
 
   const routePlanQuery = useQuery({
@@ -123,6 +144,20 @@ export function RotaTab({ tripId }: { tripId: string }): JSX.Element {
     onError: (error) => toast.error('Não foi possível recalcular a rota.', toFriendlyMessage(error)),
   });
 
+  // Fase 112 -- deriva TripMetrics.planned* da rota ja calculada (nunca cria
+  // um novo motor de calculo). Invalida tambem as queries de metricas/resumo
+  // (aba Visao geral) para refletir o novo baseline imediatamente.
+  const syncMetricsMutation = useMutation({
+    mutationFn: () => syncTripMetricsFromRoute(tripId),
+    onSuccess: () => {
+      toast.success('Métricas previstas sincronizadas a partir da rota.');
+      void queryClient.invalidateQueries({ queryKey: ['trips', tripId, 'metrics'] });
+      void queryClient.invalidateQueries({ queryKey: ['trips', tripId, 'summary'] });
+    },
+    onError: (error) =>
+      toast.error('Não foi possível sincronizar as métricas previstas.', toFriendlyMessage(error)),
+  });
+
   const tollColumns = useMemo<ColumnDef<RoutePlanTollEntity, unknown>[]>(
     () => [
       { header: '#', accessorFn: (row) => row.sequence },
@@ -154,7 +189,7 @@ export function RotaTab({ tripId }: { tripId: string }): JSX.Element {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      {hasUnresolvedDeviation && (
+      {hasUnresolvedDeviation && !tripFinished && (
         <Card className="border-warning-200 bg-warning-50 p-4">
           <p className="text-sm font-semibold text-warning-700">Desvio de rota detectado</p>
           <p className="mt-1 text-sm text-warning-700">
@@ -208,11 +243,13 @@ export function RotaTab({ tripId }: { tripId: string }): JSX.Element {
       {!routePlan ? (
         <Card className="p-4">
           <p className="text-sm text-ink-muted">Esta viagem ainda não tem uma rota planejada.</p>
-          <div className="mt-3">
-            <Button loading={computeMutation.isPending} onClick={() => computeMutation.mutate()}>
-              Calcular rota
-            </Button>
-          </div>
+          {!tripFinished && (
+            <div className="mt-3">
+              <Button loading={computeMutation.isPending} onClick={() => computeMutation.mutate()}>
+                Calcular rota
+              </Button>
+            </div>
+          )}
         </Card>
       ) : (
         <Card className="p-4">
@@ -225,14 +262,25 @@ export function RotaTab({ tripId }: { tripId: string }): JSX.Element {
                 {ROUTE_TOLL_ESTIMATE_SOURCE_LABELS[routePlan.tollEstimateSource]}
               </Badge>
             </div>
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" loading={alternativesMutation.isPending} onClick={() => alternativesMutation.mutate()}>
-                Ver alternativas
-              </Button>
-              <Button size="sm" variant="secondary" loading={recalculateMutation.isPending} onClick={() => recalculateMutation.mutate()}>
-                Recalcular rota
-              </Button>
-            </div>
+            {!tripFinished && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" loading={alternativesMutation.isPending} onClick={() => alternativesMutation.mutate()}>
+                  Ver alternativas
+                </Button>
+                <Button size="sm" variant="secondary" loading={recalculateMutation.isPending} onClick={() => recalculateMutation.mutate()}>
+                  Recalcular rota
+                </Button>
+                {canWrite && planningAllowed && (
+                  <Button
+                    size="sm"
+                    loading={syncMetricsMutation.isPending}
+                    onClick={() => syncMetricsMutation.mutate()}
+                  >
+                    Sincronizar métricas previstas
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
           <RoutePlanSummary routePlan={routePlan} />
         </Card>

@@ -12,7 +12,8 @@
 | Bloqueio real de nova viagem por manutenção `IN_PROGRESS` | ✅ (novo -- antes só funcionava via troca manual de `Vehicle.status`) |
 | Alertas granulares (aberta/programada/em andamento/atrasada/indisponibilidade) | ✅ (novo, complementa o alerta agregado que já existia) |
 | Dashboard de manutenção (`GET /fleet-operations/maintenance`) | ✅ (reaproveitado e estendido com 2 indicadores novos) |
-| Integração com pneus | ❌ (módulo totalmente independente, sem vínculo real no schema -- ver Limitações) |
+| Integração com pneus | ❌ → ✅ (fechado na Fase 109, ver seção 7) |
+| Integração com checklist | ❌ → ✅ (fechado na Fase 111, ver seção 8) |
 | Integração com financeiro/`TripExpense` | ❌ (sem `tripId` em `VehicleMaintenance` -- ver Limitações) |
 | Manutenção preventiva completa, estoque de peças, ordens de serviço | ❌ (fora do escopo desta fase) |
 
@@ -167,19 +168,46 @@ existente):
   manutenção `IN_PROGRESS` agora (1 `groupBy` agregado a mais, sempre
   independente do número de veículos -- ver seção Performance).
 
-## 7. Integração com pneus -- limitação real, não implementada
+## 7. Integração com pneus -- fechado na Fase 109
 
-`Tire`/`TireMovement`/`TireRetread`/`TireInspection`/`TireDisposal` se
-relacionam com `Vehicle`/`Trailer` (localização atual + histórico de
-movimentação), mas **não existe nenhum campo `tireId` em
-`VehicleMaintenance` nem `maintenanceId` em `Tire`**. O único ponto de
-contato é o enum `MaintenanceComponent.TIRES`, um rótulo livre sem join
-real. Criar esse vínculo exigiria uma migration de schema não pedida
-explicitamente e um redesenho do módulo de pneus (fora do "mínimo
-necessário" desta fase) -- documentado aqui como limitação real, não
-simulado com dado inventado.
+**Até a Fase 63/64**: não existia nenhum campo `tireId` em
+`VehicleMaintenance` nem `maintenanceId` em `Tire`. O único ponto de
+contato era o enum `MaintenanceComponent.TIRES`, um rótulo livre sem join
+real.
 
-## 8. Integração com financeiro -- limitação real, não implementada
+**Fase 109** -- `TireMovement` (não `VehicleMaintenance`) ganhou um
+`maintenanceId` opcional, mesmo padrão relacional já usado por
+`PartStockMovement.maintenanceId` (Fase 83): uma OS pode estar ligada a
+várias movimentações de pneu (troca de mais de um pneu na mesma visita),
+cada uma sua própria linha. `GET /maintenances/:id` passou a devolver
+`tireMovements: MaintenanceTireMovementEntity[]` (populado só ali, nunca
+em `findAll` -- sem N+1). Detalhes completos em
+[`docs/tire-management.md`](./tire-management.md), seção 9 (fonte de
+verdade deste vínculo, para não duplicar a documentação aqui).
+
+## 8. Integração com checklist -- fechado na Fase 111
+
+**Até a Fase 110**: não existia nenhum vínculo entre `VehicleMaintenance`
+e `ChecklistExecution` -- uma não-conformidade crítica encontrada num
+checklist pré/pós-viagem (freio, cinto, etc.) precisava ser transcrita
+manualmente para uma OS nova, sem nenhuma referência de origem.
+
+**Fase 111** -- `VehicleMaintenance` ganhou um `checklistExecutionId`
+opcional (migration aditiva --
+`20260910000000_vehicle_maintenance_checklist_link`), mesma decisão de
+modelagem já usada pela seção 7 acima (`TireMovement.maintenanceId`), só
+que na direção oposta (aqui é a própria OS que aponta para o checklist,
+não uma movimentação secundária). Preenchido **somente** quando o admin
+abre a OS explicitamente a partir de uma execução com
+`hasCriticalNonConformity=true` (ação "Abrir OS a partir desta não
+conformidade" em `/checklists/:id`) -- nunca criado automaticamente.
+`GET /checklists/executions/:id` passou a devolver
+`maintenances: ChecklistExecutionMaintenanceEntity[]` (populado só ali,
+nunca em `findAll` -- sem N+1). Detalhes completos em
+[`docs/checklist-module.md`](./checklist-module.md), seção 13 (fonte de
+verdade deste vínculo, para não duplicar a documentação aqui).
+
+## 9. Integração com financeiro -- limitação real, não implementada
 
 `VehicleMaintenance` não tem `tripId` e `TripExpense` não tem
 `maintenanceId`/`vehicleMaintenanceId` -- confirmado no schema. O custo de
@@ -191,7 +219,7 @@ uma manutenção "pertence" a uma viagem específica) que o pedido não
 especifica; nenhum dado foi inventado para simular essa transformação
 automática, conforme instruído.
 
-## 9. API
+## 10. API
 
 Nenhum endpoint novo foi necessário -- todos os endpoints pedidos na seção
 17 (`GET/POST /maintenance`, `GET/PATCH /maintenance/:id`,
@@ -205,7 +233,7 @@ com nomenclatura equivalente:
 | `PATCH /maintenance/:id/status` | `PATCH /maintenances/:id/status` (agora com validação de transição + sincronização de veículo) |
 | `GET /maintenance/dashboard` | `GET /fleet-operations/maintenance` (agora com `inProgressCount`/`vehiclesInMaintenanceCount`) |
 
-## 10. Frontend
+## 11. Frontend
 
 `/maintenances` (evoluída): a tela só permitia criar e visualizar --
 `updateMaintenance`/`updateMaintenanceStatus`/`deleteMaintenance` já
@@ -227,7 +255,7 @@ alteração de código** -- a aba de custos já lista manutenções via
 genericamente (por `type`/`severity`/`message`), então os 4 alertas novos da
 seção 5 aparecem automaticamente sem nenhuma mudança no componente.
 
-## 11. RBAC / multi-tenant / limites de plano
+## 12. RBAC / multi-tenant / limites de plano
 
 Sem alteração -- `MaintenancesController` continua com
 `@RequireModule(TenantModule.MAINTENANCE)` + `FLEET_READ_ROLES`/`FLEET_WRITE_ROLES`
@@ -236,7 +264,7 @@ existe (nem foi criado) `maxMaintenances` -- confirmado que `TenantPlan` só
 limita `maxUsers`/`maxVehicles`/`maxDrivers`/`maxStorageMb`; manutenção é
 apenas um módulo habilitável (`TenantModule.MAINTENANCE`), sem contagem.
 
-## 12. Auditoria
+## 13. Auditoria
 
 Reaproveita `AuditService` integralmente. Ações novas:
 `maintenance.started`, `maintenance.completed`, `maintenance.cancelled`
@@ -245,7 +273,7 @@ Reaproveita `AuditService` integralmente. Ações novas:
 como `Vehicle`, reaproveitando `resolveVehicleStatusChangeAction` (mesma
 função da Fase 62) -- nenhum sistema de auditoria paralelo.
 
-## 13. Performance / N+1
+## 14. Performance / N+1
 
 - `GET /vehicles/:id/overview`: a query que antes trazia `count()` de
   manutenções abertas passou a trazer as linhas (`{status, scheduledAt}`)
@@ -262,7 +290,7 @@ função da Fase 62) -- nenhum sistema de auditoria paralelo.
   assim 2 queries fixas (`vehicleMaintenance.update` + a leitura/escrita de
   `syncStatusForMaintenance`), nunca proporcional a nada.
 
-## 14. Testes
+## 15. Testes
 
 - **Unitários** (novo): `apps/api/src/fleet/utils/maintenance-status-transition.util.spec.ts`
   -- transições válidas/inválidas, nomeação de ação de auditoria,
@@ -278,11 +306,12 @@ função da Fase 62) -- nenhum sistema de auditoria paralelo.
   veículos), `trips.e2e-spec.ts` + `driver-trips.e2e-spec.ts` (62),
   `vehicle-management.e2e-spec.ts` (20).
 
-## 15. Limitações reais
+## 16. Limitações reais
 
-- Sem vínculo estrutural manutenção ↔ pneu (seção 7) e manutenção ↔ viagem/
-  despesa (seção 8) -- ambos exigiriam decisão de schema/negócio fora do
-  escopo desta fase; documentado, nunca simulado.
+- Sem vínculo estrutural manutenção ↔ viagem/despesa (seção 9) -- exigiria
+  decisão de schema/negócio fora do escopo das fases já entregues;
+  documentado, nunca simulado. Manutenção ↔ pneu (seção 7, Fase 109) e
+  manutenção ↔ checklist (seção 8, Fase 111) já foram fechados.
 - `workshop`/`supplier` continuam texto livre -- duas grafias diferentes da
   mesma oficina aparecem como entradas separadas no breakdown
   `byWorkshop` do dashboard (limitação já documentada desde a Fase 45).
@@ -291,6 +320,6 @@ função da Fase 62) -- nenhum sistema de auditoria paralelo.
   manutenção `WAITING_PARTS` continua aparecendo como `ACTIVE`/`AVAILABLE`
   mesmo que fisicamente ainda esteja na oficina aguardando peça.
 
-## 16. Pendências reais
+## 17. Pendências reais
 
 Nenhuma pendência de escopo desta fase.

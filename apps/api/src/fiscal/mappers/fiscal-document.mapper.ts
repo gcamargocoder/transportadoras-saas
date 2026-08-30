@@ -1,5 +1,6 @@
-import { Customer, Driver, FiscalDocument, Location, Trip, TripDeliveryStop, TripOccurrence, UserAccount, Vehicle } from '@prisma/client';
-import { FiscalDocumentEntity } from '../entities/fiscal-document.entity';
+import { Customer, Driver, FiscalDocument, Location, Payable, Receivable, Trip, TripDeliveryStop, TripOccurrence, UserAccount, Vehicle } from '@prisma/client';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
+import { FiscalDocumentEntity, LinkedFinancialTitleEntity } from '../entities/fiscal-document.entity';
 
 export type FiscalDocumentWithRelations = FiscalDocument & {
   // Fase 54 -- composition.vehicleId adicionado para permitir conferir
@@ -19,7 +20,21 @@ export type FiscalDocumentWithRelations = FiscalDocument & {
   customer: Customer | null;
   creator: UserAccount;
   updater: UserAccount | null;
+  // Fase Fiscal/XML -- so o suficiente para "ja gerado?" (id/valor/status),
+  // nunca a entity completa (evita import circular Payables<->Fiscal e
+  // infla desnecessariamente o payload -- ver LinkedFinancialTitleEntity).
+  payable: Pick<Payable, 'id' | 'originalAmount' | 'status'> | null;
+  receivable: Pick<Receivable, 'id' | 'originalAmount' | 'status'> | null;
 };
+
+function toLinkedFinancialTitleEntity(row: Pick<Payable | Receivable, 'id' | 'originalAmount' | 'status'> | null): LinkedFinancialTitleEntity | null {
+  if (!row) return null;
+  const entity = new LinkedFinancialTitleEntity();
+  entity.id = row.id;
+  entity.originalAmount = toNumberOrNull(row.originalAmount) ?? 0;
+  entity.status = row.status;
+  return entity;
+}
 
 export function toFiscalDocumentEntity(document: FiscalDocumentWithRelations): FiscalDocumentEntity {
   const entity = new FiscalDocumentEntity();
@@ -73,5 +88,7 @@ export function toFiscalDocumentEntity(document: FiscalDocumentWithRelations): F
   // indisponivel em vez de fingir que verificaram (ver FiscalDocumentEntity).
   entity.relatedDocuments = [];
   entity.relatedDocumentsAvailable = false;
+  entity.payable = toLinkedFinancialTitleEntity(document.payable);
+  entity.receivable = toLinkedFinancialTitleEntity(document.receivable);
   return entity;
 }

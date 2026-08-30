@@ -24,8 +24,38 @@ import {
 import { MAINTENANCE_COMPONENT_LABELS } from '../../lib/labels';
 import type { MaintenancePlanEntity } from '../../types/entities';
 import type { MaintenanceComponent } from '../../types/enums';
+import { formatDate, formatNumber } from '../../utils/format';
 
 const COMPONENT_OPTIONS = Object.entries(MAINTENANCE_COMPONENT_LABELS) as [MaintenanceComponent, string][];
+
+// Fase 108 -- avaliacao ao vivo (MaintenancePlanEntity.status), MESMA
+// classificacao ja usada pelo dashboard de frota (OVERDUE/DUE_SOON/OK/
+// UNKNOWN) -- so um label/tone local, escopo unico desta secao.
+const PLAN_STATUS_LABELS: Record<MaintenancePlanEntity['status'], string> = {
+  OVERDUE: 'Vencida',
+  DUE_SOON: 'Próxima',
+  OK: 'Em dia',
+  UNKNOWN: 'Sem histórico',
+};
+const PLAN_STATUS_TONE: Record<MaintenancePlanEntity['status'], 'success' | 'warning' | 'danger' | 'neutral'> = {
+  OVERDUE: 'danger',
+  DUE_SOON: 'warning',
+  OK: 'success',
+  UNKNOWN: 'neutral',
+};
+
+function planDueLabel(plan: MaintenancePlanEntity): string {
+  if (plan.status === 'OVERDUE') {
+    if (plan.overdueByDays !== null) return `há ${plan.overdueByDays} dia(s)`;
+    if (plan.overdueByKm !== null) return `há ${formatNumber(plan.overdueByKm, 0)} km`;
+    return '—';
+  }
+  if (plan.status === 'DUE_SOON' || plan.status === 'OK') {
+    if (plan.dueDate) return `em ${formatDate(plan.dueDate)}`;
+    if (plan.dueOdometerKm !== null) return `aos ${formatNumber(plan.dueOdometerKm, 0)} km`;
+  }
+  return '—';
+}
 
 interface PlanFormState {
   vehicleId: string;
@@ -123,6 +153,17 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
           {
             header: 'Status',
             cell: ({ row }) => <Badge tone={row.original.active ? 'success' : 'neutral'}>{row.original.active ? 'Ativo' : 'Inativo'}</Badge>,
+          },
+          {
+            header: 'Vencimento',
+            cell: ({ row }) => (
+              <div className="flex flex-col gap-0.5">
+                <Badge tone={PLAN_STATUS_TONE[row.original.status]}>{PLAN_STATUS_LABELS[row.original.status]}</Badge>
+                {row.original.status !== 'UNKNOWN' && (
+                  <span className="text-xs text-ink-subtle">{planDueLabel(row.original)}</span>
+                )}
+              </div>
+            ),
           },
           {
             id: 'actions',

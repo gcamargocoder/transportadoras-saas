@@ -545,10 +545,27 @@ export interface TripCompositionEntity {
 
 export interface MaintenancePartEntity {
   id: string;
+  // Fase 108 -- vinculo com o catalogo de pecas (Fase 83); nulo = item de
+  // custo em texto livre, sem efeito no estoque. Ja retornado pelo backend
+  // desde a Fase 83, so nao estava tipado aqui.
+  partId: string | null;
   name: string;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+}
+
+// Fase 109 -- resumo de uma TireMovement vinculada a esta OS (ver
+// TireMovementEntity.maintenanceId).
+export interface MaintenanceTireMovementEntity {
+  id: string;
+  tireId: string;
+  tireFireNumber: string;
+  movementDate: string;
+  newLocationType: TireLocationType;
+  previousPosition: string | null;
+  newPosition: string | null;
+  reason: string | null;
 }
 
 export interface MaintenanceEntity {
@@ -587,7 +604,11 @@ export interface MaintenanceEntity {
   downtimeMinutes: number | null;
   invoiceNumber: string | null;
   maintenancePlanId: string | null;
+  // Fase 111 -- execucao de checklist cuja nao-conformidade critica motivou esta OS.
+  checklistExecutionId: string | null;
   parts: MaintenancePartEntity[];
+  // Fase 109 -- populado so em GET /maintenances/:id (nunca na listagem).
+  tireMovements: MaintenanceTireMovementEntity[];
   createdAt: string;
   updatedAt: string;
 }
@@ -606,6 +627,13 @@ export interface MaintenancePlanEntity {
   active: boolean;
   createdAt: string;
   updatedAt: string;
+  // Fase 108 -- avaliacao ao vivo do vencimento (mesma funcao pura do
+  // dashboard de frota/centro de notificacoes, nunca uma segunda regra).
+  status: 'OK' | 'DUE_SOON' | 'OVERDUE' | 'UNKNOWN';
+  dueOdometerKm: number | null;
+  dueDate: string | null;
+  overdueByKm: number | null;
+  overdueByDays: number | null;
 }
 
 export interface CustomerEntity {
@@ -763,6 +791,16 @@ export interface TripOperationAlertEntity {
   createdAt: string;
 }
 
+// Fase 105 -- espelha TripOperationDeliverySummaryEntity (backend).
+export interface TripOperationDeliverySummaryEntity {
+  totalCount: number;
+  pendingCount: number;
+  inProgressCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+}
+
 export interface TripOperationEntity {
   tripId: string;
   status: TripStatus;
@@ -786,6 +824,19 @@ export interface TripOperationEntity {
   defaultAxles: number | null;
   tollSummary: TripOperationTollSummaryEntity;
   alerts: TripOperationAlertEntity[];
+  // Fase 105 -- Torre de Controle.
+  deliverySummary: TripOperationDeliverySummaryEntity;
+  openOccurrencesCount: number;
+  criticalOpenOccurrencesCount: number;
+  plannedArrival: string | null;
+  isDelayed: boolean;
+  // Fase 111 -- checklist PRE_TRIP mais recente desta viagem.
+  preTripChecklistStatus: ChecklistExecutionStatus | null;
+  preTripChecklistHasCriticalNonConformity: boolean;
+  // Fase 114 -- Torre de Controle: prioridade real da viagem e risco de
+  // manutencao do veiculo vinculado.
+  priority: TripPriority;
+  maintenanceStatus: 'OK' | 'DUE_SOON' | 'OVERDUE' | 'UNKNOWN';
 }
 
 export interface TripOperationsListEntity {
@@ -844,6 +895,24 @@ export interface TripSummaryEntity {
   tollTransactionsTotal: number;
   plannedTotalCost: number | null;
   actualTotalCost: number | null;
+  // Fase 112 -- prontidao de planejamento (leitura, reaproveita assertCanStart
+  // e os motores ja existentes de rota/checklist/frete no backend).
+  readyToStart: boolean;
+  notReadyReason: string | null;
+  hasComposition: boolean;
+  routePlanComputed: boolean;
+  plannedMetricsSynced: boolean;
+  preTripChecklistRequired: boolean;
+  preTripChecklistStatus: ChecklistExecutionStatus | null;
+  preTripChecklistHasCriticalNonConformity: boolean;
+  plannedWeightKg: number | null;
+  vehicleCapacityKg: number | null;
+  withinCapacity: boolean | null;
+  // Fase 116 -- consolidacao do fechamento (mesmos dados/formula ja usados
+  // na Torre de Controle, TripOperationEntity.deliverySummary).
+  deliverySummary: TripOperationDeliverySummaryEntity;
+  openOccurrencesCount: number;
+  criticalOpenOccurrencesCount: number;
 }
 
 export interface TollPlazaEntity {
@@ -1223,6 +1292,9 @@ export interface FuelSupplyEntity {
   driverId: string;
   driverName: string | null;
   tripId: string | null;
+  // Fase 107 -- "origem -> destino" da viagem vinculada; nulo quando tripId
+  // e nulo (mesma convencao ja usada em TripBillingEntity/FinanceReconciliationEntity).
+  tripLabel: string | null;
   fuelStationId: string;
   fuelStationName: string | null;
   attachmentId: string | null;
@@ -1311,6 +1383,9 @@ export interface TireLifecycleEntity {
   interventionsCount: number;
   daysInstalled: number | null;
   costPerKm: TireCostPerKmEntity;
+  distanceTraveledSinceInstallKm: number | null;
+  remainingLifespanKm: number | null;
+  lifespanUsedPercent: number | null;
 }
 
 export interface TireMovementEntity {
@@ -1331,6 +1406,10 @@ export interface TireMovementEntity {
   newPosition: string | null;
   odometerKm: number | null;
   reason: string | null;
+  // Fase 109 -- OS (VehicleMaintenance) que motivou esta troca, quando
+  // aplicavel.
+  maintenanceId: string | null;
+  maintenanceServiceOrderNumber: string | null;
   createdBy: string;
   creatorName: string | null;
   createdAt: string;
@@ -2312,8 +2391,10 @@ export interface DeliveryOccurrenceListItemEntity {
   tripStatus: TripStatus;
   tripOriginName: string;
   tripDestinationName: string;
-  tripDeliveryStopId: string;
-  tripDeliveryStopSequence: number;
+  // Fase 115 -- nullable: reaproveitado tambem por GET /trip-occurrences
+  // (todas as ocorrencias, inclusive as gerais sem parada vinculada).
+  tripDeliveryStopId: string | null;
+  tripDeliveryStopSequence: number | null;
   driverId: string | null;
   driverName: string | null;
   vehicleId: string | null;
@@ -2677,6 +2758,7 @@ export interface ChecklistTemplateEntity {
 export interface ChecklistEvidenceEntity {
   id: string;
   executionId: string;
+  itemId: string | null;
   answerId: string | null;
   type: ChecklistEvidenceType;
   attachmentId: string | null;
@@ -2691,6 +2773,12 @@ export interface ChecklistAnswerEntity {
   id: string;
   executionId: string;
   itemId: string;
+  // Fase 111 -- denormalizado do ChecklistItem, sem query extra.
+  itemCode: string;
+  itemLabel: string;
+  itemType: ChecklistItemType;
+  itemRequired: boolean;
+  itemCritical: boolean;
   booleanValue: boolean | null;
   textValue: string | null;
   numberValue: number | null;
@@ -2700,14 +2788,26 @@ export interface ChecklistAnswerEntity {
   updatedAt: string;
 }
 
+export interface ChecklistExecutionMaintenanceEntity {
+  id: string;
+  serviceOrderNumber: string | null;
+  status: VehicleMaintenanceStatus;
+}
+
 export interface ChecklistExecutionEntity {
   id: string;
   tenantId: string;
   templateId: string;
   templateVersion: number;
+  // Fase 111 -- denormalizados, sem query extra.
+  templateName: string;
+  templateType: ChecklistType;
   tripId: string | null;
+  tripDestinationName: string | null;
   driverId: string | null;
+  driverName: string | null;
   vehicleId: string | null;
+  vehiclePlate: string | null;
   trailerId: string | null;
   status: ChecklistExecutionStatus;
   startedAt: string;
@@ -2721,6 +2821,8 @@ export interface ChecklistExecutionEntity {
   hasCriticalNonConformity: boolean;
   answers: ChecklistAnswerEntity[];
   evidence: ChecklistEvidenceEntity[];
+  // Fase 111 -- populado so em GET /checklists/executions/:id (nunca na listagem).
+  maintenances: ChecklistExecutionMaintenanceEntity[];
   createdAt: string;
   updatedAt: string;
 }
@@ -2780,6 +2882,16 @@ export interface FiscalDocumentEntity {
   // Fase 56 -- DRIVER (Driver App) ou ADMIN (fluxo administrativo), derivado
   // do role de quem criou o documento -- nunca uma coluna nova.
   origin: FiscalDocumentOrigin;
+  // Fase Fiscal/XML -- titulo financeiro ja gerado a partir deste documento
+  // (autopreenchimento). null = nenhum ainda.
+  payable: LinkedFinancialTitleEntity | null;
+  receivable: LinkedFinancialTitleEntity | null;
+}
+
+export interface LinkedFinancialTitleEntity {
+  id: string;
+  originalAmount: number;
+  status: string;
 }
 
 export type FiscalDocumentOrigin = 'DRIVER' | 'ADMIN';
@@ -3371,6 +3483,29 @@ export interface TripBillingEntity {
   updatedAt: string | null;
 }
 
+// Fase 103 -- espelha apps/api/src/billing-operational/entities/eligible-trip-for-billing.entity.ts.
+// "Elegivel" = tem valor comercial calculado (TripFreight) e ainda tem
+// saldo a faturar (nunca exige viagem COMPLETED -- ver auditoria em docs/billing.md).
+export interface EligibleTripForBillingEntity {
+  tripId: string;
+  tripStatus: TripStatus;
+  tripLabel: string;
+  plannedDeparture: string | null;
+  actualArrival: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  driverId: string | null;
+  driverName: string | null;
+  vehicleId: string | null;
+  vehiclePlate: string | null;
+  contractedAmount: number | null;
+  calculatedAmount: number | null;
+  billableAmount: number | null;
+  invoicedAmount: number;
+  balance: number | null;
+  billingStatus: TripBillingStatus | null;
+}
+
 export interface BillingTopCustomerEntity {
   customerId: string;
   customerName: string;
@@ -3438,6 +3573,12 @@ export interface ReceivablePaymentEntity {
   amount: number;
   paymentDate: string;
   paymentMethod: ReceivablePaymentMethod;
+  /** Juros recebidos alem do valor do titulo -- nao abate o saldo. */
+  interestAmount: number | null;
+  /** Multa recebida alem do valor do titulo -- nao abate o saldo. */
+  fineAmount: number | null;
+  /** Desconto concedido -- abate o saldo junto com amount, mas nao movimenta caixa. */
+  discountAmount: number | null;
   reference: string | null;
   notes: string | null;
   /** Fase 79 -- nulo apenas para recebimentos registrados antes desta fase. */
@@ -3453,9 +3594,11 @@ export interface ReceivableEntity {
   id: string;
   customerId: string | null;
   customerName: string | null;
-  tripId: string;
+  /** Nulo em titulos manuais (sem viagem de origem). */
+  tripId: string | null;
   tripLabel: string | null;
-  billingId: string;
+  /** Nulo em titulos manuais (sem faturamento de origem). */
+  billingId: string | null;
   description: string;
   originalAmount: number;
   receivedAmount: number;
@@ -3471,6 +3614,12 @@ export interface ReceivableEntity {
   createdAt: string;
   updatedAt: string;
   payments?: ReceivablePaymentEntity[];
+  /** Presente apenas em titulos manuais parcelados -- compartilhado por todas as parcelas do mesmo lancamento. */
+  installmentGroupId?: string | null;
+  installmentNumber?: number | null;
+  installmentTotal?: number | null;
+  /** Documento fiscal (NF-e/CT-e) de origem, quando gerado a partir de um documento importado. */
+  fiscalDocumentId?: string | null;
 }
 
 export interface ReceivablesDashboardSummaryEntity {
@@ -3515,6 +3664,12 @@ export interface PayablePaymentEntity {
   amount: number;
   paymentDate: string;
   paymentMethod: ExpensePaymentMethod;
+  /** Juros pagos alem do valor do titulo -- nao abate o saldo. */
+  interestAmount: number | null;
+  /** Multa paga alem do valor do titulo -- nao abate o saldo. */
+  fineAmount: number | null;
+  /** Desconto concedido -- abate o saldo junto com amount, mas nao movimenta caixa. */
+  discountAmount: number | null;
   reference: string | null;
   notes: string | null;
   /** Fase 79 -- nulo apenas para pagamentos registrados antes desta fase. */
@@ -3528,9 +3683,11 @@ export interface PayablePaymentEntity {
 
 export interface PayableEntity {
   id: string;
-  tripId: string;
+  /** Nulo em titulos manuais (sem viagem de origem). */
+  tripId: string | null;
   tripLabel: string | null;
-  expenseId: string;
+  /** Nulo em titulos manuais (sem despesa de origem). */
+  expenseId: string | null;
   supplierName: string | null;
   category: ExpenseCategory;
   description: string;
@@ -3548,6 +3705,12 @@ export interface PayableEntity {
   createdAt: string;
   updatedAt: string;
   payments?: PayablePaymentEntity[];
+  /** Presente apenas em titulos manuais parcelados -- compartilhado por todas as parcelas do mesmo lancamento. */
+  installmentGroupId?: string | null;
+  installmentNumber?: number | null;
+  installmentTotal?: number | null;
+  /** Documento fiscal (NF-e/CT-e) de origem, quando gerado a partir de um documento importado. */
+  fiscalDocumentId?: string | null;
 }
 
 export interface PayablesDashboardSummaryEntity {

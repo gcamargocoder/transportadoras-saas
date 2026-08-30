@@ -1,11 +1,10 @@
 import * as Location from 'expo-location';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Text } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
-import { TextField } from '../components/TextField';
 import * as driverTripsApi from '../api/driverTrips.api';
 import { NearbyTollPlaza } from '../api/driverTrips.types';
 import { generateDeviceEventId } from '../storage/deviceEventId';
@@ -30,7 +29,7 @@ export function TollScreen({ route, navigation }: Props): React.JSX.Element {
   const [plazas, setPlazas] = useState<NearbyTollPlaza[]>([]);
   const [resolvedEventId, setResolvedEventId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [customAxles, setCustomAxles] = useState('');
+  const [customAxles, setCustomAxles] = useState<number | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(ALERT_TIMEOUT_SECONDS);
   const resolvedRef = useRef(false);
 
@@ -39,6 +38,8 @@ export function TollScreen({ route, navigation }: Props): React.JSX.Element {
     resolvedRef.current = false;
     setResolvedEventId(null);
     setSecondsLeft(ALERT_TIMEOUT_SECONDS);
+    setEditing(false);
+    setCustomAxles(null);
     try {
       const position = await Location.getLastKnownPositionAsync();
       if (!position) {
@@ -122,25 +123,41 @@ export function TollScreen({ route, navigation }: Props): React.JSX.Element {
 
           {resolvedEventId ? (
             <Text style={{ color: colors.success }}>Registrado.</Text>
-          ) : editing ? (
+          ) : editing && customAxles !== null ? (
             <>
-              <TextField
-                label="Quantos eixos passarao pelo pedagio?"
-                value={customAxles}
-                onChangeText={setCustomAxles}
-                keyboardType="numeric"
-              />
-              <Button
-                label="CONFIRMAR"
-                onPress={() => registerAxlePassage(Number(customAxles) || undefined, 'DRIVER_INPUT')}
-              />
+              <Text style={{ color: colors.text, marginTop: 8 }}>Quantos eixos passarao pelo pedagio?</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 20, marginVertical: 12 }}>
+                <Pressable
+                  onPress={() => setCustomAxles((n) => Math.max(1, (n ?? 1) - 1))}
+                  style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: colors.text, fontSize: 24, fontWeight: '700' }}>−</Text>
+                </Pressable>
+                <Text style={{ color: colors.text, fontSize: 32, fontWeight: '700', minWidth: 48, textAlign: 'center' }}>
+                  {customAxles}
+                </Text>
+                <Pressable
+                  onPress={() => setCustomAxles((n) => Math.min(nearest.defaultAxles, (n ?? 1) + 1))}
+                  style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: colors.text, fontSize: 24, fontWeight: '700' }}>+</Text>
+                </Pressable>
+              </View>
+              <Button label="CONFIRMAR" onPress={() => registerAxlePassage(customAxles, 'DRIVER_INPUT')} />
             </>
           ) : (
             <>
               <Text style={{ color: colors.textMuted }}>
                 Sem resposta em {secondsLeft}s, sera considerado {nearest.defaultAxles} eixos.
               </Text>
-              <Button label="ALTERAR EIXOS" variant="secondary" onPress={() => setEditing(true)} />
+              <Button
+                label="ALTERAR EIXOS"
+                variant="secondary"
+                onPress={() => {
+                  setCustomAxles(nearest.defaultAxles);
+                  setEditing(true);
+                }}
+              />
             </>
           )}
         </Card>

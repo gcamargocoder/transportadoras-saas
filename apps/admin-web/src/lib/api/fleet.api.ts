@@ -262,6 +262,8 @@ export interface CreateMaintenancePayload {
   downtimeMinutes?: number | undefined;
   invoiceNumber?: string | undefined;
   maintenancePlanId?: string | undefined;
+  // Fase 111 -- execucao de checklist cuja nao-conformidade critica motivou esta OS.
+  checklistExecutionId?: string | undefined;
   parts?: MaintenancePartInput[] | undefined;
 }
 

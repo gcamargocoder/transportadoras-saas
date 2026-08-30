@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { RoutingModule } from '../routing/routing.module';
 import { DeliveryOccurrencesController } from './controllers/delivery-occurrences.controller';
+import { TripOccurrencesController } from './controllers/trip-occurrences.controller';
 import { TripStopsController } from './controllers/trip-stops.controller';
 import { AxleEventsService } from './services/axle-events.service';
 import { DriverShiftsService } from './services/driver-shifts.service';
@@ -28,7 +29,7 @@ import { TripStopsService } from './services/trip-stops.service';
 // dependencia de TripsService, para nao correr risco de ciclo).
 @Module({
   imports: [RoutingModule],
-  controllers: [TripStopsController, DeliveryOccurrencesController],
+  controllers: [TripStopsController, DeliveryOccurrencesController, TripOccurrencesController],
   providers: [TripStopsService, AxleEventsService, TrackingPointsService, TripOccurrencesService, DriverShiftsService],
   exports: [TripStopsService, AxleEventsService, TrackingPointsService, TripOccurrencesService, DriverShiftsService],
 })

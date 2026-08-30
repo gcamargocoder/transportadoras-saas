@@ -734,6 +734,28 @@ export class TripsController {
     );
   }
 
+  // Fase 112 -- preenche as metricas PREVISTAS a partir da rota ja calculada
+  // (RoutingService) + consumo medio historico do veiculo, em vez de exigir
+  // digitacao manual de tudo. Nunca altera nada apos a viagem iniciar (ver
+  // TripMetricsService.syncPlannedFromRoute).
+  @Post(':id/metrics/sync-from-route')
+  @Roles(...TRIP_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Sincroniza as metricas PREVISTAS a partir da rota calculada e do consumo medio historico do veiculo. ' +
+      'Somente antes da viagem iniciar.',
+  })
+  @ApiOkResponse({ type: TripMetricsEntity })
+  @ApiConflictResponse({ description: 'Viagem ja iniciada, ou sem rota calculada.' })
+  syncMetricsFromRoute(@Param('id', ParseUUIDPipe) tripId: string): Promise<TripMetricsEntity> {
+    return this.tripMetricsService.syncPlannedFromRoute(
+      this.tenantContext.requireTenantId(),
+      tripId,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
   // ==========================================================================
   // DESPESAS (Fase 16) -- sub-recurso de Trip; CRUD completo fica em
   // /trip-expenses (ver TripExpensesController).

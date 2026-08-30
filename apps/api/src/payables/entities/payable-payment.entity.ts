@@ -19,6 +19,15 @@ export class PayablePaymentEntity {
   @ApiProperty({ enum: ExpensePaymentMethod })
   paymentMethod!: ExpensePaymentMethod;
 
+  @ApiPropertyOptional({ nullable: true, description: 'Juros pagos alem do valor do titulo -- nao abate o saldo.' })
+  interestAmount!: number | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Multa paga alem do valor do titulo -- nao abate o saldo.' })
+  fineAmount!: number | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Desconto concedido -- abate o saldo junto com amount, mas nao movimenta caixa.' })
+  discountAmount!: number | null;
+
   @ApiPropertyOptional({ nullable: true })
   reference!: string | null;
 

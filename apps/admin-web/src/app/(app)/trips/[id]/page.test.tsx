@@ -19,8 +19,14 @@ vi.mock('../../../../hooks/use-auth', () => ({
   useAuth: () => useAuthMock(),
 }));
 
+// Fase 105 -- ?tab= inicial (links rapidos da Torre de Controle); mock
+// controlavel por teste, comeca vazio (cai no comportamento padrao
+// 'overview', identico ao existente antes desta fase).
+const searchParamsMock = vi.fn(() => new URLSearchParams());
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: 'trip-1' }),
+  useSearchParams: () => searchParamsMock(),
 }));
 
 // Fase 87 -- todas as abas sao stubs: cada uma faz suas proprias chamadas de
@@ -92,6 +98,23 @@ describe('TripDetailPage (Fase 87)', () => {
     cancelTripMock.mockReset();
     useAuthMock.mockReset();
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN' } });
+    searchParamsMock.mockReturnValue(new URLSearchParams());
+  });
+
+  it('abre direto na aba de ocorrencias quando ?tab=occurrences (link rapido da Torre de Controle)', async () => {
+    searchParamsMock.mockReturnValue(new URLSearchParams('tab=occurrences'));
+    getTripMock.mockResolvedValue(buildTrip({ status: 'IN_PROGRESS' }));
+    renderPage();
+
+    expect(await screen.findByRole('tab', { name: 'Ocorrências', selected: true })).toBeInTheDocument();
+  });
+
+  it('ignora ?tab= invalido e cai no padrao (overview)', async () => {
+    searchParamsMock.mockReturnValue(new URLSearchParams('tab=nao-existe'));
+    getTripMock.mockResolvedValue(buildTrip({ status: 'IN_PROGRESS' }));
+    renderPage();
+
+    expect(await screen.findByRole('tab', { name: 'Visão geral', selected: true })).toBeInTheDocument();
   });
 
   it('mostra "Editar planejamento" e "Cancelar viagem" quando PLANNED', async () => {

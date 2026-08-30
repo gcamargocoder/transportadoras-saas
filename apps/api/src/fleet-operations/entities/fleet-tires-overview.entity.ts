@@ -108,7 +108,12 @@ export class FleetTiresOverviewEntity {
   @ApiProperty({ nullable: true, description: 'Media de Tire.expectedLifespanKm, so entre pneus com o campo preenchido. Null sem nenhum.' })
   averageLifespanKm!: number | null;
 
-  @ApiProperty({ description: 'Pneus IN_USE com currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM.' })
+  @ApiProperty({
+    description:
+      'Pneus IN_USE com currentTreadDepthMm <= NEAR_REPLACEMENT_THRESHOLD_MM OU (Fase 110) km rodados desde ' +
+      'a instalacao >= NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT de Tire.expectedLifespanKm (quando cadastrado). ' +
+      'Mesmo pneu conta uma unica vez mesmo se atender aos 2 criterios.',
+  })
   nearReplacementCount!: number;
 
   @ApiProperty({

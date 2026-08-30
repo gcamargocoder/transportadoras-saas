@@ -175,6 +175,8 @@ export interface FindDeliveryOccurrencesQuery extends PaginationParams {
   tripDeliveryStopId?: string | undefined;
   driverId?: string | undefined;
   vehicleId?: string | undefined;
+  // Fase 104 -- "relatorio por cliente": filtra pelo cliente da viagem.
+  customerId?: string | undefined;
   search?: string | undefined;
   occurredFrom?: string | undefined;
   occurredTo?: string | undefined;
@@ -207,6 +209,33 @@ export function cancelDeliveryOccurrence(id: string) {
   return api.patch<DeliveryOccurrenceListItemEntity>(`/delivery-occurrences/${id}/cancel`);
 }
 
+// --- Ocorrências Operacionais: TODAS as ocorrências (Fase 115) ---
+// Mesmo padrão/DTO/entidade das ocorrências de entrega acima, sem a
+// restrição a paradas -- inclui também ocorrências gerais da viagem
+// (quebra, acidente etc.). Nenhuma segunda fonte no backend.
+export function listOccurrences(query: FindDeliveryOccurrencesQuery = {}, signal?: AbortSignal) {
+  return api.get<Paginated<DeliveryOccurrenceListItemEntity>>('/trip-occurrences', query, signal);
+}
+
+export function getOccurrencesDashboard(
+  query: Omit<FindDeliveryOccurrencesQuery, 'status' | 'page' | 'pageSize'> = {},
+  signal?: AbortSignal,
+) {
+  return api.get<DeliveryOccurrencesDashboardEntity>('/trip-occurrences/dashboard', query, signal);
+}
+
+export function markOccurrenceInProgress(id: string) {
+  return api.patch<DeliveryOccurrenceListItemEntity>(`/trip-occurrences/${id}/start`);
+}
+
+export function resolveOccurrence(id: string) {
+  return api.patch<DeliveryOccurrenceListItemEntity>(`/trip-occurrences/${id}/resolve`);
+}
+
+export function cancelOccurrence(id: string) {
+  return api.patch<DeliveryOccurrenceListItemEntity>(`/trip-occurrences/${id}/cancel`);
+}
+
 // --- Jornada do motorista (Fase 67, leitura administrativa) ---
 export function getTripShifts(id: string) {
   return api.get<DriverShiftEntity[]>(`/trips/${id}/shifts`);
@@ -218,6 +247,13 @@ export function getTripSummary(id: string) {
 
 export function getTripMetrics(id: string) {
   return api.get<TripMetricsEntity>(`/trips/${id}/metrics`);
+}
+
+// Fase 112 -- sincroniza TripMetrics.planned* a partir da rota ja calculada
+// (RoutingService) e do consumo medio historico do veiculo. So antes da
+// viagem iniciar; nunca reescreve a baseline apos a partida.
+export function syncTripMetricsFromRoute(id: string) {
+  return api.post<TripMetricsEntity>(`/trips/${id}/metrics/sync-from-route`);
 }
 
 export function getTripRouteVersions(id: string) {

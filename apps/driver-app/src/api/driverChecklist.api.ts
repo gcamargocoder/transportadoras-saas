@@ -9,8 +9,13 @@ import {
   UploadChecklistEvidenceInput,
 } from './driverChecklist.types';
 
-export function getAvailableChecklists(): Promise<ChecklistTemplate[]> {
-  return apiRequest<ChecklistTemplate[]>('/driver/checklists/available');
+// Fase 111 -- tripId opcional: quando informado, o backend filtra os
+// templates pelo tipo de veiculo/carreta da composicao daquela viagem
+// (ChecklistTemplate.vehicleType/trailerType, ja existentes desde a Fase 38
+// mas nunca usados para filtrar ate agora). Sem tripId, comportamento
+// identico ao anterior (todos os templates PUBLISHED do tenant).
+export function getAvailableChecklists(tripId?: string): Promise<ChecklistTemplate[]> {
+  return apiRequest<ChecklistTemplate[]>('/driver/checklists/available', tripId ? { query: { tripId } } : undefined);
 }
 
 export function createChecklist(input: CreateChecklistExecutionInput): Promise<ChecklistExecution> {

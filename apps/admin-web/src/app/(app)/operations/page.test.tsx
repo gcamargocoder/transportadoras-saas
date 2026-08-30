@@ -60,6 +60,22 @@ function buildItem(overrides: Partial<TripOperationEntity> = {}): TripOperationE
       reconciliationStatus: 'PENDING',
     },
     alerts: [],
+    deliverySummary: {
+      totalCount: 0,
+      pendingCount: 0,
+      inProgressCount: 0,
+      completedCount: 0,
+      failedCount: 0,
+      cancelledCount: 0,
+    },
+    openOccurrencesCount: 0,
+    criticalOpenOccurrencesCount: 0,
+    plannedArrival: '2026-09-02T18:00:00.000Z',
+    isDelayed: false,
+    preTripChecklistStatus: null,
+    preTripChecklistHasCriticalNonConformity: false,
+    priority: 'NORMAL',
+    maintenanceStatus: 'UNKNOWN',
     ...overrides,
   };
 }

@@ -27,9 +27,11 @@ import {
 } from '../../../../lib/api/fleet.api';
 import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { listFiscalDocuments } from '../../../../lib/api/fiscal.api';
+import { listChecklistExecutions } from '../../../../lib/api/checklist.api';
 import { listTrips } from '../../../../lib/api/trips.api';
 import { FLEET_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { MAINTENANCE_STATUS_TONE, VEHICLE_STATUS_TONE } from '../../../../features/fleet/status';
+import { CHECKLIST_STATUS_LABELS, CHECKLIST_STATUS_TONE } from '../../../../features/checklists/status';
 import { TRIP_STATUS_TONE } from '../../../../features/trips/status';
 import { UpdateVehicleModal } from '../../../../features/fleet/update-vehicle-modal';
 import {
@@ -51,13 +53,13 @@ import {
   VEHICLE_TYPE_LABELS,
 } from '../../../../lib/labels';
 import { TIRE_STATUS_TONE } from '../../../../features/tires/status';
-import type { FuelSupplyEntity, MaintenanceEntity, VehicleTagEntity, VehicleTireSummaryEntity } from '../../../../types/entities';
+import type { ChecklistExecutionEntity, FuelSupplyEntity, MaintenanceEntity, VehicleTagEntity, VehicleTireSummaryEntity } from '../../../../types/entities';
 import type { VehicleStatus } from '../../../../types/enums';
 import { formatCurrency, formatDate, formatDateTime, formatNumber, formatPercent } from '../../../../utils/format';
 
 const RECENT_TRIPS_LIMIT = 10;
 
-type TabValue = 'overview' | 'driver' | 'trips' | 'tires' | 'documents' | 'costs' | 'history';
+type TabValue = 'overview' | 'driver' | 'trips' | 'tires' | 'checklists' | 'documents' | 'costs' | 'history';
 
 export default function VehicleDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
@@ -114,6 +116,15 @@ export default function VehicleDetailPage(): JSX.Element {
     enabled: tab === 'trips',
   });
 
+  // Fase 111 -- historico de checklist por veiculo (gap real: GET
+  // /checklists/executions?vehicleId= ja existia, so nunca tinha visao
+  // nenhuma no admin-web).
+  const checklistsQuery = useQuery({
+    queryKey: ['vehicles', vehicleId, 'checklists'],
+    queryFn: () => listChecklistExecutions({ vehicleId, pageSize: 50 }),
+    enabled: tab === 'checklists',
+  });
+
   const statusMutation = useMutation({
     mutationFn: (status: VehicleStatus) => updateVehicleStatus(vehicleId, status),
     onSuccess: () => {
@@ -167,6 +178,26 @@ export default function VehicleDetailPage(): JSX.Element {
       { header: 'Litros', cell: ({ row }) => `${formatNumber(row.original.liters, 1)} L` },
       { header: 'Valor', cell: ({ row }) => formatCurrency(row.original.totalAmount) },
       { header: 'Odômetro', cell: ({ row }) => `${formatNumber(row.original.odometerKm)} km` },
+    ],
+    [],
+  );
+
+  const checklistColumns = useMemo<ColumnDef<ChecklistExecutionEntity, unknown>[]>(
+    () => [
+      { header: 'Checklist', accessorFn: (row) => row.templateName },
+      { header: 'Início', cell: ({ row }) => formatDateTime(row.original.startedAt) },
+      {
+        header: 'Status',
+        cell: ({ row }) => <Badge tone={CHECKLIST_STATUS_TONE[row.original.status]}>{CHECKLIST_STATUS_LABELS[row.original.status]}</Badge>,
+      },
+      {
+        header: 'Não conformidade crítica',
+        cell: ({ row }) => (
+          <Badge tone={row.original.hasCriticalNonConformity ? 'danger' : 'success'}>
+            {row.original.hasCriticalNonConformity ? 'Sim' : 'Não'}
+          </Badge>
+        ),
+      },
     ],
     [],
   );
@@ -270,6 +301,7 @@ export default function VehicleDetailPage(): JSX.Element {
           { value: 'driver', label: 'Motorista' },
           { value: 'trips', label: 'Viagens' },
           { value: 'tires', label: 'Pneus' },
+          { value: 'checklists', label: 'Checklists' },
           { value: 'documents', label: 'Documentos' },
           { value: 'costs', label: 'Custos' },
           { value: 'history', label: 'Histórico' },
@@ -421,6 +453,19 @@ export default function VehicleDetailPage(): JSX.Element {
               linha) — as ações completas de manutenção de pneus ficam concentradas lá para não duplicar fluxos.
             </p>
           </div>
+        )}
+
+        {tab === 'checklists' && (
+          <DataTable
+            columns={checklistColumns}
+            data={checklistsQuery.data?.items ?? []}
+            isLoading={checklistsQuery.isLoading}
+            isError={checklistsQuery.isError}
+            onRetry={() => checklistsQuery.refetch()}
+            getRowId={(c) => c.id}
+            onRowClick={(c) => router.push(`/checklists/${c.id}`)}
+            emptyTitle="Nenhum checklist registrado para este veículo"
+          />
         )}
 
         {tab === 'documents' && (

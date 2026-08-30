@@ -41,6 +41,21 @@ export function generateReceivableFromBilling(billingId: string, payload: Genera
   return api.post<ReceivableEntity>(`/receivables/from-billing/${billingId}`, payload);
 }
 
+export interface CreateReceivablePayload {
+  customerId: string;
+  description: string;
+  originalAmount: number;
+  issueDate: string;
+  dueDate: string;
+  installments?: number | undefined;
+  // Documento fiscal de origem (autopreenchimento) -- ver GET /fiscal/documents/:id.
+  fiscalDocumentId?: string | undefined;
+}
+
+export function createReceivable(payload: CreateReceivablePayload) {
+  return api.post<ReceivableEntity[]>('/receivables', payload);
+}
+
 export interface RegisterReceivablePaymentPayload {
   amount: number;
   paymentDate: string;
@@ -49,6 +64,9 @@ export interface RegisterReceivablePaymentPayload {
   financialAccountId: string;
   reference?: string | undefined;
   notes?: string | undefined;
+  interestAmount?: number | undefined;
+  fineAmount?: number | undefined;
+  discountAmount?: number | undefined;
 }
 
 export function registerReceivablePayment(id: string, payload: RegisterReceivablePaymentPayload) {

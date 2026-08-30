@@ -94,6 +94,15 @@ describe('Pneus <-> Veiculo (Fase 64, e2e)', () => {
     return res.body.data.id as string;
   }
 
+  async function createTrailer(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/trailers')
+      .set('Authorization', auth)
+      .send({ plate: randomPlate(), type: 'SEMI_TRAILER' })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   function installOnVehicle(
     auth: string,
     tireId: string,
@@ -250,6 +259,146 @@ describe('Pneus <-> Veiculo (Fase 64, e2e)', () => {
       const res = await request(app.getHttpServer()).get('/api/v1/fleet-operations/tires').set('Authorization', auth).expect(200);
       expect(res.body.data.averageCostPerTire).toBeNull();
       expect(res.body.data.byPosition).toEqual([]);
+    });
+  });
+
+  // Fase 110 -- gap real encontrado na auditoria: odometerKm gravado numa
+  // TireMovement nunca era propagado para Vehicle.odometerKm, mesmo sendo a
+  // MESMA leitura real do veiculo que o mecanico anota ao trocar um pneu.
+  // Reaproveita a MESMA regra "quilometragem so anda para frente" ja usada
+  // por abastecimento (assertOdometerNotBelowVehicle/computeBumpedOdometer).
+  describe('POST /tires/:id/movements -- odometerKm propaga para Vehicle.odometerKm', () => {
+    it('instalar um pneu com odometerKm atualiza o odometro do veiculo de destino', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('OdoBumpInstall');
+      const vehicleId = await createVehicle(auth);
+      const tireId = await createTire(auth);
+
+      await installOnVehicle(auth, tireId, vehicleId, { odometerKm: 100000 });
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(100000);
+    });
+
+    it('remover o pneu do veiculo (volta ao estoque) com odometerKm maior tambem atualiza o veiculo de origem', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('OdoBumpRemove');
+      const vehicleId = await createVehicle(auth);
+      const tireId = await createTire(auth);
+      await installOnVehicle(auth, tireId, vehicleId, { odometerKm: 100000 });
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireId}/movements`)
+        .set('Authorization', auth)
+        .send({ newLocationType: 'STOCK', odometerKm: 105000 })
+        .expect(201);
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(105000);
+    });
+
+    it('rejeita odometerKm menor que a leitura atual do veiculo (409, mesma regra do abastecimento)', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('OdoBumpReject');
+      const vehicleId = await createVehicle(auth);
+      const firstTireId = await createTire(auth);
+      await installOnVehicle(auth, firstTireId, vehicleId, { odometerKm: 100000 });
+
+      const secondTireId = await createTire(auth);
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${secondTireId}/movements`)
+        .set('Authorization', auth)
+        .send({
+          newLocationType: 'VEHICLE',
+          newVehicleId: vehicleId,
+          newPosition: 'Dianteiro Direito',
+          odometerKm: 90000,
+        })
+        .expect(409);
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(Number(vehicle?.odometerKm)).toBe(100000);
+    });
+
+    it('movimentacao sem odometerKm nunca altera Vehicle.odometerKm (regressao)', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('OdoBumpSkip');
+      const vehicleId = await createVehicle(auth);
+      const tireId = await createTire(auth);
+
+      await installOnVehicle(auth, tireId, vehicleId);
+
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+      expect(vehicle?.odometerKm).toBeNull();
+    });
+
+    it('movimentacao estoque -> carreta (sem veiculo envolvido) nao tenta atualizar odometro de nenhum veiculo', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('OdoBumpTrailer');
+      const trailerId = await createTrailer(auth);
+      const tireId = await createTire(auth);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireId}/movements`)
+        .set('Authorization', auth)
+        .send({ newLocationType: 'TRAILER', newTrailerId: trailerId, odometerKm: 100000 })
+        .expect(201);
+    });
+  });
+
+  describe('GET /tires/:id -- indicadores de vida util por distancia (Fase 110)', () => {
+    it('distanceTraveledSinceInstallKm/remainingLifespanKm/lifespanUsedPercent ficam null sem expectedLifespanKm ou sem odometro suficiente', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('LifespanUnavailable');
+      const vehicleId = await createVehicle(auth);
+      const tireId = await createTire(auth);
+
+      const beforeInstall = await request(app.getHttpServer()).get(`/api/v1/tires/${tireId}`).set('Authorization', auth).expect(200);
+      expect(beforeInstall.body.data.lifecycle).toMatchObject({
+        distanceTraveledSinceInstallKm: null,
+        remainingLifespanKm: null,
+        lifespanUsedPercent: null,
+      });
+
+      await installOnVehicle(auth, tireId, vehicleId, { odometerKm: 100000 });
+
+      const afterInstall = await request(app.getHttpServer()).get(`/api/v1/tires/${tireId}`).set('Authorization', auth).expect(200);
+      expect(afterInstall.body.data.lifecycle).toMatchObject({
+        distanceTraveledSinceInstallKm: 0,
+        remainingLifespanKm: null,
+        lifespanUsedPercent: null,
+      });
+    });
+
+    it('calcula distancia percorrida e vida util restante a partir do odometro do veiculo e expectedLifespanKm', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('LifespanCalc');
+      const vehicleId = await createVehicle(auth);
+      const tireId = await createTire(auth, { expectedLifespanKm: 80000 });
+
+      await installOnVehicle(auth, tireId, vehicleId, { odometerKm: 100000 });
+
+      const otherTireId = await createTire(auth);
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${otherTireId}/movements`)
+        .set('Authorization', auth)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Dianteiro Direito', odometerKm: 130000 })
+        .expect(201);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/tires/${tireId}`).set('Authorization', auth).expect(200);
+      expect(res.body.data.lifecycle).toMatchObject({
+        distanceTraveledSinceInstallKm: 30000,
+        remainingLifespanKm: 50000,
+        lifespanUsedPercent: 37.5,
+      });
+    });
+
+    it('fica null (nunca montado em carreta) quando o pneu esta em TRAILER', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('LifespanTrailer');
+      const trailerId = await createTrailer(auth);
+      const tireId = await createTire(auth, { expectedLifespanKm: 80000 });
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireId}/movements`)
+        .set('Authorization', auth)
+        .send({ newLocationType: 'TRAILER', newTrailerId: trailerId })
+        .expect(201);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/tires/${tireId}`).set('Authorization', auth).expect(200);
+      expect(res.body.data.lifecycle.distanceTraveledSinceInstallKm).toBeNull();
     });
   });
 });

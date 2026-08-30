@@ -229,13 +229,53 @@ export class ChecklistTemplatesService {
   // ver Fase 38 secao 5/17). Lista simples (sem paginacao): sao poucos
   // templates ativos por tenant, mesmo espirito de outras listagens
   // operacionais pequenas do app do motorista (ex: GET /driver/config).
-  async findPublishedForDriver(tenantId: string): Promise<ChecklistTemplateEntity[]> {
+  //
+  // Fase 111 -- ChecklistTemplate.vehicleType/trailerType ja existiam desde
+  // a Fase 38 mas nunca eram de fato usados para filtrar nada (gap real
+  // encontrado na auditoria): o motorista via TODOS os templates PUBLISHED
+  // do tenant, mesmo os especificos de outro tipo de veiculo/carreta. Com
+  // `tripId` informado, filtra pelo tipo do veiculo/carretas da composicao
+  // DAQUELA viagem -- template generico (vehicleType/trailerType nulos)
+  // sempre aparece; template com vehicleType so aparece se bater com o
+  // veiculo da viagem; template com trailerType so aparece se pelo menos
+  // uma carreta da composicao bater. Sem tripId (compatibilidade com
+  // chamadas antigas) ou viagem/composicao nao encontrada, cai para o
+  // comportamento anterior (sem filtro) -- nunca esconde um checklist por
+  // uma falha de lookup.
+  async findPublishedForDriver(tenantId: string, tripId?: string): Promise<ChecklistTemplateEntity[]> {
     const templates = await this.prisma.checklistTemplate.findMany({
       where: { tenantId, status: ChecklistTemplateStatus.PUBLISHED },
       include: TEMPLATE_INCLUDE,
       orderBy: { name: 'asc' },
     });
-    return templates.map(toChecklistTemplateEntity);
+
+    const composition = tripId
+      ? await this.prisma.trip.findFirst({
+          where: { id: tripId, tenantId, deletedAt: null },
+          select: {
+            composition: {
+              select: {
+                vehicle: { select: { type: true } },
+                trailers: { select: { trailer: { select: { type: true } } } },
+              },
+            },
+          },
+        })
+      : null;
+
+    if (!composition?.composition) {
+      return templates.map(toChecklistTemplateEntity);
+    }
+
+    const vehicleType = composition.composition.vehicle.type;
+    const trailerTypes = new Set(composition.composition.trailers.map((t) => t.trailer.type));
+
+    const filtered = templates.filter((template) => {
+      const vehicleMatches = template.vehicleType === null || template.vehicleType === vehicleType;
+      const trailerMatches = template.trailerType === null || trailerTypes.has(template.trailerType);
+      return vehicleMatches && trailerMatches;
+    });
+    return filtered.map(toChecklistTemplateEntity);
   }
 
   async findAll(tenantId: string, query: FindChecklistTemplatesQueryDto): Promise<PaginatedChecklistTemplatesEntity> {

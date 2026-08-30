@@ -88,8 +88,8 @@ nunca gera uma segunda notificação lógica para o mesmo destinatário
 |---|---|---|
 | `CRITICAL_OCCURRENCE` | `TripOccurrence` severity=CRITICAL, status OPEN (mesma de `TRIP_OCCURRENCE_CRITICAL`, Fase 68) | grupo operacional |
 | `VEHICLE_UNAVAILABLE` | `Vehicle.status` IN (SUSPENDED, MAINTENANCE) | grupo operacional |
-| `VEHICLE_MAINTENANCE` | `VehicleMaintenance` aberta com `scheduledAt` vencido (mesma de `VEHICLE_MAINTENANCE_OVERDUE`) | grupo operacional |
-| `TIRE_NEAR_REPLACEMENT` | `Tire.currentTreadDepthMm` ≤ `NEAR_REPLACEMENT_THRESHOLD_MM` (mesma constante do módulo de pneus) | grupo operacional |
+| `VEHICLE_MAINTENANCE` | `VehicleMaintenance` aberta com `scheduledAt` vencido (mesma de `VEHICLE_MAINTENANCE_OVERDUE`); **+ Fase 108**: `MaintenancePlan` ativo vencido/próximo por km ou data (mesma `evaluateMaintenancePlan`/`computeMaintenancePlanStatus` do dashboard de frota), mesmo tipo, `entityType='MaintenancePlan'` (distinto de `entityType='VehicleMaintenance'` da condição original — não conflitam na deduplicação) | grupo operacional |
+| `TIRE_NEAR_REPLACEMENT` | `Tire.currentTreadDepthMm` ≤ `NEAR_REPLACEMENT_THRESHOLD_MM` (mesma constante do módulo de pneus), `entityType='Tire'`; **+ Fase 110**: pneu `IN_USE` com km rodados desde a instalação ≥ `NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT = 90`% de `Tire.expectedLifespanKm` (mesma `computeTireDistanceLifespan` de `GET /tires/:id`), mesmo tipo, `entityType='TireLifespan'` (não conflita na deduplicação com a condição original) | grupo operacional |
 | `FUEL_ODOMETER_REGRESSION` | `detectOdometerRegression` (mesma função pura já usada no dashboard/overview) | grupo operacional |
 | `FISCAL_DOCUMENT_PROBLEM` | `FiscalDocument.status = INVALID` (ver limitação abaixo) | grupo operacional |
 | `TRIP_DELAYED` | Viagem não-terminal com `plannedArrival` no passado (mesmo critério do KPI `delayedTrips`) | grupo operacional |
@@ -322,7 +322,137 @@ existentes (Fase 70).
 - Driver App: leitura de notificações é só online, sem fila/sincronização
   offline — deliberado (ver seção 8).
 
-## 13. Pendências reais
+## 13. Fase 108 — manutenção preventiva (`MaintenancePlan`) vencida/próxima
+
+**Lacuna real identificada na auditoria**: `collectVehicleMaintenance`
+(seção 3) só reagia a uma `VehicleMaintenance` **já aberta** com
+`scheduledAt` vencido. Um `MaintenancePlan` ativo vencido/próximo por km
+ou por data (o caso normal — `MaintenancePlan` nunca gera
+`VehicleMaintenance` sozinho, ver `packages/database/prisma/schema.prisma`)
+nunca virava notificação, só aparecia no dashboard de frota
+(`FleetOperationsMetricsService.computeMaintenancePlanStatus`).
+
+Fechado com um novo coletor, `collectMaintenancePlansDue`, que reaproveita
+**integralmente** `evaluateMaintenancePlan` (mesma função pura já usada
+pelo dashboard, `fleet-operations/utils/maintenance-plan-status.util.ts`)
+e o mesmo padrão de 2 queries em lote (planos ativos + última
+`VehicleMaintenance` `COMPLETED` de cada um + odômetro atual do veículo —
+nunca 1 query por plano). Nenhum `NotificationType` novo — reaproveita
+`VEHICLE_MAINTENANCE` já existente, diferenciado por
+`entityType='MaintenancePlan'` (a condição original usa
+`entityType='VehicleMaintenance'`), o que também os mantém deduplicados
+independentemente um do outro pela mesma constraint única da seção 2.
+Severidade `HIGH` quando `OVERDUE`, `MEDIUM` quando `DUE_SOON` (mesma
+convenção de `CONTRACT_EXPIRING`).
+
+## 14. Fase 110 — pneu próximo da troca por distância percorrida (`TireLifespan`)
+
+**Lacuna real identificada na auditoria**: `collectTireNearReplacement`
+(seção 3) só reagia ao **sulco** medido manualmente numa inspeção
+(`Tire.currentTreadDepthMm`). Um pneu de composto duro que ainda tem
+sulco alto mas já passou da distância projetada
+(`Tire.expectedLifespanKm`, campo já existente no cadastro do pneu desde
+a Fase 20/64, nunca comparado contra o uso real até esta fase) nunca
+virava notificação nem indicador algum.
+
+Fechado com um novo coletor, `collectTireLifespanNearReplacement`, que
+reaproveita **integralmente** a mesma fórmula (`computeTireDistanceLifespan`,
+`tires/utils/tire-lifecycle.util.ts`) usada por `GET /tires/:id` (ver
+`docs/tire-management.md`) e pelo dashboard de frota (`nearReplacementCount`/
+`tireAlerts`, ver `docs/fleet-operations-dashboard.md`) — nenhuma segunda
+regra de cálculo. 2 queries em lote (pneus `IN_USE` com `vehicleId` e
+`expectedLifespanKm` cadastrados + movimentação de instalação mais recente
+de cada um — nunca 1 query por pneu). Nenhum `NotificationType` novo —
+reaproveita `TIRE_NEAR_REPLACEMENT` já existente, diferenciado por
+`entityType='TireLifespan'` (a condição original usa `entityType='Tire'`),
+o que os mantém deduplicados independentemente um do outro pela mesma
+constraint única da seção 2. Severidade `HIGH` quando o pneu já rodou além
+da vida útil esperada (`remainingLifespanKm ≤ 0`), `MEDIUM` quando só
+próximo (`lifespanUsedPercent ≥ 90`% mas ainda dentro do esperado) — mesma
+convenção de severidade dupla já usada por `VEHICLE_MAINTENANCE`/`MaintenancePlan`
+(seção 13).
+
+Sem `Tire.expectedLifespanKm` cadastrado, ou sem as 2 leituras de odômetro
+necessárias (instalação + `Vehicle.odometerKm` atual — ver
+`docs/tire-management.md` seção sobre propagação de odômetro), o pneu
+nunca entra neste critério (nunca inventa um limite) — o critério por
+sulco continua valendo normalmente.
+
+## 15. Fase 111 — checklist com não-conformidade crítica (`CHECKLIST_CRITICAL_NON_CONFORMITY`) + correção de bug real
+
+**Lacuna real identificada na auditoria**: `hasCriticalNonConformity`
+(Fase 38) era calculada e exposta em `GET /checklists/executions`, mas
+nunca acionava nada — nem notificação, nem qualquer outra ação. Um item
+crítico marcado `NÃO` (ex.: freio, cinto de segurança) ficava só
+"registrado", exigindo que alguém abrisse a execução manualmente para
+notar.
+
+Fechado com um novo coletor, `collectChecklistCriticalNonConformity`, que
+reaproveita **integralmente** a mesma `hasCriticalNonConformity`
+(`checklists/utils/checklist-non-conformity.util.ts`) já usada pela
+leitura da execução e por `TripsService.assertPreTripChecklistSatisfied`
+(`docs/trip-management.md` seção 2, mesma Fase 111) — nenhuma segunda
+regra de criticidade. `NotificationType.CHECKLIST_CRITICAL_NON_CONFORMITY`
+é um valor de enum novo porque, ao contrário de `MaintenancePlan`/
+`TireLifespan` (seções 13/14), não existe nenhum `NotificationType` já
+existente cujo domínio conceitual seja "resultado de checklist" —
+reaproveitar `CRITICAL_OCCURRENCE` (domínio de `TripOccurrence`, evento
+reportado pelo motorista) seria forçar uma equivalência falsa entre 2
+entidades diferentes. `entityType='ChecklistExecution'`, `entityId` = id
+da execução. **Nota de transparência**: o valor já existia no banco antes
+desta fase (resíduo de um trabalho não solicitado revertido numa fase
+anterior — `ALTER TYPE ... ADD VALUE` não é reversível em Postgres sem
+recriar o tipo); esta fase não precisou de migration para o enum, só para
+`VehicleMaintenance.checklistExecutionId` — ver
+`docs/checklist-module.md` seção 13 para o detalhe completo.
+
+**Janela de tempo deliberada (diferente dos demais coletores baseados em
+evento)**: `ChecklistExecution` é um log operacional que cresce sem teto
+(potencialmente 1+ por viagem, muito mais volume que `FuelSupply`, cujo
+coletor `collectFuelOdometerRegression` varre o histórico inteiro sem
+limite de data). Por isso este coletor limita a janela a 7 dias
+(`completedAt`, `CHECKLIST_NOTIFICATION_WINDOW_DAYS`) — uma não-
+conformidade crítica de meses atrás já não é "situação que exige atenção
+agora", e sem o limite a query cresceria indefinidamente a cada
+processamento. Decisão documentada aqui explicitamente por ser diferente
+do padrão dos demais coletores de evento.
+
+### Bug real corrigido (introduzido na Fase 110, não por esta fase)
+
+Durante a implementação desta fase, a auditoria de `collectCandidates`
+encontrou um bug real e silencioso: o array de nomes desestruturados do
+`Promise.all` estava **desalinhado** com a lista de coletores desde a
+Fase 110 — 2 coletores foram adicionados ao `Promise.all`
+(`collectTireLifespanNearReplacement` na Fase 110,
+`collectChecklistCriticalNonConformity` nesta fase) sem os 2 nomes
+correspondentes na desestruturação. Em JavaScript/TypeScript, desestruturar
+um array com **menos nomes que elementos** nunca gera erro — as posições
+extras são simplesmente descartadas. Resultado real: os candidatos dos 2
+**últimos** coletores da lista (`collectDeliveryProofProblem`/
+`collectContractsExpiring`) eram silenciosamente ignorados — nenhuma
+notificação `DELIVERY_PROOF_PROBLEM` nem `CONTRACT_EXPIRING` era criada,
+sem nenhum erro/log visível, desde a Fase 110.
+
+Passou despercebido porque esta suite nunca tinha um teste para
+`CONTRACT_EXPIRING` (fechado nesta fase, ver seção 10) — o teste de
+`DELIVERY_PROOF_PROBLEM` só falhou quando o segundo coletor extra
+(desta fase) empurrou o item para além do fim da lista de nomes.
+Corrigido dando um nome próprio e correspondente a cada um dos 16
+coletores, na mesma ordem do `Promise.all` — comentário no código alerta
+para nunca mais confiar em contagem manual aqui.
+
+**Segundo bug pré-existente encontrado na mesma auditoria** (não relacionado
+ao de cima): `notifications.service.spec.ts` (unitário, `PrismaService`
+totalmente mockado, Fase 70) nunca teve seu mock atualizado quando
+`collectMaintenancePlansDue` (Fase 108, usa `prisma.maintenancePlan`) e
+`collectTireLifespanNearReplacement` (Fase 110, usa `prisma.tireMovement`)
+foram criados — a suite inteira (13 testes) falhava com
+`TypeError: Cannot read properties of undefined` desde a Fase 108, mascarado
+porque ninguém rodou esse arquivo isoladamente depois. Corrigido
+adicionando os 2 models faltantes (+ `checklistExecution`, necessário para
+o coletor desta fase) ao `buildPrismaMock`.
+
+## 16. Pendências reais
 
 Nenhuma pendência real conhecida ao final da Fase 70 para o escopo
 pedido (as 3 pendências herdadas da Fase 69 — tela no Driver App,

@@ -10,6 +10,10 @@ import { TRIP_OCCURRENCE_STATUSES, TripOccurrenceStatus } from '../entities/trip
 // distingue "ocorrencias de entrega" das ocorrencias gerais de viagem, ja
 // cobertas por GET /trips/:id/occurrences). Mesmo padrao de
 // FindDeliveryStopsQueryDto (Fase 99).
+// Fase 115 -- este MESMO dto passou a ser reaproveitado tambem por
+// GET /trip-occurrences (todas as ocorrencias, sem a restricao acima) --
+// nenhum campo aqui e especifico de entrega, entao nenhum dto novo foi
+// necessario.
 export class FindDeliveryOccurrencesQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ enum: TripOccurrenceType })
   @IsOptional()
@@ -30,6 +34,14 @@ export class FindDeliveryOccurrencesQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID('4')
   tripId?: string;
+
+  // Fase 104 -- "relatorio por cliente": permite filtrar ocorrencias de
+  // entrega pelo cliente da viagem (Trip.customerId), reaproveitando o
+  // mesmo padrao ja usado por FindDeliveryStopsQueryDto (Fase 99).
+  @ApiPropertyOptional({ format: 'uuid', description: 'Trip.customerId.' })
+  @IsOptional()
+  @IsUUID('4')
+  customerId?: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()

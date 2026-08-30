@@ -16,6 +16,7 @@ import { Pagination } from '../../../../../components/ui/pagination';
 import { Select } from '../../../../../components/ui/select';
 import { SkeletonCards } from '../../../../../components/ui/skeleton';
 import { StatCard } from '../../../../../components/ui/stat-card';
+import { CreateReceivableModal } from '../../../../../features/receivables/create-receivable-modal';
 import { ReceivableDetailModal } from '../../../../../features/receivables/receivable-detail-modal';
 import { listCustomers } from '../../../../../lib/api/trips.api';
 import { getReceivablesDashboard, listReceivables } from '../../../../../lib/api/receivables.api';
@@ -34,6 +35,7 @@ export default function ReceivablesPage(): JSX.Element {
   const [dueFrom, setDueFrom] = useState('');
   const [dueTo, setDueTo] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const filters = {
     customerId: customerId || undefined,
@@ -55,7 +57,7 @@ export default function ReceivablesPage(): JSX.Element {
 
   const columns: ColumnDef<ReceivableEntity, unknown>[] = [
     { header: 'Cliente', accessorFn: (row) => row.customerName ?? 'Sem cliente' },
-    { header: 'Viagem', cell: ({ row }) => row.original.tripLabel ?? row.original.tripId },
+    { header: 'Viagem', cell: ({ row }) => row.original.tripLabel ?? row.original.tripId ?? 'Manual' },
     { header: 'Valor', cell: ({ row }) => formatCurrency(row.original.originalAmount) },
     { header: 'Recebido', cell: ({ row }) => formatCurrency(row.original.receivedAmount) },
     { header: 'Saldo', cell: ({ row }) => formatCurrency(row.original.balance) },
@@ -80,7 +82,8 @@ export default function ReceivablesPage(): JSX.Element {
     <div>
       <PageHeader
         title="Contas a receber"
-        description="Cobrança e acompanhamento dos títulos gerados a partir do faturamento das viagens."
+        description="Cobrança e acompanhamento dos títulos gerados a partir do faturamento das viagens, além de títulos manuais."
+        actions={<Button onClick={() => setCreateOpen(true)}>Nova conta a receber</Button>}
       />
 
       {dashboardQuery.isLoading && <SkeletonCards count={4} />}
@@ -208,6 +211,7 @@ export default function ReceivablesPage(): JSX.Element {
       </div>
 
       <ReceivableDetailModal open={selectedId !== null} onClose={() => setSelectedId(null)} receivableId={selectedId} />
+      <CreateReceivableModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   );
 }

@@ -285,19 +285,44 @@ diretamente pelos 4 arquivos de regressão acima.
 
 ## 17. Limitações reais
 
-- Sem seletor de peça do catálogo na UI de criação/edição de OS (o campo `partId` já existe
-  e é aceito pelo backend, mas o formulário de peças da OS no frontend continua só com texto
-  livre) — pendência real, não implementada por não ter sido o foco funcional desta fase
-  (estoque em si).
+- ~~Sem seletor de peça do catálogo na UI de criação/edição de OS~~ — **fechado na Fase 108**,
+  ver seção 19.
 - Sem integração com o Centro de Notificações para estoque baixo/zerado — decisão
-  documentada na seção 8, dados já prontos para uma integração futura simples.
+  documentada na seção 8, dados já prontos para uma integração futura simples; fora do
+  escopo explícito da Fase 108 (que pediu notificação de manutenção **preventiva**
+  vencida/próxima, não de estoque — ver `docs/notifications.md`, seção 13).
 - `estimatedStockValue` usa o **último** custo unitário conhecido (não um custo médio
   ponderado) — suficiente para uma estimativa operacional simples; um custo médio exigiria
   weighted-average sobre todas as entradas, fora do escopo desta fase.
 
 ## 18. Pendências reais
 
-- Seletor de peça do catálogo no formulário de OS (frontend).
+- ~~Seletor de peça do catálogo no formulário de OS (frontend)~~ — fechado na Fase 108.
 - Integração com notificações de estoque baixo.
 - Fases futuras: fornecedores/compras completos (Fase 84+), custo/km, integração
   operacional→financeiro (Payable a partir de compra de peça).
+
+## 19. Fase 108 — seletor de peça do catálogo na UI da OS
+
+**Lacuna real confirmada**: o backend já aceitava `parts: [{partId?, name, quantity,
+unitPrice}]` em `POST/PATCH /maintenances` desde esta própria fase (83) — consumo de
+estoque automático ao concluir a OS já funcionava (seção 6/16) —, mas **nenhuma tela**
+montava esse array; `UpdateMaintenanceModal`/`CreateMaintenanceModal` só tinham o campo
+livre "Custo de peças (R$)". Na prática, a itemização com vínculo ao catálogo era
+inatingível pela UI, mesmo já implementada de ponta a ponta no backend.
+
+Fechado em `UpdateMaintenanceModal` (`apps/admin-web/src/features/fleet/`): editor de
+peças com estado local (array simples, não `useFieldArray` — nenhum outro formulário do
+projeto usa esse hook ainda), cada linha com `EntitySelect` opcional para o catálogo
+(`GET /parts`, já existente, mostra estoque atual) + nome/quantidade/preço editáveis.
+Regra de compatibilidade: só envia `parts` no payload quando a OS **já tinha** itens
+itemizados ou o usuário adicionou pelo menos um nesta edição — uma OS que nunca usou
+itemização continua funcionando 100% com o campo livre `partsCost`, sem nenhuma mudança
+de comportamento (o backend recalcula `partsCost` como a soma **só** quando `parts` é
+enviado). Campo `partId` também passou a ser exposto no tipo `MaintenancePartEntity` do
+admin-web — já vinha do backend (`MaintenancePartEntity.partId`, Fase 83), só não estava
+tipado no frontend.
+
+Não alterado: `CreateMaintenanceModal` continua sem o editor (registro rápido da OS;
+peças tipicamente entram depois do diagnóstico, no fluxo de edição) — decisão de escopo
+mínimo, documentada aqui, não uma lacuna esquecida.

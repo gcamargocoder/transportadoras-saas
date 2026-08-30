@@ -490,4 +490,439 @@ describe('Monitoramento operacional (e2e) -- GET /trips/operations/active', () =
       .set('Authorization', driverAuth)
       .expect(403);
   });
+
+  // Fase 105 -- Torre de Controle: enriquecimento do MESMO endpoint com
+  // deliverySummary/openOccurrencesCount/criticalOpenOccurrencesCount/
+  // isDelayed. Reaproveita a mesma infraestrutura de setup desta suite
+  // (nenhum mecanismo de teste novo); os endpoints de paradas/ocorrencias ja
+  // tem cobertura funcional propria em trip-delivery-stops.e2e-spec.ts e
+  // trip-occurrences-shifts-timeline.e2e-spec.ts -- aqui so se testa se o
+  // painel agregado SURFACE corretamente o que ja existe no banco.
+  describe('Fase 105 -- Torre de Controle (deliverySummary/ocorrencias/atraso)', () => {
+    async function createDeliveryStop(auth: string, tripId: string) {
+      const locationRes = await request(app.getHttpServer())
+        .post('/api/v1/locations')
+        .set('Authorization', auth)
+        .send({ name: `Cliente ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+        .expect(201);
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', auth)
+        .send({ locationId: locationRes.body.data.id })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    async function setDeliveryStopStatus(auth: string, tripId: string, stopId: string, status: string) {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', auth)
+        .send(status === 'FAILED' ? { status, reason: 'Cliente fechado' } : { status })
+        .expect(200);
+    }
+
+    async function createOccurrence(
+      auth: string,
+      tripId: string,
+      severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
+    ) {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', auth)
+        .send({
+          type: 'BREAKDOWN',
+          severity,
+          description: `Ocorrencia ${severity}`,
+          occurredAt: new Date().toISOString(),
+        })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    it('deliverySummary reflete a contagem por status das paradas planejadas (pending/in_progress/completed/failed/cancelled)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon11');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      // Paradas criadas ANTES da partida (mesma trava de planejamento ja
+      // testada em trip-delivery-stops.e2e-spec.ts).
+      const pendingStop = await createDeliveryStop(adminAuth, tripId);
+      const inProgressStop = await createDeliveryStop(adminAuth, tripId);
+      const completedStop = await createDeliveryStop(adminAuth, tripId);
+      const failedStop = await createDeliveryStop(adminAuth, tripId);
+      const cancelledStop = await createDeliveryStop(adminAuth, tripId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      await setDeliveryStopStatus(adminAuth, tripId, inProgressStop, 'IN_PROGRESS');
+      await setDeliveryStopStatus(adminAuth, tripId, completedStop, 'COMPLETED');
+      await setDeliveryStopStatus(adminAuth, tripId, failedStop, 'FAILED');
+      await setDeliveryStopStatus(adminAuth, tripId, cancelledStop, 'CANCELLED');
+      void pendingStop;
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.deliverySummary).toEqual({
+        totalCount: 5,
+        pendingCount: 1,
+        inProgressCount: 1,
+        completedCount: 1,
+        failedCount: 1,
+        cancelledCount: 1,
+      });
+    });
+
+    it('viagem sem nenhuma parada planejada retorna deliverySummary zerado (nunca omitido/undefined)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon12');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.deliverySummary).toEqual({
+        totalCount: 0,
+        pendingCount: 0,
+        inProgressCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        cancelledCount: 0,
+      });
+    });
+
+    it('openOccurrencesCount/criticalOpenOccurrencesCount contam so ocorrencias EM ABERTO; resolvida/cancelada sao excluidas', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon13');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      await createOccurrence(adminAuth, tripId, 'LOW');
+      const criticalId = await createOccurrence(adminAuth, tripId, 'CRITICAL');
+      const resolvedId = await createOccurrence(adminAuth, tripId, 'CRITICAL');
+      const cancelledId = await createOccurrence(adminAuth, tripId, 'HIGH');
+      void criticalId;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${resolvedId}/resolve`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${cancelledId}/cancel`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      // Em aberto: 1 LOW + 1 CRITICAL = 2 (resolvida e cancelada excluidas).
+      expect(item.openOccurrencesCount).toBe(2);
+      expect(item.criticalOpenOccurrencesCount).toBe(1);
+    });
+
+    it('isDelayed=true quando plannedArrival ja passou e a viagem ainda nao terminou', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon14');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+      await prisma.trip.update({
+        where: { id: tripId },
+        data: { plannedArrival: new Date(Date.now() - 60_000) },
+      });
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.isDelayed).toBe(true);
+      expect(item.plannedArrival).toBeTruthy();
+    });
+
+    it('isDelayed=false quando plannedArrival ainda esta no futuro', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon15');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.isDelayed).toBe(false);
+    });
+
+    it('isDelayed=false quando plannedArrival e null (nunca inventa atraso sem dado)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon16');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+      await prisma.trip.update({ where: { id: tripId }, data: { plannedArrival: null } });
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.isDelayed).toBe(false);
+      expect(item.plannedArrival).toBeNull();
+    });
+
+    it('isolamento multi-tenant: deliverySummary/ocorrencias de outro tenant nunca vazam', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('Mon17A');
+      const tenantB = await createTenantAndLoginAsAdmin('Mon17B');
+      const { driverAuth: driverAuthA, tripId: tripIdA } = await setupDriverWithTrip(
+        tenantA.adminAuth,
+        tenantA.tenantId,
+      );
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripIdA}/start`)
+        .set('Authorization', driverAuthA)
+        .expect(201);
+      await createOccurrence(tenantA.adminAuth, tripIdA, 'CRITICAL');
+
+      const { driverAuth: driverAuthB, tripId: tripIdB } = await setupDriverWithTrip(
+        tenantB.adminAuth,
+        tenantB.tenantId,
+      );
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripIdB}/start`)
+        .set('Authorization', driverAuthB)
+        .expect(201);
+
+      const res = await getActiveOperations(tenantB.adminAuth);
+      const itemB = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripIdB);
+      expect(itemB.criticalOpenOccurrencesCount).toBe(0);
+      expect(res.body.data.items.find((i: { tripId: string }) => i.tripId === tripIdA)).toBeUndefined();
+    });
+  });
+
+  // Fase 111 -- Torre de Controle: checklist PRE_TRIP mais recente por
+  // viagem (preTripChecklistStatus/preTripChecklistHasCriticalNonConformity).
+  // Mesma infraestrutura de setup desta suite; funcionalidade do checklist em
+  // si ja coberta em checklists.e2e-spec.ts -- aqui so se testa se o painel
+  // agregado SURFACE corretamente o que ja existe no banco.
+  describe('Fase 111 -- Torre de Controle (checklist pre-viagem)', () => {
+    async function createPublishedPreTripTemplate(auth: string) {
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/checklists/templates')
+        .set('Authorization', auth)
+        .send({
+          name: `Pre-Viagem ${randomUUID()}`,
+          type: 'PRE_TRIP',
+          sections: [{ title: 'SEGURANCA', order: 1, items: [{ code: 'freio', label: 'Freio OK?', type: 'BOOLEAN', order: 1, required: true, critical: true }] }],
+        })
+        .expect(201);
+      const templateId = createRes.body.data.id as string;
+      await request(app.getHttpServer()).post(`/api/v1/checklists/templates/${templateId}/publish`).set('Authorization', auth).expect(200);
+      return { templateId, itemId: createRes.body.data.sections[0].items[0].id as string };
+    }
+
+    it('sem nenhum checklist iniciado: preTripChecklistStatus null, hasCriticalNonConformity false', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon18');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${tripId}/start`)
+        .set('Authorization', driverAuth)
+        .expect(201);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.preTripChecklistStatus).toBeNull();
+      expect(item.preTripChecklistHasCriticalNonConformity).toBe(false);
+    });
+
+    it('checklist COMPLETED com item critico respondido NAO: preTripChecklistHasCriticalNonConformity true', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon19');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const { templateId, itemId } = await createPublishedPreTripTemplate(adminAuth);
+
+      const execRes = await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, tripId })
+        .expect(201);
+      const executionId = execRes.body.data.id as string;
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/answers`)
+        .set('Authorization', driverAuth)
+        .send({ answers: [{ itemId, booleanValue: false }] })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/complete`)
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.preTripChecklistStatus).toBe('COMPLETED');
+      expect(item.preTripChecklistHasCriticalNonConformity).toBe(true);
+    });
+
+    it('checklist COMPLETED sem nao-conformidade critica: preTripChecklistHasCriticalNonConformity false', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon20');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const { templateId, itemId } = await createPublishedPreTripTemplate(adminAuth);
+
+      const execRes = await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, tripId })
+        .expect(201);
+      const executionId = execRes.body.data.id as string;
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/answers`)
+        .set('Authorization', driverAuth)
+        .send({ answers: [{ itemId, booleanValue: true }] })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/complete`)
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.preTripChecklistStatus).toBe('COMPLETED');
+      expect(item.preTripChecklistHasCriticalNonConformity).toBe(false);
+    });
+
+    it('checklist iniciado mas nao concluido: preTripChecklistStatus IN_PROGRESS', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Mon21');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const { templateId } = await createPublishedPreTripTemplate(adminAuth);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, tripId })
+        .expect(201);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.preTripChecklistStatus).toBe('IN_PROGRESS');
+      expect(item.preTripChecklistHasCriticalNonConformity).toBe(false);
+    });
+  });
+
+  describe('Fase 114 -- Torre de Controle (prioridade/manutencao)', () => {
+    async function createPlannedTrip(auth: string, vehicleId: string, driverId: string, priority?: string) {
+      const compositionId = await createComposition(auth, vehicleId, 9);
+      const originId = await createLocation(auth, `Origem ${randomUUID()}`);
+      const destinationId = await createLocation(auth, `Destino ${randomUUID()}`);
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send({
+          driverId,
+          compositionId,
+          originLocationId: originId,
+          destinationLocationId: destinationId,
+          plannedDeparture: '2026-09-01T08:00:00.000Z',
+          plannedArrival: '2026-09-02T18:00:00.000Z',
+          ...(priority ? { priority } : {}),
+        })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    async function createCompletedServiceAtOdometer(
+      auth: string,
+      vehicleId: string,
+      lastServiceOdometerKm: number,
+      intervalKm: number,
+      alertBeforeKm: number,
+    ): Promise<string> {
+      const planRes = await request(app.getHttpServer())
+        .post('/api/v1/maintenance/plans')
+        .set('Authorization', auth)
+        .send({ vehicleId, name: 'Troca de óleo', component: 'ENGINE_OIL', intervalKm, alertBeforeKm })
+        .expect(201);
+      const planId = planRes.body.data.id as string;
+
+      const maintenanceRes = await request(app.getHttpServer())
+        .post('/api/v1/maintenances')
+        .set('Authorization', auth)
+        .send({ vehicleId, type: 'PREVENTIVE', maintenancePlanId: planId, odometerKm: lastServiceOdometerKm, laborCost: 100 })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/maintenances/${maintenanceRes.body.data.id}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'COMPLETED', completedAt: new Date().toISOString() })
+        .expect(200);
+      return planId;
+    }
+
+    it('priority reflete Trip.priority; NORMAL quando nao informada na criacao', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Mon21');
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      const urgentTripId = await createPlannedTrip(adminAuth, vehicleId, driverId, 'URGENT');
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === urgentTripId);
+      expect(item.priority).toBe('URGENT');
+    });
+
+    it('viagem sem veiculo com nenhum plano de manutencao ativo: maintenanceStatus UNKNOWN', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Mon22');
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      const tripId = await createPlannedTrip(adminAuth, vehicleId, driverId);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.maintenanceStatus).toBe('UNKNOWN');
+    });
+
+    it('plano de manutencao VENCIDO por km: maintenanceStatus OVERDUE (mesma evaluateMaintenancePlan do dashboard de frota)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Mon23');
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      await createCompletedServiceAtOdometer(adminAuth, vehicleId, 90000, 10000, 1000);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', adminAuth)
+        .send({ odometerKm: 100500 })
+        .expect(200);
+      const tripId = await createPlannedTrip(adminAuth, vehicleId, driverId);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.maintenanceStatus).toBe('OVERDUE');
+    });
+
+    it('plano de manutencao PROXIMO do vencimento por km: maintenanceStatus DUE_SOON', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Mon24');
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      await createCompletedServiceAtOdometer(adminAuth, vehicleId, 90000, 10000, 1000);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', adminAuth)
+        .send({ odometerKm: 99500 })
+        .expect(200);
+      const tripId = await createPlannedTrip(adminAuth, vehicleId, driverId);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.maintenanceStatus).toBe('DUE_SOON');
+    });
+
+    it('plano de manutencao em dia: maintenanceStatus OK', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Mon25');
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      await createCompletedServiceAtOdometer(adminAuth, vehicleId, 90000, 10000, 1000);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vehicles/${vehicleId}`)
+        .set('Authorization', adminAuth)
+        .send({ odometerKm: 91000 })
+        .expect(200);
+      const tripId = await createPlannedTrip(adminAuth, vehicleId, driverId);
+
+      const res = await getActiveOperations(adminAuth);
+      const item = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(item.maintenanceStatus).toBe('OK');
+    });
+  });
 });

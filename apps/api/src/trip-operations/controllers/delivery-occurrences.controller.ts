@@ -52,7 +52,7 @@ export class DeliveryOccurrencesController {
   @ApiOperation({ summary: 'Consulta uma ocorrencia de entrega.' })
   @ApiOkResponse({ type: TripOccurrenceEntity })
   findOne(@Param('id', ParseUUIDPipe) id: string): Promise<TripOccurrenceEntity> {
-    return this.tripOccurrencesService.findOneDeliveryOccurrence(this.tenantContext.requireTenantId(), id);
+    return this.tripOccurrencesService.findOneOccurrence(this.tenantContext.requireTenantId(), id);
   }
 
   @Patch(':id/start')

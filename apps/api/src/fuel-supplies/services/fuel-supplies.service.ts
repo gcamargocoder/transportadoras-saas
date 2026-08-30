@@ -38,6 +38,15 @@ import { FuelSupplyWithRelations, toFuelSupplyEntity } from '../mappers/fuel-sup
 const SUPPLY_INCLUDE = {
   vehicle: true,
   driver: true,
+  // Fase 107 -- so para tripLabel ("origem -> destino"); select minimo,
+  // mesmo padrao ja usado em TripBillingEntity/FinanceReconciliationEntity
+  // (nunca um segundo formato de rotulo de viagem).
+  trip: {
+    select: {
+      origin: { select: { name: true } },
+      destination: { select: { name: true } },
+    },
+  },
   fuelStation: true,
   creator: true,
   updater: true,

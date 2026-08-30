@@ -7,6 +7,7 @@ import { TripProvider } from '../trip/TripContext';
 import { ChecklistExecutionScreen } from '../screens/ChecklistExecutionScreen';
 import { ChecklistScreen } from '../screens/ChecklistScreen';
 import { DeliveryProofScreen } from '../screens/DeliveryProofScreen';
+import { DeliveryStopsScreen } from '../screens/DeliveryStopsScreen';
 import { FinishTripScreen } from '../screens/FinishTripScreen';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
@@ -77,6 +78,11 @@ export function RootNavigator(): React.JSX.Element {
               name="Stops"
               component={StopsScreen}
               options={{ headerShown: true, title: 'Paradas' }}
+            />
+            <Stack.Screen
+              name="DeliveryStops"
+              component={DeliveryStopsScreen}
+              options={{ headerShown: true, title: 'Entregas' }}
             />
             <Stack.Screen
               name="DeliveryProof"

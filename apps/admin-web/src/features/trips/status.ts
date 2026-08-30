@@ -4,6 +4,7 @@ import type {
   TripDeliveryStopStatus,
   TripOccurrenceSeverity,
   TripOccurrenceStatus,
+  TripPriority,
   TripStatus,
 } from '../../types/enums';
 
@@ -68,4 +69,29 @@ export const EMPTY_TRIP_REASON_TONE: Record<EmptyTripReason, Tone> = {
   ALL_DELIVERIES_CANCELLED: 'warning',
   DELIVERIES_INCOMPLETE: 'warning',
   COMPLETED_DELIVERIES_INCONSISTENT: 'danger',
+};
+
+// Fase 114 -- Torre de Controle: Trip.priority (ja existente desde a criacao
+// da viagem, ver TRIP_PRIORITY_LABELS em lib/labels.ts) exibida como badge.
+export const TRIP_PRIORITY_TONE: Record<TripPriority, Tone> = {
+  LOW: 'neutral',
+  NORMAL: 'info',
+  HIGH: 'warning',
+  URGENT: 'danger',
+};
+
+// Fase 114 -- pior status de manutencao (evaluateMaintenancePlan, backend)
+// entre os planos ativos do veiculo desta viagem.
+export const MAINTENANCE_STATUS_LABELS: Record<'OK' | 'DUE_SOON' | 'OVERDUE' | 'UNKNOWN', string> = {
+  OK: 'Em dia',
+  DUE_SOON: 'Próxima',
+  OVERDUE: 'Vencida',
+  UNKNOWN: '—',
+};
+
+export const MAINTENANCE_STATUS_TONE: Record<'OK' | 'DUE_SOON' | 'OVERDUE' | 'UNKNOWN', Tone> = {
+  OK: 'success',
+  DUE_SOON: 'warning',
+  OVERDUE: 'danger',
+  UNKNOWN: 'neutral',
 };

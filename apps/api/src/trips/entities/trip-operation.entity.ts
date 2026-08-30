@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { AlertSeverity, AlertType, TripStatus } from '@prisma/client';
+import { AlertSeverity, AlertType, ChecklistExecutionStatus, TripPriority, TripStatus } from '@prisma/client';
+import { MaintenancePlanEvaluationStatus } from '../../fleet-operations/utils/maintenance-plan-status.util';
 import { ReconciliationStatus } from '../../toll-routes/utils/toll-reconciliation.util';
 import { LocationFreshness, MovementStatus, OperationalStatus } from '../utils/operational-status.util';
 
@@ -58,6 +59,30 @@ export class TripOperationAlertEntity {
 
   @ApiProperty()
   createdAt!: Date;
+}
+
+// Fase 105 -- resumo das paradas/entregas planejadas (TripDeliveryStop,
+// Fase 88/99) desta viagem, para a Torre de Controle. Mesma agregacao ja
+// usada por FleetOperationsMetricsService/EmptyTripsService
+// (buildDeliveryStopCountsByTrip) -- nunca uma segunda formula.
+export class TripOperationDeliverySummaryEntity {
+  @ApiProperty()
+  totalCount!: number;
+
+  @ApiProperty()
+  pendingCount!: number;
+
+  @ApiProperty()
+  inProgressCount!: number;
+
+  @ApiProperty()
+  completedCount!: number;
+
+  @ApiProperty()
+  failedCount!: number;
+
+  @ApiProperty()
+  cancelledCount!: number;
 }
 
 // GET /trips/operations/active -- uma linha por viagem nao terminada
@@ -141,6 +166,63 @@ export class TripOperationEntity {
 
   @ApiProperty({ type: TripOperationAlertEntity, isArray: true })
   alerts!: TripOperationAlertEntity[];
+
+  // Fase 105 -- Torre de Controle: entregas, ocorrencias criticas e atraso.
+  // Todos calculados em lote (IN tripIds), nunca uma consulta por viagem --
+  // ver TripsService.getActiveOperations.
+  @ApiProperty({ type: TripOperationDeliverySummaryEntity })
+  deliverySummary!: TripOperationDeliverySummaryEntity;
+
+  @ApiProperty({ description: 'TripOccurrence em aberto (resolvedAt/cancelledAt nulos), qualquer severidade.' })
+  openOccurrencesCount!: number;
+
+  @ApiProperty({ description: 'TripOccurrence em aberto (resolvedAt/cancelledAt nulos) com severity=CRITICAL.' })
+  criticalOpenOccurrencesCount!: number;
+
+  @ApiProperty({ nullable: true })
+  plannedArrival!: Date | null;
+
+  @ApiProperty({
+    description:
+      'plannedArrival no passado e a viagem ainda nao terminou -- mesmo criterio ja usado por ' +
+      'FleetOperationsMetricsService (delayedTrips), nunca uma segunda regra de atraso.',
+  })
+  isDelayed!: boolean;
+
+  // Fase 111 -- checklist PRE_TRIP mais recente desta viagem, para a Torre
+  // de Controle. Calculado em lote (IN tripIds, 1 query), nunca 1 por
+  // viagem -- ver TripsService.getActiveOperations.
+  @ApiProperty({
+    enum: ChecklistExecutionStatus,
+    nullable: true,
+    description: 'Status do checklist PRE_TRIP mais recente desta viagem. Null quando nenhum foi iniciado.',
+  })
+  preTripChecklistStatus!: ChecklistExecutionStatus | null;
+
+  @ApiProperty({
+    description:
+      'Checklist PRE_TRIP mais recente COMPLETED tem item critico+obrigatorio respondido NAO ' +
+      '(mesma hasCriticalNonConformity ja usada em GET /checklists/executions). False quando nao ha ' +
+      'checklist ou ainda nao foi concluido.',
+  })
+  preTripChecklistHasCriticalNonConformity!: boolean;
+
+  // Fase 114 -- Torre de Controle: prioridade real da viagem (Trip.priority,
+  // definida no planejamento -- nunca inferida/calculada aqui) e risco de
+  // manutencao do veiculo vinculado.
+  @ApiProperty({ enum: TripPriority, description: 'Trip.priority, definida no planejamento da viagem.' })
+  priority!: TripPriority;
+
+  @ApiProperty({
+    enum: ['OK', 'DUE_SOON', 'OVERDUE', 'UNKNOWN'],
+    description:
+      'Pior status entre os MaintenancePlan ativos do veiculo desta viagem (evaluateMaintenancePlan, ' +
+      'mesma funcao pura ja usada no dashboard de manutencao da frota e nas notificacoes de plano ' +
+      'vencido -- nunca uma segunda regra). UNKNOWN quando a viagem nao tem veiculo vinculado, o ' +
+      'veiculo nao tem nenhum plano ativo, ou nenhum plano tem historico de servico concluido para ' +
+      'calcular a partir.',
+  })
+  maintenanceStatus!: MaintenancePlanEvaluationStatus;
 }
 
 export class TripOperationsListEntity {

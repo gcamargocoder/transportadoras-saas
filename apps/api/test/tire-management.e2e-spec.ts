@@ -279,6 +279,48 @@ describe('Tire Management (e2e)', () => {
         .expect(201);
     });
 
+    // Fase 109 -- prova real de concorrencia (nao so sequencial como o
+    // teste acima): dispara as DUAS requisicoes ao MESMO TEMPO
+    // (Promise.all), sem esperar a primeira commitar antes de checar a
+    // segunda. Antes da transacao SERIALIZABLE (runSerializable), as duas
+    // podiam passar pela checagem "posicao livre" antes de qualquer uma
+    // escrever, resultando em dois pneus na mesma posicao -- exatamente a
+    // invariante que este teste comprova que nao acontece mais.
+    it('concorrencia real: duas requisicoes simultaneas para a MESMA posicao -- so uma vence, a outra recebe 409', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('PositionRace');
+      const auth = `Bearer ${adminAccessToken}`;
+      const vehicleId = await createVehicle(auth);
+
+      const tireA = await createTire(auth).expect(201);
+      const tireB = await createTire(auth).expect(201);
+
+      const [resA, resB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(`/api/v1/tires/${tireA.body.data.id}/movements`)
+          .set('Authorization', auth)
+          .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Tracao 1' }),
+        request(app.getHttpServer())
+          .post(`/api/v1/tires/${tireB.body.data.id}/movements`)
+          .set('Authorization', auth)
+          .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Tracao 1' }),
+      ]);
+
+      const statuses = [resA.status, resB.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      // Nunca os DOIS pneus ficam instalados na mesma posicao deste veiculo
+      // -- exatamente um deles.
+      const installedCount = await prisma.tire.count({
+        where: {
+          tenantId,
+          id: { in: [tireA.body.data.id, tireB.body.data.id] },
+          vehicleId,
+          position: 'Tracao 1',
+        },
+      });
+      expect(installedCount).toBe(1);
+    }, 20_000);
+
     it('move um pneu para uma carreta e rejeita veiculo/carreta inexistentes', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('TrailerMove');
       const auth = `Bearer ${adminAccessToken}`;
@@ -306,6 +348,109 @@ describe('Tire Management (e2e)', () => {
         .post(`/api/v1/tires/${tireId}/movements`)
         .set('Authorization', auth)
         .send({ newLocationType: 'TRAILER', newTrailerId: randomUUID() })
+        .expect(404);
+    });
+  });
+
+  // Fase 109 -- vinculo opcional entre TireMovement e VehicleMaintenance
+  // (troca de pneu como parte de uma OS). Fecha a limitacao real ja
+  // documentada em docs/tire-management.md secao 9 ("nao existe tireId em
+  // VehicleMaintenance"). Reaproveita a MESMA MaintenancesService/rota
+  // administrativa ja testada em maintenances.e2e-spec.ts -- aqui so o
+  // VINCULO em si e testado, nunca a regra de negocio da OS de novo.
+  describe('Integracao com manutencao (Fase 109)', () => {
+    async function createMaintenance(auth: string, vehicleId: string) {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/maintenances')
+        .set('Authorization', auth)
+        .send({ vehicleId, type: 'CORRECTIVE', serviceOrderNumber: `OS-${randomUUID().slice(0, 8)}` })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    it('vincula uma movimentacao a uma OS -- aparece em GET /maintenances/:id.tireMovements', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('TireMaintLink');
+      const auth = `Bearer ${adminAccessToken}`;
+      const vehicleId = await createVehicle(auth);
+      const maintenanceId = await createMaintenance(auth, vehicleId);
+      const tireRes = await createTire(auth).expect(201);
+      const tireId = tireRes.body.data.id;
+
+      const moveRes = await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireId}/movements`)
+        .set('Authorization', auth)
+        .send({
+          newLocationType: 'VEHICLE',
+          newVehicleId: vehicleId,
+          newPosition: 'Tracao 1',
+          maintenanceId,
+        })
+        .expect(201);
+      expect(moveRes.body.data.maintenanceId).toBe(maintenanceId);
+      expect(moveRes.body.data.maintenanceServiceOrderNumber).toMatch(/^OS-/);
+
+      const maintRes = await request(app.getHttpServer())
+        .get(`/api/v1/maintenances/${maintenanceId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(maintRes.body.data.tireMovements).toHaveLength(1);
+      expect(maintRes.body.data.tireMovements[0]).toMatchObject({
+        tireId,
+        tireFireNumber: tireRes.body.data.fireNumber,
+        newPosition: 'Tracao 1',
+      });
+
+      // O historico consolidado do pneu tambem referencia a OS.
+      const historyRes = await request(app.getHttpServer())
+        .get(`/api/v1/tires/${tireId}/history`)
+        .set('Authorization', auth)
+        .expect(200);
+      const movementEvent = historyRes.body.data.events.find((e: { type: string }) => e.type === 'MOVEMENT');
+      expect(movementEvent.description).toContain('OS-');
+    });
+
+    it('movimentacao sem maintenanceId nunca aparece em nenhuma OS (regressao)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('TireMaintNoLink');
+      const auth = `Bearer ${adminAccessToken}`;
+      const vehicleId = await createVehicle(auth);
+      const maintenanceId = await createMaintenance(auth, vehicleId);
+      const tireRes = await createTire(auth).expect(201);
+
+      const moveRes = await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireRes.body.data.id}/movements`)
+        .set('Authorization', auth)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Tracao 2' })
+        .expect(201);
+      expect(moveRes.body.data.maintenanceId).toBeNull();
+      expect(moveRes.body.data.maintenanceServiceOrderNumber).toBeNull();
+
+      const maintRes = await request(app.getHttpServer())
+        .get(`/api/v1/maintenances/${maintenanceId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(maintRes.body.data.tireMovements).toEqual([]);
+    });
+
+    it('rejeita maintenanceId inexistente/de outro tenant (404)', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('TireMaintOtherA');
+      const authA = `Bearer ${tenantA.adminAccessToken}`;
+      const vehicleIdA = await createVehicle(authA);
+      const maintenanceIdA = await createMaintenance(authA, vehicleIdA);
+
+      const tenantB = await createTenantAndLoginAsAdmin('TireMaintOtherB');
+      const authB = `Bearer ${tenantB.adminAccessToken}`;
+      const vehicleIdB = await createVehicle(authB);
+      const tireResB = await createTire(authB).expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireResB.body.data.id}/movements`)
+        .set('Authorization', authB)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleIdB, maintenanceId: maintenanceIdA })
+        .expect(404);
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireResB.body.data.id}/movements`)
+        .set('Authorization', authB)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleIdB, maintenanceId: randomUUID() })
         .expect(404);
     });
   });

@@ -1,4 +1,4 @@
-# Módulo Fiscal/Documental (Fase 52, estendida nas Fases 53, 54, 55, 56, 57 e 58)
+# Módulo Fiscal/Documental (Fase 52, estendida nas Fases 53, 54, 55, 56, 57, 58 e Fase Fiscal/XML)
 
 Armazenamento, identificação básica e vinculação operacional de documentos
 fiscais/documentais (CT-e, MDF-e, NF-e, CIOT, DACTE, DAMDFE, comprovante de
@@ -8,9 +8,10 @@ status, vínculo, parser tolerante de XML) para fases futuras de emissão e
 integração externa, mas nada aqui se comunica com um sistema fiscal oficial.
 
 Operação → Fiscal → Financeiro: este módulo é a camada intermediária —
-documentos podem se vincular a viagens/veículos/motoristas/clientes já
-existentes (Operação) e, no futuro, alimentar o módulo Financeiro (Fases
-50-51, não alterado nesta fase).
+documentos se vinculam a viagens/veículos/motoristas/clientes já existentes
+(Operação) e, desde a Fase Fiscal/XML, podem alimentar Contas a Pagar/
+Receber (Fases 72/73) quando o XML já trouxer um valor extraído — sempre
+por ação explícita do usuário, nunca automático (ver seção 18).
 
 ## 1. Escopo atual
 
@@ -38,6 +39,7 @@ existentes (Operação) e, no futuro, alimentar o módulo Financeiro (Fases
 | Preview/download do arquivo original | ❌ não existe para NENHUM tipo de documento no projeto (limitação pré-existente, ver seção 15.6) |
 | Controle operacional de CIOT (cadastro manual, vínculo, matriz, dashboard) | ✅ (Fase 57, ver seção 16 — reaproveita `FiscalDocument`, nenhuma tabela nova) |
 | Relacionamento MDF-e ↔ CT-e/NF-e agregado (matriz da viagem + dashboard) | ✅ (Fase 58, ver seção 17 — generaliza o cálculo por documento da Fase 55 para lotes já carregados, zero queries novas) |
+| Aproveitamento financeiro: gerar conta a pagar/receber a partir do valor extraído do XML | ✅ (Fase Fiscal/XML, ver seção 18 — sempre uma ação explícita do usuário, nunca automática) |
 | Emissão de CT-e/MDF-e/NF-e | ❌ fora de escopo (fase futura) |
 | Integração/consulta SEFAZ, certificado digital A1/A3 | ❌ fora de escopo |
 | OCR / IA | ❌ fora de escopo |
@@ -403,6 +405,13 @@ ou do total de documentos.
   "alcança" dados fora do lote carregado pela query) — **58/58 passando**
   (56 pré-existentes + 2 novos), incluindo os 2 testes de N+1 sem
   crescimento de queries.
+  **Fase Fiscal/XML** (aproveitamento financeiro, seção 18): testes novos
+  em `payables.e2e-spec.ts`/`receivables.e2e-spec.ts` — geração vinculada
+  ao documento fiscal com autopreenchimento refletido em `GET /fiscal/
+  documents/:id` (`payable`/`receivable` populados), idempotência (409 na
+  segunda tentativa para o mesmo documento), `fiscalDocumentId`
+  inexistente (404), mútua exclusividade com `installments > 1` (400),
+  isolamento multi-tenant.
 
 ## 12. Limitações reais / fora de escopo (declarado)
 
@@ -1018,3 +1027,94 @@ permanece constante.
 - Esta fase não emite, consulta SEFAZ, exige certificado digital A1/A3,
   faz manifestação do destinatário nem fecha oficialmente um MDF-e —
   tudo isso permanece fora de escopo (ver seção 12).
+
+## 18. Aproveitamento financeiro: gerar conta a pagar/receber a partir do documento (Fase Fiscal/XML)
+
+Fecha a lacuna "Operação → Fiscal → Financeiro" deixada em aberto desde a
+Fase 52 (seção 1): quando o parser extrai um **valor real** do XML
+(`metadata.amount`, NF-e/CT-e — seção 5), o usuário pode gerar um título
+financeiro (`Payable`/`Receivable`, Fases 72/73) **pré-preenchido** com
+esses dados, evitando redigitar fornecedor/valor/data. **Nunca automático**
+— é sempre uma ação explícita do usuário, que revisa e confirma os campos
+antes de criar (mesmo princípio de todo "gerar título" já existente no
+projeto: `POST /payables/from-expense`, `POST /receivables/from-billing`).
+O sistema nunca decide sozinho se um documento é despesa ou receita — as
+duas opções ficam disponíveis lado a lado; o usuário escolhe.
+
+### 18.1 Modelagem (2 colunas novas, nenhuma tabela)
+
+`Payable.fiscalDocumentId String? @unique` / `Receivable.fiscalDocumentId
+String? @unique` — mesmo padrão de `Payable.expenseId`/`Receivable.
+billingId`: aponta para o `FiscalDocument` de origem quando o título foi
+gerado a partir de um (nulo para os demais fluxos de criação). `@unique`
+garante **no máximo 1 título por documento fiscal** (idempotência,
+Postgres permite múltiplos `NULL` sob `unique`, então isso nunca restringe
+títulos de outras origens). Relação 1:1 opcional, resolvida no mesmo
+`include` de `GET /fiscal/documents` (`payable`/`receivable`, campos
+`id`/`originalAmount`/`status` apenas — nunca a entity completa, evita
+inflar o payload) — zero queries adicionais.
+
+### 18.2 Fluxo
+
+`POST /payables` e `POST /receivables` (criação manual, Fase Financeiro
+CP/CR) ganharam o campo opcional `fiscalDocumentId`. Quando informado:
+
+1. Confirma que o `FiscalDocument` existe e pertence ao tenant do usuário
+   (`404` caso contrário — nunca aceita um id de outro tenant).
+2. Confirma que **nenhum** outro título já referencia esse documento
+   (`409` caso contrário — mensagem amigável antes da constraint `@unique`
+   do banco, mesmo padrão de `assertNoDuplicate`/`findDuplicate`).
+3. Rejeita a combinação com `installments > 1` (`400`) — um documento
+   fiscal gera exatamente 1 título; parcelamento continua exclusivo do
+   fluxo manual sem documento de origem (ver `docs/payables.md`/`docs/
+   receivables.md`, seção "Título manual e parcelamento").
+
+Nenhuma rota nova em `FiscalDocumentsController` — a criação em si
+reaproveita integralmente `POST /payables`/`POST /receivables` já
+existentes, só com um campo a mais no DTO.
+
+### 18.3 Frontend
+
+O drawer de detalhe do documento fiscal (`FiscalDocumentDetailDrawer`)
+ganhou a seção "Aproveitamento financeiro", visível apenas quando
+`metadata.amount` existe (a "relação clara" pedida — nunca uma lista fixa
+de tipos de documento, é a presença real de um valor extraído que decide):
+botões "Gerar conta a pagar"/"Gerar conta a receber" abrem os mesmos
+modais de criação manual já existentes (`CreatePayableModal`/
+`CreateReceivableModal`, Fase Financeiro CP/CR), agora com suporte a
+`initialValues` — pré-preenchidos com `senderName` (fornecedor),
+`issueDate` e o valor extraído; o campo Parcelas some do formulário nesse
+fluxo (mutuamente exclusivo, seção 18.2). Quando um título já foi gerado,
+o botão correspondente vira um badge "Conta a pagar/receber gerada · R$ X
+· status", usando os campos já incluídos em `GET /fiscal/documents/:id`
+(seção 18.1) — sem nenhuma chamada extra.
+
+### 18.4 Limitações reais (declaradas)
+
+- **Nunca decide despesa vs. receita automaticamente.** Um CT-e recebido
+  de um transportador subcontratado é tipicamente uma despesa; um CT-e
+  referente a serviço prestado pela própria transportadora poderia ser
+  receita — o projeto não tem como distinguir isso de forma confiável só
+  pelo XML (não há conceito de "CNPJ da própria empresa" comparável nos
+  dados fiscais). Por isso as duas opções sempre ficam disponíveis; a
+  decisão é sempre humana.
+- **Não gera `TripExpense`/`TripBilling`.** O título criado é sempre um
+  `Payable`/`Receivable` **manual** (sem `tripId`) — mesmo quando o
+  documento fiscal já está vinculado a uma viagem. Estender o vínculo de
+  viagem ao título gerado exigiria reabrir o desenho de "título manual
+  nunca tem viagem" da Fase Financeiro CP/CR, fora do escopo desta
+  correção pontual; a rastreabilidade continua garantida via
+  `fiscalDocumentId` (o documento fiscal, esse sim, mantém `tripId`).
+- **Nenhum autopreenchimento para estoque de peças (`PartStockMovement`).**
+  O parser de XML (seção 5) só extrai o valor **total** do documento —
+  nunca os itens de linha (`<det>`, produto/quantidade/preço unitário),
+  que não fazem parte do escopo mínimo pedido na Fase 52. Sem essa
+  extração, não há dado suficiente para pré-preencher "qual peça, qual
+  quantidade" de forma confiável — inventar isso seria dado forjado.
+  `PartStockMovement.reference` (texto livre, já existente desde a Fase
+  83) continua sendo o único jeito de referenciar manualmente uma nota
+  fiscal de compra de peças.
+- **`installments` e `fiscalDocumentId` são mutuamente exclusivos** — ver
+  seção 18.2. Gerar parcelas a partir de 1 documento fiscal exigiria
+  decidir uma regra de rateio (por competência? por valor igual?) que o
+  pedido desta fase não definiu — evitado deliberadamente.

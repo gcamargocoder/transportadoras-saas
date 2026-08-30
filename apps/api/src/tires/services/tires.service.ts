@@ -7,8 +7,10 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
+import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { runSerializable } from '../../tenants/utils/plan-limit.util';
 import { CreateTireDisposalDto } from '../dto/create-tire-disposal.dto';
 import { CreateTireInspectionDto } from '../dto/create-tire-inspection.dto';
 import { CreateTireMovementDto } from '../dto/create-tire-movement.dto';
@@ -52,6 +54,9 @@ const MOVEMENT_INCLUDE = {
   previousTrailer: true,
   newTrailer: true,
   creator: true,
+  // Fase 109 -- so para o rotulo (numero da OS) na resposta; select minimo,
+  // mesmo padrao ja usado em FuelSupplyEntity.tripLabel (Fase 107).
+  maintenance: { select: { serviceOrderNumber: true } },
 } satisfies Prisma.TireMovementInclude;
 
 const RETREAD_INCLUDE = { creator: true } satisfies Prisma.TireRetreadInclude;
@@ -64,6 +69,13 @@ const DISPOSAL_INCLUDE = { creator: true } satisfies Prisma.TireDisposalInclude;
 // minimo legal de 1.6mm ja e critico; 3mm e uma margem de seguranca usual
 // antes da troca programada).
 export const NEAR_REPLACEMENT_THRESHOLD_MM = 3;
+
+// Fase 110 -- limiar analogo, mas por distancia percorrida vs
+// Tire.expectedLifespanKm (quando cadastrado), usado pelo mesmo alerta de
+// "pneu proximo da troca" (NotificationType.TIRE_NEAR_REPLACEMENT) quando o
+// sulco ainda nao acusa (ex.: pneu de composto duro que dura mais km com
+// sulco alto) mas a distancia ja se aproxima do fim da vida util projetada.
+export const NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT = 90;
 
 @Injectable()
 export class TiresService {
@@ -113,7 +125,7 @@ export class TiresService {
         ? this.prisma.tireMovement.findFirst({
             where: { tenantId, tireId: id, newLocationType: { not: TireLocationType.STOCK } },
             orderBy: { movementDate: 'desc' },
-            select: { movementDate: true },
+            select: { movementDate: true, odometerKm: true },
           })
         : null,
       this.prisma.tireMovement.findMany({
@@ -133,6 +145,14 @@ export class TiresService {
         .map((row) => toNumberOrNull(row.odometerKm))
         .filter((value): value is number => value !== null),
       now: new Date(),
+      // Fase 110 -- nenhuma query extra: expectedLifespanKm ja vem do
+      // proprio tire, currentOdometerKm ja vem de TIRE_INCLUDE.vehicle, e
+      // installedAtOdometerKm reaproveita a MESMA query mostRecentInstall
+      // (so adicionou odometerKm ao select acima).
+      expectedLifespanKm: toNumberOrNull(tire.expectedLifespanKm),
+      installedAtOdometerKm: toNumberOrNull(mostRecentInstall?.odometerKm ?? null),
+      currentOdometerKm:
+        tire.locationType === TireLocationType.VEHICLE ? toNumberOrNull(tire.vehicle?.odometerKm ?? null) : null,
     });
 
     return toTireEntity(tire, lifecycle);
@@ -306,6 +326,20 @@ export class TiresService {
   // Toda troca gera historico automatico (TireMovement), nunca sobrescreve
   // o registro anterior -- so o snapshot ATUAL em Tire (locationType/
   // vehicleId/trailerId/position/status) e atualizado.
+  //
+  // Fase 109 -- ATOMICIDADE: a leitura do pneu (posicao/status atuais), a
+  // checagem "nenhum outro pneu nesta posicao" (assertPositionAvailable) e
+  // as duas escritas (TireMovement + Tire) agora rodam dentro de UMA
+  // transacao SERIALIZABLE (runSerializable, mesmo utilitario ja usado por
+  // PartsService.applyMovement -- nenhum mecanismo novo). Antes desta fase
+  // eram chamadas soltas sequenciais: duas requisicoes concorrentes
+  // movendo pneus DIFERENTES para a MESMA posicao do MESMO veiculo podiam
+  // ambas passar pela checagem antes de qualquer uma commitar (nao ha
+  // constraint unica de banco em `position` -- e texto livre, ver docs/
+  // tire-management.md secao 5), violando a invariante "uma posicao, um
+  // pneu". Com SERIALIZABLE, a segunda transacao a comitar detecta o
+  // conflito e e abortada/reexecutada automaticamente pelo Postgres (nunca
+  // um lock explicito, nunca um mutex em memoria).
   async createMovement(
     tenantId: string,
     tireId: string,
@@ -313,11 +347,6 @@ export class TiresService {
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<TireMovementEntity> {
-    const tire = await this.findOwnedOrThrow(tenantId, tireId);
-    if (tire.status === TireStatus.SCRAPPED) {
-      throw new ConflictException('Pneu descartado nao pode ser movimentado.');
-    }
-
     let newVehicleId: string | null = null;
     let newTrailerId: string | null = null;
 
@@ -328,55 +357,104 @@ export class TiresService {
       await this.assertTrailerExists(tenantId, dto.newTrailerId as string);
       newTrailerId = dto.newTrailerId as string;
     }
+    if (dto.maintenanceId) {
+      await this.assertMaintenanceExists(tenantId, dto.maintenanceId);
+    }
 
-    // "Nenhum pneu pode estar instalado em dois veiculos" -- alem de cada
-    // Tire so guardar uma unica localizacao (garantido pelo proprio
-    // modelo), tambem nao pode haver DOIS pneus na MESMA posicao do MESMO
-    // veiculo/carreta ao mesmo tempo.
-    await this.assertPositionAvailable(
-      tenantId,
-      tireId,
-      dto.newLocationType,
-      newVehicleId,
-      newTrailerId,
-      dto.newPosition,
-    );
+    const { movement, previousSnapshot } = await runSerializable(this.prisma, async (tx) => {
+      const tire = await tx.tire.findFirst({ where: { id: tireId, tenantId } });
+      if (!tire) {
+        throw new NotFoundException('Pneu nao encontrado nesta empresa.');
+      }
+      if (tire.status === TireStatus.SCRAPPED) {
+        throw new ConflictException('Pneu descartado nao pode ser movimentado.');
+      }
 
-    const movement = await this.prisma.tireMovement.create({
-      data: {
+      // "Nenhum pneu pode estar instalado em dois veiculos" -- alem de cada
+      // Tire so guardar uma unica localizacao (garantido pelo proprio
+      // modelo), tambem nao pode haver DOIS pneus na MESMA posicao do
+      // MESMO veiculo/carreta ao mesmo tempo.
+      await this.assertPositionAvailable(
         tenantId,
         tireId,
-        movementDate: dto.movementDate ? new Date(dto.movementDate) : new Date(),
-        previousLocationType: tire.locationType,
-        previousVehicleId: tire.vehicleId,
-        previousTrailerId: tire.trailerId,
-        previousPosition: tire.position,
-        newLocationType: dto.newLocationType,
+        dto.newLocationType,
         newVehicleId,
         newTrailerId,
-        createdBy: actor.userId,
-        ...compact({
-          newPosition: dto.newPosition,
-          odometerKm: dto.odometerKm,
-          reason: dto.reason,
-        }),
-      },
-      include: MOVEMENT_INCLUDE,
-    });
+        dto.newPosition,
+        tx,
+      );
 
-    const newStatus =
-      dto.newLocationType === TireLocationType.STOCK ? TireStatus.STOCK : TireStatus.IN_USE;
+      // Fase 110 -- "refletir corretamente a quilometragem dos pneus a
+      // partir dos eventos/odometro existentes": ate aqui, odometerKm era
+      // gravado SOMENTE em TireMovement, nunca propagado para
+      // Vehicle.odometerKm -- a mesma leitura que o mecanico anota ao
+      // trocar um pneu ficava presa no historico do pneu, mesmo sendo uma
+      // leitura real e mais recente do veiculo. Reaproveita INTEGRALMENTE a
+      // MESMA regra "quilometragem so anda para frente" ja usada por
+      // abastecimento (assertOdometerNotBelowVehicle/computeBumpedOdometer,
+      // common/utils/odometer.util.ts) -- nunca uma segunda regra de
+      // odometro. Veiculo relevante: o de DESTINO quando ha um (instalacao/
+      // transferencia para veiculo), senao o veiculo ATUAL do pneu quando a
+      // retirada e dele (volta ao estoque/troca para carreta); sem nenhum
+      // veiculo envolvido (ex.: estoque -> carreta), nao ha o que checar --
+      // nunca inventa um veiculo.
+      if (dto.odometerKm !== undefined) {
+        const relevantVehicleId =
+          newVehicleId ?? (tire.locationType === TireLocationType.VEHICLE ? tire.vehicleId : null);
+        if (relevantVehicleId) {
+          const vehicle = await tx.vehicle.findFirst({
+            where: { id: relevantVehicleId, tenantId },
+            select: { id: true, odometerKm: true },
+          });
+          if (vehicle) {
+            assertOdometerNotBelowVehicle(toNumberOrNull(vehicle.odometerKm), dto.odometerKm);
+            const bumped = computeBumpedOdometer(toNumberOrNull(vehicle.odometerKm), dto.odometerKm);
+            if (bumped !== null) {
+              await tx.vehicle.update({ where: { id: vehicle.id }, data: { odometerKm: bumped } });
+            }
+          }
+        }
+      }
 
-    await this.prisma.tire.update({
-      where: { id: tireId },
-      data: {
-        locationType: dto.newLocationType,
-        vehicleId: newVehicleId,
-        trailerId: newTrailerId,
-        position: dto.newPosition ?? null,
-        status: newStatus,
-        updatedBy: actor.userId,
-      },
+      const createdMovement = await tx.tireMovement.create({
+        data: {
+          tenantId,
+          tireId,
+          movementDate: dto.movementDate ? new Date(dto.movementDate) : new Date(),
+          previousLocationType: tire.locationType,
+          previousVehicleId: tire.vehicleId,
+          previousTrailerId: tire.trailerId,
+          previousPosition: tire.position,
+          newLocationType: dto.newLocationType,
+          newVehicleId,
+          newTrailerId,
+          createdBy: actor.userId,
+          ...compact({
+            newPosition: dto.newPosition,
+            odometerKm: dto.odometerKm,
+            reason: dto.reason,
+            maintenanceId: dto.maintenanceId,
+          }),
+        },
+        include: MOVEMENT_INCLUDE,
+      });
+
+      const newStatus =
+        dto.newLocationType === TireLocationType.STOCK ? TireStatus.STOCK : TireStatus.IN_USE;
+
+      await tx.tire.update({
+        where: { id: tireId },
+        data: {
+          locationType: dto.newLocationType,
+          vehicleId: newVehicleId,
+          trailerId: newTrailerId,
+          position: dto.newPosition ?? null,
+          status: newStatus,
+          updatedBy: actor.userId,
+        },
+      });
+
+      return { movement: createdMovement, previousSnapshot: tire };
     });
 
     await this.audit.log({
@@ -386,10 +464,10 @@ export class TiresService {
       entityName: 'Tire',
       entityId: tireId,
       previousValue: toJsonSafe({
-        locationType: tire.locationType,
-        vehicleId: tire.vehicleId,
-        trailerId: tire.trailerId,
-        position: tire.position,
+        locationType: previousSnapshot.locationType,
+        vehicleId: previousSnapshot.vehicleId,
+        trailerId: previousSnapshot.trailerId,
+        position: previousSnapshot.position,
       }),
       newValue: toJsonSafe({
         locationType: dto.newLocationType,
@@ -643,11 +721,17 @@ export class TiresService {
     const events: TireHistoryEventEntity[] = [];
 
     for (const movement of movements) {
+      // Fase 109 -- quando a movimentacao esta vinculada a uma OS, o numero
+      // dela entra na descricao da timeline (mesma fonte ja usada na
+      // resposta estruturada, TireMovementEntity.maintenanceServiceOrderNumber).
+      const osSuffix = movement.maintenance
+        ? ` (OS ${movement.maintenance.serviceOrderNumber ?? movement.maintenanceId})`
+        : '';
       events.push({
         type: TireHistoryEventType.MOVEMENT,
         id: movement.id,
         date: movement.movementDate,
-        description: this.describeMovement(movement),
+        description: `${this.describeMovement(movement)}${osSuffix}`,
         userId: movement.createdBy,
         userName: movement.creator.name,
       });
@@ -811,10 +895,11 @@ export class TiresService {
     vehicleId: string | null,
     trailerId: string | null,
     position: string | undefined,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<void> {
     if (locationType === TireLocationType.STOCK || !position) return;
 
-    const conflict = await this.prisma.tire.findFirst({
+    const conflict = await client.tire.findFirst({
       where: {
         tenantId,
         id: { not: tireId },
@@ -846,6 +931,19 @@ export class TiresService {
     });
     if (!trailer) {
       throw new NotFoundException('Carreta (newTrailerId) nao encontrada nesta empresa.');
+    }
+  }
+
+  // Fase 109 -- so existencia no tenant, mesmo padrao ja usado por
+  // PartsService.assertPartsBelongToTenant para MaintenancePartInputDto.partId
+  // (nunca uma checagem cruzada de veiculo -- a OS pode legitimamente ser de
+  // um veiculo relacionado, ex.: cavalo vs. carreta da mesma composicao).
+  private async assertMaintenanceExists(tenantId: string, maintenanceId: string): Promise<void> {
+    const maintenance = await this.prisma.vehicleMaintenance.findFirst({
+      where: { id: maintenanceId, tenantId },
+    });
+    if (!maintenance) {
+      throw new NotFoundException('Manutencao (maintenanceId) nao encontrada nesta empresa.');
     }
   }
 

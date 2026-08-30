@@ -41,6 +41,32 @@ export class TireLifecycleEntity {
       '(nunca uma distancia estimada) -- disponivel somente com 2+ leituras distintas.',
   })
   costPerKm!: TireCostPerKmEntity;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Fase 110 -- km percorridos desde a movimentacao que instalou o pneu na posicao atual ' +
+      '(Vehicle.odometerKm atual - odometerKm da instalacao). Null quando o pneu nao esta ' +
+      'montado em veiculo (carreta nao tem odometro) ou faltam as leituras necessarias.',
+  })
+  distanceTraveledSinceInstallKm!: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Fase 110 -- expectedLifespanKm do cadastro do pneu menos distanceTraveledSinceInstallKm. ' +
+      'Pode ser negativo (pneu ja rodou alem da vida util esperada). Null quando expectedLifespanKm ' +
+      'nao foi cadastrado ou distanceTraveledSinceInstallKm e null.',
+  })
+  remainingLifespanKm!: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Fase 110 -- percentual da vida util esperada ja rodado (pode passar de 100). ' +
+      'Null nas mesmas condicoes de remainingLifespanKm.',
+  })
+  lifespanUsedPercent!: number | null;
 }
 
 export class TireEntity {

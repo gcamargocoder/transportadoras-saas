@@ -16,6 +16,15 @@ function buildPrismaMock(overrides: Record<string, unknown> = {}) {
     tripOccurrence: { findMany: emptyFindMany() },
     vehicle: { findMany: emptyFindMany() },
     vehicleMaintenance: { findMany: emptyFindMany() },
+    // Fase 108 -- collectMaintenancePlansDue; Fase 110 -- collectTireLifespanNearReplacement
+    // (via tireMovement); Fase 111 -- collectChecklistCriticalNonConformity.
+    // Estes 3 nunca tinham sido adicionados a este mock (spec nunca foi
+    // atualizado quando os coletores foram criados) -- gap real encontrado
+    // e corrigido durante a auditoria da Fase 111 (a suite inteira falhava
+    // com "Cannot read properties of undefined" antes desta correcao).
+    maintenancePlan: { findMany: emptyFindMany() },
+    tireMovement: { findMany: emptyFindMany() },
+    checklistExecution: { findMany: emptyFindMany() },
     tire: { findMany: emptyFindMany() },
     fuelSupply: { findMany: emptyFindMany() },
     fiscalDocument: { findMany: emptyFindMany() },

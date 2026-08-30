@@ -536,6 +536,247 @@ describe('Faturamento Operacional (Fase 60, e2e)', () => {
   });
 
   // ==========================================================================
+  // Fase 103 -- "selecionar viagens elegiveis para faturamento": lista
+  // Trip (nunca TripBilling) com valor comercial calculado e saldo a
+  // faturar, para descobrir candidatas ANTES de qualquer faturamento
+  // iniciado (o preview ao vivo de GET .../trips/:tripId so funciona
+  // quando o tripId ja e conhecido).
+  // ==========================================================================
+  describe('Fase 103 -- viagens elegiveis para faturamento', () => {
+    function listEligible(auth: string, query: Record<string, string> = {}) {
+      return request(app.getHttpServer())
+        .get('/api/v1/operational-billing/eligible-trips')
+        .set('Authorization', auth)
+        .query(query);
+    }
+
+    it('viagem com TripFreight aplicado e nenhum faturamento ainda aparece como elegivel', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('EligNew');
+      const customerId = await createCustomer(adminAuth);
+      const tripId = await setupBillableTrip(adminAuth, customerId, 700);
+
+      const res = await listEligible(adminAuth).expect(200);
+      const row = res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(row).toBeTruthy();
+      expect(row.billableAmount).toBe(700);
+      expect(row.invoicedAmount).toBe(0);
+      expect(row.balance).toBe(700);
+      expect(row.billingStatus).toBeNull();
+      expect(row.customerId).toBe(customerId);
+    });
+
+    it('viagem sem TripFreight aplicado nunca aparece como elegivel', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('EligNoFreight');
+      const customerId = await createCustomer(adminAuth);
+      const tripId = await setupTripWithCustomer(adminAuth, customerId);
+
+      const res = await listEligible(adminAuth).expect(200);
+      expect(res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId)).toBeUndefined();
+    });
+
+    it('viagem parcialmente faturada continua elegivel (saldo > 0); some da lista apos faturamento total', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('EligPartial');
+      const customerId = await createCustomer(adminAuth);
+      const tripId = await setupBillableTrip(adminAuth, customerId, 1000);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({ amount: 400 })
+        .expect(201);
+
+      const partial = await listEligible(adminAuth).expect(200);
+      const partialRow = partial.body.data.items.find((i: { tripId: string }) => i.tripId === tripId);
+      expect(partialRow).toBeTruthy();
+      expect(partialRow.invoicedAmount).toBe(400);
+      expect(partialRow.balance).toBe(600);
+      expect(partialRow.billingStatus).toBe('PARTIALLY_INVOICED');
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({ amount: 600 })
+        .expect(201);
+
+      const full = await listEligible(adminAuth).expect(200);
+      expect(full.body.data.items.find((i: { tripId: string }) => i.tripId === tripId)).toBeUndefined();
+    });
+
+    it('viagem com faturamento cancelado nunca reaparece como elegivel', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('EligCancelled');
+      const customerId = await createCustomer(adminAuth);
+      const tripId = await setupBillableTrip(adminAuth, customerId, 500);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({ amount: 200 })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/cancel`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+
+      const res = await listEligible(adminAuth).expect(200);
+      expect(res.body.data.items.find((i: { tripId: string }) => i.tripId === tripId)).toBeUndefined();
+    });
+
+    it('filtra por customerId, tripStatus e pagina corretamente', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('EligFilters');
+      const customerA = await createCustomer(adminAuth, 'Cliente A');
+      const customerB = await createCustomer(adminAuth, 'Cliente B');
+      const tripA = await setupBillableTrip(adminAuth, customerA, 300);
+      await setupBillableTrip(adminAuth, customerB, 300);
+
+      const byCustomer = await listEligible(adminAuth, { customerId: customerA }).expect(200);
+      expect(byCustomer.body.data.items).toHaveLength(1);
+      expect(byCustomer.body.data.items[0].tripId).toBe(tripA);
+
+      // Viagens novas (setupBillableTrip) ficam PLANNED -- filtrar por
+      // COMPLETED nao deve encontrar nenhuma delas.
+      const byStatus = await listEligible(adminAuth, { tripStatus: 'COMPLETED' }).expect(200);
+      expect(byStatus.body.data.items.find((i: { tripId: string }) => i.tripId === tripA)).toBeUndefined();
+
+      const byStatusPlanned = await listEligible(adminAuth, { tripStatus: 'PLANNED' }).expect(200);
+      expect(byStatusPlanned.body.data.items.find((i: { tripId: string }) => i.tripId === tripA)).toBeTruthy();
+
+      const page1 = await listEligible(adminAuth, { pageSize: '1', page: '1' }).expect(200);
+      expect(page1.body.data.items).toHaveLength(1);
+      expect(page1.body.data.meta.total).toBeGreaterThanOrEqual(2);
+    });
+
+    it('isolamento multi-tenant: viagens elegiveis de outro tenant nunca aparecem', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('EligIsolA');
+      const customerA = await createCustomer(tenantA.adminAuth);
+      const tripA = await setupBillableTrip(tenantA.adminAuth, customerA, 300);
+
+      const tenantB = await createTenantAndLoginAsAdmin('EligIsolB');
+      const res = await listEligible(tenantB.adminAuth).expect(200);
+      expect(res.body.data.items.find((i: { tripId: string }) => i.tripId === tripA)).toBeUndefined();
+    });
+
+    it('RBAC: DRIVER bloqueado (403); AUDITOR consulta normalmente', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('EligRbac');
+      const driverAuth = await createUserWithRole(tenantId, adminAuth, 'DRIVER');
+      const auditorAuth = await createUserWithRole(tenantId, adminAuth, 'AUDITOR');
+
+      await listEligible(driverAuth).expect(403);
+      await listEligible(auditorAuth).expect(200);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 103 -- competencia financeira: o faturamento (POST .../invoice)
+  // agora respeita o mesmo FinancialPeriodGuard das Fases 76/79 ja usado
+  // por Receivables/Payables/FinancialTransactions -- bloqueia quando o
+  // periodo do MES ATUAL (competencia da receita gerada) esta FECHADO.
+  // ==========================================================================
+  describe('Fase 103 -- competencia financeira (FinancialPeriodGuard)', () => {
+    function openPeriod(auth: string, year: number, month: number) {
+      return request(app.getHttpServer()).post('/api/v1/finance/periods').set('Authorization', auth).send({ year, month });
+    }
+
+    function closePeriod(auth: string, id: string) {
+      return request(app.getHttpServer()).post(`/api/v1/finance/periods/${id}/close`).set('Authorization', auth).send({});
+    }
+
+    it('bloqueia (409) faturar quando o periodo do mes atual esta FECHADO', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PeriodClosed');
+      const customerId = await createCustomer(adminAuth);
+      const tripId = await setupBillableTrip(adminAuth, customerId, 500);
+
+      const now = new Date();
+      const period = await openPeriod(adminAuth, now.getUTCFullYear(), now.getUTCMonth() + 1).expect(201);
+      await closePeriod(adminAuth, period.body.data.id).expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({})
+        .expect(409);
+
+      // Nenhum TripBilling/TripRevenue foi criado -- bloqueio ocorre ANTES
+      // de qualquer escrita.
+      expect(await prisma.tripBilling.findFirst({ where: { tripId } })).toBeNull();
+      expect(await prisma.tripRevenue.findFirst({ where: { tripId } })).toBeNull();
+    });
+
+    it('permite faturar quando o periodo do mes atual esta OPEN ou inexistente', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PeriodOpen');
+      const customerId = await createCustomer(adminAuth);
+
+      // Periodo inexistente (nenhum finance/periods criado neste tenant).
+      const tripNoPeriod = await setupBillableTrip(adminAuth, customerId, 200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripNoPeriod}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({})
+        .expect(201);
+
+      // Periodo aberto explicitamente.
+      const now = new Date();
+      await openPeriod(adminAuth, now.getUTCFullYear(), now.getUTCMonth() + 1).expect(201);
+      const tripOpenPeriod = await setupBillableTrip(adminAuth, customerId, 200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripOpenPeriod}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({})
+        .expect(201);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 103 -- snapshot: uma vez que o faturamento tem qualquer valor ja
+  // lancado, billableAmount fica CONGELADO -- nunca mais recalculado de
+  // TripFreight, mesmo que PATCH /freight/trips/:tripId edite o valor
+  // contratado depois ("preservar snapshot dos dados necessarios ao
+  // faturamento quando a fonte puder sofrer alteracao posterior").
+  // ==========================================================================
+  describe('Fase 103 -- snapshot do valor faturavel', () => {
+    it('billableAmount permanece o mesmo apos editar TripFreight.contractedAmount entre dois faturamentos parciais', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('SnapshotFreeze');
+      const customerId = await createCustomer(adminAuth);
+      const tripId = await setupBillableTrip(adminAuth, customerId, 1000);
+
+      const first = await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({ amount: 300 })
+        .expect(201);
+      expect(first.body.data.billableAmount).toBe(1000);
+      expect(first.body.data.balance).toBe(700);
+
+      // Edicao humana do valor contratado -- PATCH /freight/trips/:tripId
+      // (Fase 59, distinta de revisar a regra/tabela).
+      await request(app.getHttpServer())
+        .patch(`/api/v1/freight/trips/${tripId}`)
+        .set('Authorization', adminAuth)
+        .send({ contractedAmount: 5000 })
+        .expect(200);
+
+      // GET (preview) reflete o valor CONGELADO da viagem, nao o novo.
+      const preview = await request(app.getHttpServer())
+        .get(`/api/v1/operational-billing/trips/${tripId}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(preview.body.data.billableAmount).toBe(1000);
+      expect(preview.body.data.balance).toBe(700);
+      // contractedAmount (informativo, comparativo) reflete o valor ATUAL --
+      // so billableAmount (usado no calculo) fica congelado.
+      expect(preview.body.data.contractedAmount).toBe(5000);
+
+      const second = await request(app.getHttpServer())
+        .post(`/api/v1/operational-billing/trips/${tripId}/invoice`)
+        .set('Authorization', adminAuth)
+        .send({ amount: 700 })
+        .expect(201);
+      expect(second.body.data.billableAmount).toBe(1000);
+      expect(second.body.data.invoicedAmount).toBe(1000);
+      expect(second.body.data.status).toBe('INVOICED');
+    });
+  });
+
+  // ==========================================================================
   // Isolamento multi-tenant e RBAC
   // ==========================================================================
   describe('isolamento multi-tenant', () => {
@@ -762,6 +1003,113 @@ describe('Faturamento Operacional (Fase 60, e2e)', () => {
         .expect(200);
       const queriesFor20 = queryCount;
 
+      expect(queriesFor20).toBeLessThanOrEqual(queriesFor5 + 1);
+    }, 180000);
+
+    // Fase 103 -- mesmo principio: 1 findMany + 1 count, nenhuma consulta
+    // por linha, mesmo com composicao/veiculo/motorista/freight/billing
+    // incluidos via select unico.
+    async function seedEligibleTrip(auth: string, customerId: string, tableId: string): Promise<void> {
+      const vehicleRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', auth)
+        .send({ plate: randomPlate(), brand: 'Volvo', model: 'FH 540', type: 'TRACTOR_UNIT' })
+        .expect(201);
+      const driverRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send({
+          name: 'Jose da Silva',
+          cpf: randomValidCpf(),
+          cnhNumber: String(Math.floor(10000000000 + Math.random() * 89999999999)),
+          cnhCategory: 'AE',
+          cnhExpiresAt: '2027-06-30',
+        })
+        .expect(201);
+      const compositionRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/trip-compositions')
+        .set('Authorization', auth)
+        .send({ vehicleId: vehicleRes.body.data.id, trailers: [] })
+        .expect(201);
+      const originRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/locations')
+        .set('Authorization', auth)
+        .send({ name: `Origem ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+        .expect(201);
+      const destinationRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/locations')
+        .set('Authorization', auth)
+        .send({ name: `Destino ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+        .expect(201);
+      const tripRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send({
+          driverId: driverRes.body.data.id,
+          compositionId: compositionRes.body.data.id,
+          customerId,
+          originLocationId: originRes.body.data.id,
+          destinationLocationId: destinationRes.body.data.id,
+          plannedDeparture: '2026-01-01T08:00:00.000Z',
+          plannedArrival: '2026-01-02T18:00:00.000Z',
+        })
+        .expect(201);
+      const tripId = tripRes.body.data.id as string;
+      await request(countingApp.getHttpServer())
+        .post(`/api/v1/freight/trips/${tripId}/apply`)
+        .set('Authorization', auth)
+        .send({ customerId, freightTableId: tableId })
+        .expect(201);
+    }
+
+    it('a contagem de queries de GET /operational-billing/eligible-trips nao cresce entre 5 e 20 viagens elegiveis', async () => {
+      const { adminAuth } = await createTenantOnCountingApp('N1Eligible');
+      const customerRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/customers')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Cliente N1 Eligible' })
+        .expect(201);
+      const customerId = customerRes.body.data.id as string;
+
+      const tableRes = await request(countingApp.getHttpServer())
+        .post('/api/v1/freight/tables')
+        .set('Authorization', adminAuth)
+        .send({
+          customerId,
+          name: 'Tabela N1 Eligible',
+          code: `TAB-N1E-${randomUUID().slice(0, 8)}`,
+          effectiveFrom: '2026-01-01T00:00:00.000Z',
+        })
+        .expect(201);
+      const tableId = tableRes.body.data.id as string;
+      await request(countingApp.getHttpServer())
+        .patch(`/api/v1/freight/tables/${tableId}`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+      await request(countingApp.getHttpServer())
+        .post('/api/v1/freight/rules')
+        .set('Authorization', adminAuth)
+        .send({ freightTableId: tableId, baseAmount: 500 })
+        .expect(201);
+
+      for (let i = 0; i < 5; i += 1) await seedEligibleTrip(adminAuth, customerId, tableId);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/operational-billing/eligible-trips')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor5 = queryCount;
+
+      for (let i = 5; i < 20; i += 1) await seedEligibleTrip(adminAuth, customerId, tableId);
+      queryCount = 0;
+      await request(countingApp.getHttpServer())
+        .get('/api/v1/operational-billing/eligible-trips')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const queriesFor20 = queryCount;
+
+      expect(queriesFor5).toBeGreaterThan(0);
       expect(queriesFor20).toBeLessThanOrEqual(queriesFor5 + 1);
     }, 180000);
   });

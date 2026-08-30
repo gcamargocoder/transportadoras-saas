@@ -120,6 +120,23 @@ describe('Notifications (e2e)', () => {
     return res.body.data.id as string;
   }
 
+  async function createTire(auth: string, overrides: Partial<Record<string, unknown>> = {}) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/tires')
+      .set('Authorization', auth)
+      .send({
+        fireNumber: `FG-${randomUUID()}`,
+        manufacturer: 'Michelin',
+        model: 'X Multi',
+        size: '295/80R22.5',
+        purchasePrice: 1500,
+        initialTreadDepthMm: 20,
+        ...overrides,
+      })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   async function createDriver(auth: string) {
     const res = await request(app.getHttpServer())
       .post('/api/v1/drivers')
@@ -133,6 +150,68 @@ describe('Notifications (e2e)', () => {
       })
       .expect(201);
     return res.body.data.id as string;
+  }
+
+  // Fase 111 -- checklist completado com item critico+obrigatorio respondido
+  // NAO, vinculado a um veiculo. Retorna o executionId para o teste montar
+  // as asserts sobre a notificacao gerada.
+  async function createCompletedChecklistWithCriticalAnswer(
+    adminAuth: string,
+    tenantId: string,
+    vehicleId: string,
+    booleanValue: boolean,
+  ): Promise<string> {
+    const driverId = await createDriver(adminAuth);
+    const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+    const email = `driver-${unique}@teste.com`;
+    const password = 'SenhaForte123!';
+    const userRes = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set('Authorization', adminAuth)
+      .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .patch(`/api/v1/drivers/${driverId}/user-link`)
+      .set('Authorization', adminAuth)
+      .send({ userAccountId: userRes.body.data.id })
+      .expect(200);
+    const loginRes = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ tenantId, email, password })
+      .expect(200);
+    const driverAuth = `Bearer ${loginRes.body.data.accessToken as string}`;
+
+    const templateRes = await request(app.getHttpServer())
+      .post('/api/v1/checklists/templates')
+      .set('Authorization', adminAuth)
+      .send({
+        name: `Pre-Viagem ${randomUUID()}`,
+        type: 'PRE_TRIP',
+        sections: [{ title: 'SEGURANCA', order: 1, items: [{ code: 'freio', label: 'Freio OK?', type: 'BOOLEAN', order: 1, required: true, critical: true }] }],
+      })
+      .expect(201);
+    const templateId = templateRes.body.data.id as string;
+    await request(app.getHttpServer()).post(`/api/v1/checklists/templates/${templateId}/publish`).set('Authorization', adminAuth).expect(200);
+
+    const execRes = await request(app.getHttpServer())
+      .post('/api/v1/driver/checklists')
+      .set('Authorization', driverAuth)
+      .send({ deviceEventId: randomUUID(), templateId, vehicleId })
+      .expect(201);
+    const executionId = execRes.body.data.id as string;
+    const itemId = templateRes.body.data.sections[0].items[0].id as string;
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/driver/checklists/${executionId}/answers`)
+      .set('Authorization', driverAuth)
+      .send({ answers: [{ itemId, booleanValue }] })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`/api/v1/driver/checklists/${executionId}/complete`)
+      .set('Authorization', driverAuth)
+      .expect(200);
+
+    return executionId;
   }
 
   async function createLocation(auth: string, name: string) {
@@ -520,6 +599,254 @@ describe('Notifications (e2e)', () => {
       expect(notif).toBeTruthy();
       expect(notif.metadata).toMatchObject({ vehicleId });
     });
+
+    // Fase 108 -- fecha a lacuna real: um MaintenancePlan (preventiva)
+    // vencido/proximo POR KM OU DATA, SEM nenhuma VehicleMaintenance aberta
+    // ainda (o caso normal -- MaintenancePlan nunca gera OS sozinho), agora
+    // tambem gera notificacao (antes so aparecia no dashboard de frota).
+    // Mesmo NotificationType.VEHICLE_MAINTENANCE ja existente, distinguido
+    // pelo entityType='MaintenancePlan' (vs. 'VehicleMaintenance' do teste
+    // acima).
+    async function createPlanWithCompletedService(
+      adminAuth: string,
+      vehicleId: string,
+      lastServiceOdometerKm: number,
+    ): Promise<string> {
+      const planRes = await request(app.getHttpServer())
+        .post('/api/v1/maintenance/plans')
+        .set('Authorization', adminAuth)
+        .send({ vehicleId, name: 'Troca de óleo', component: 'ENGINE_OIL', intervalKm: 10000, alertBeforeKm: 1000 })
+        .expect(201);
+      const planId = planRes.body.data.id as string;
+
+      const maintenanceRes = await request(app.getHttpServer())
+        .post('/api/v1/maintenances')
+        .set('Authorization', adminAuth)
+        .send({ vehicleId, type: 'PREVENTIVE', maintenancePlanId: planId, odometerKm: lastServiceOdometerKm, laborCost: 100 })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/maintenances/${maintenanceRes.body.data.id}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'COMPLETED', completedAt: new Date().toISOString() })
+        .expect(200);
+      return planId;
+    }
+
+    it('plano preventivo VENCIDO por km (sem nenhuma OS aberta) gera VEHICLE_MAINTENANCE com entityType=MaintenancePlan', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PlanOverdueNotif');
+      const vehicleId = await createVehicle(adminAuth);
+      const planId = await createPlanWithCompletedService(adminAuth, vehicleId, 90000);
+      await request(app.getHttpServer()).patch(`/api/v1/vehicles/${vehicleId}`).set('Authorization', adminAuth).send({ odometerKm: 100500 }).expect(200);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_MAINTENANCE' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === planId);
+      expect(notif).toBeTruthy();
+      expect(notif.entityType).toBe('MaintenancePlan');
+      expect(notif.severity).toBe('HIGH');
+      expect(notif.metadata).toMatchObject({ vehicleId });
+    });
+
+    it('plano preventivo PROXIMO do vencimento por km gera notificacao com severidade MEDIUM', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PlanDueSoonNotif');
+      const vehicleId = await createVehicle(adminAuth);
+      const planId = await createPlanWithCompletedService(adminAuth, vehicleId, 90000);
+      await request(app.getHttpServer()).patch(`/api/v1/vehicles/${vehicleId}`).set('Authorization', adminAuth).send({ odometerKm: 99500 }).expect(200);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_MAINTENANCE' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === planId);
+      expect(notif).toBeTruthy();
+      expect(notif.severity).toBe('MEDIUM');
+    });
+
+    it('plano preventivo EM DIA (nem vencido nem proximo) nunca gera notificacao', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PlanOkNoNotif');
+      const vehicleId = await createVehicle(adminAuth);
+      const planId = await createPlanWithCompletedService(adminAuth, vehicleId, 90000);
+      await request(app.getHttpServer()).patch(`/api/v1/vehicles/${vehicleId}`).set('Authorization', adminAuth).send({ odometerKm: 91000 }).expect(200);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_MAINTENANCE' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === planId)).toBeUndefined();
+    });
+
+    it('reprocessar (POST /notifications/process 2x) nunca duplica a notificacao do plano (deduplicacao ja existente)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('PlanDedupNotif');
+      const vehicleId = await createVehicle(adminAuth);
+      const planId = await createPlanWithCompletedService(adminAuth, vehicleId, 90000);
+      await request(app.getHttpServer()).patch(`/api/v1/vehicles/${vehicleId}`).set('Authorization', adminAuth).send({ odometerKm: 100500 }).expect(200);
+
+      await processNow(adminAuth);
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_MAINTENANCE' })
+        .expect(200);
+      const matches = res.body.data.items.filter((n: { entityId: string }) => n.entityId === planId);
+      expect(matches).toHaveLength(1);
+    });
+  });
+
+  // ==========================================================================
+  // Integracao: pneu proximo da troca por distancia (Fase 110)
+  // ==========================================================================
+  // Fase 110 -- mesmo NotificationType.TIRE_NEAR_REPLACEMENT ja existente
+  // (gerado ate aqui so por sulco, ver 'integracao -- manutencao de veiculo'
+  // acima para o padrao analogo de MaintenancePlan), agora tambem reage a
+  // distancia percorrida vs Tire.expectedLifespanKm, distinguido por
+  // entityType='TireLifespan'.
+  describe('integracao -- pneu proximo da troca por distancia', () => {
+    async function installWithOdometer(auth: string, tireId: string, vehicleId: string, odometerKm: number) {
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${tireId}/movements`)
+        .set('Authorization', auth)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Dianteiro Esquerdo', odometerKm })
+        .expect(201);
+    }
+
+    it('pneu que ja rodou 90%+ da vida util esperada gera TIRE_NEAR_REPLACEMENT com entityType=TireLifespan', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TireLifespanNotif');
+      const vehicleId = await createVehicle(adminAuth);
+      const tireId = await createTire(adminAuth, { expectedLifespanKm: 80000 });
+      await installWithOdometer(adminAuth, tireId, vehicleId, 100000);
+
+      const otherTireId = await createTire(adminAuth);
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${otherTireId}/movements`)
+        .set('Authorization', adminAuth)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Dianteiro Direito', odometerKm: 185000 })
+        .expect(201);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'TIRE_NEAR_REPLACEMENT' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === tireId);
+      expect(notif).toBeTruthy();
+      expect(notif.entityType).toBe('TireLifespan');
+      expect(notif.severity).toBe('HIGH');
+      expect(notif.metadata).toMatchObject({ vehicleId });
+    });
+
+    it('pneu bem abaixo da vida util esperada nunca gera notificacao por distancia', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TireLifespanOk');
+      const vehicleId = await createVehicle(adminAuth);
+      const tireId = await createTire(adminAuth, { expectedLifespanKm: 80000 });
+      await installWithOdometer(adminAuth, tireId, vehicleId, 100000);
+
+      const otherTireId = await createTire(adminAuth);
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${otherTireId}/movements`)
+        .set('Authorization', adminAuth)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicleId, newPosition: 'Dianteiro Direito', odometerKm: 110000 })
+        .expect(201);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'TIRE_NEAR_REPLACEMENT' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === tireId)).toBeUndefined();
+    });
+
+    it('pneu sem expectedLifespanKm cadastrado nunca gera notificacao por distancia (nunca inventa um limite)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('TireLifespanNoExpected');
+      const vehicleId = await createVehicle(adminAuth);
+      const tireId = await createTire(adminAuth);
+      await installWithOdometer(adminAuth, tireId, vehicleId, 200000);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'TIRE_NEAR_REPLACEMENT' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === tireId)).toBeUndefined();
+    });
+  });
+
+  // ==========================================================================
+  // Integracao: checklist com nao-conformidade critica (Fase 111)
+  // ==========================================================================
+  // Fase 111 -- reaproveita a MESMA hasCriticalNonConformity ja usada em
+  // GET /checklists/executions e em TripsService.assertPreTripChecklistSatisfied
+  // -- nenhuma segunda regra. Mesmo NotificationType.CHECKLIST_CRITICAL_NON_CONFORMITY
+  // novo, distinguido de outros tipos por entityType='ChecklistExecution'.
+  describe('integracao -- checklist com nao-conformidade critica', () => {
+    it('checklist COMPLETED com item critico respondido NAO gera CHECKLIST_CRITICAL_NON_CONFORMITY', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('ChecklistCriticalNotif');
+      const vehicleId = await createVehicle(adminAuth);
+      const executionId = await createCompletedChecklistWithCriticalAnswer(adminAuth, tenantId, vehicleId, false);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'CHECKLIST_CRITICAL_NON_CONFORMITY' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === executionId);
+      expect(notif).toBeTruthy();
+      expect(notif.entityType).toBe('ChecklistExecution');
+      expect(notif.severity).toBe('HIGH');
+      expect(notif.metadata).toMatchObject({ vehicleId });
+    });
+
+    it('checklist COMPLETED sem nao-conformidade critica nunca gera notificacao', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('ChecklistCriticalOk');
+      const vehicleId = await createVehicle(adminAuth);
+      const executionId = await createCompletedChecklistWithCriticalAnswer(adminAuth, tenantId, vehicleId, true);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'CHECKLIST_CRITICAL_NON_CONFORMITY' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === executionId)).toBeUndefined();
+    });
+
+    it('reprocessar (POST /notifications/process 2x) nunca duplica a notificacao do checklist', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('ChecklistCriticalDedup');
+      const vehicleId = await createVehicle(adminAuth);
+      const executionId = await createCompletedChecklistWithCriticalAnswer(adminAuth, tenantId, vehicleId, false);
+
+      await processNow(adminAuth);
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'CHECKLIST_CRITICAL_NON_CONFORMITY' })
+        .expect(200);
+      const matches = res.body.data.items.filter((n: { entityId: string }) => n.entityId === executionId);
+      expect(matches).toHaveLength(1);
+    });
   });
 
   // ==========================================================================
@@ -543,6 +870,70 @@ describe('Notifications (e2e)', () => {
         .query({ type: 'VEHICLE_UNAVAILABLE' })
         .expect(200);
       expect(res.body.data.items.some((n: { entityId: string }) => n.entityId === vehicleId)).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // Integracao: contrato vencendo (Fase 98) -- Fase 111 fecha uma lacuna real
+  // de cobertura de teste (nao um comportamento novo): esta suite nunca
+  // exercitava CONTRACT_EXPIRING, o que deixou passar despercebido um bug
+  // real de desalinhamento no Promise.all de collectCandidates (introduzido
+  // na Fase 110, corrigido nesta fase -- ver comentario em
+  // NotificationsService.collectCandidates) que descartava silenciosamente
+  // as notificacoes desse tipo.
+  // ==========================================================================
+  describe('integracao -- contrato vencendo', () => {
+    async function createCustomer(auth: string) {
+      const res = await request(app.getHttpServer()).post('/api/v1/customers').set('Authorization', auth).send({ name: 'Cliente Teste' }).expect(201);
+      return res.body.data.id as string;
+    }
+
+    async function createActiveContract(auth: string, endDate: string) {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/freight/contracts')
+        .set('Authorization', auth)
+        .send({ customerId: await createCustomer(auth), code: `CTR-${randomUUID().slice(0, 8)}`, startDate: '2026-01-01T00:00:00.000Z', endDate })
+        .expect(201);
+      const contractId = res.body.data.id as string;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/freight/contracts/${contractId}`)
+        .set('Authorization', auth)
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+      return contractId;
+    }
+
+    it('contrato ACTIVE vencendo dentro de 30 dias gera CONTRACT_EXPIRING', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('ContractExpiring');
+      const endDate = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const contractId = await createActiveContract(adminAuth, endDate);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'CONTRACT_EXPIRING' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === contractId);
+      expect(notif).toBeTruthy();
+      expect(notif.entityType).toBe('Contract');
+      expect(notif.severity).toBe('MEDIUM');
+    });
+
+    it('contrato ACTIVE com vencimento distante nunca gera CONTRACT_EXPIRING', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('ContractFar');
+      const endDate = new Date(Date.now() + 200 * 24 * 60 * 60 * 1000).toISOString();
+      const contractId = await createActiveContract(adminAuth, endDate);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'CONTRACT_EXPIRING' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === contractId)).toBeUndefined();
     });
   });
 

@@ -330,6 +330,34 @@ describe('Fuel Management (e2e)', () => {
       expect(createRes.body.data.tripId).toBe(tripId);
       expect(createRes.body.data.vehicleId).toBe(vehicleId);
       expect(createRes.body.data.driverId).toBe(driverId);
+      // Fase 107 -- tripLabel denormalizado ("origem -> destino"), mesma
+      // convencao ja usada por TripBillingEntity/FinanceReconciliationEntity.
+      expect(createRes.body.data.tripLabel).toEqual(expect.stringContaining(' → '));
+
+      const listRes = await request(app.getHttpServer())
+        .get('/api/v1/fuel-supplies')
+        .query({ tripId })
+        .set('Authorization', auth)
+        .expect(200);
+      expect(listRes.body.data.items).toHaveLength(1);
+      expect(listRes.body.data.items[0].tripLabel).toBe(createRes.body.data.tripLabel);
+    });
+
+    it('abastecimento sem viagem tem tripLabel nulo (nunca inventado)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('SupplyNoTripLabel');
+      const auth = `Bearer ${adminAccessToken}`;
+      const station = await createFuelStation(auth);
+      const vehicleId = await createVehicle(auth);
+      const driverId = await createDriver(auth);
+
+      const createRes = await createSupply(auth, {
+        vehicleId,
+        driverId,
+        fuelStationId: station.id,
+      }).expect(201);
+
+      expect(createRes.body.data.tripId).toBeNull();
+      expect(createRes.body.data.tripLabel).toBeNull();
     });
   });
 
@@ -718,5 +746,133 @@ describe('Fuel Management (e2e)', () => {
       expect(updateLog?.previousValue).toBeTruthy();
       expect(updateLog?.newValue).toBeTruthy();
     });
+  });
+
+  // Fase 107 -- RBAC do fluxo administrativo (/fuel-supplies). O fluxo do
+  // motorista (/driver/trips/:id/fuel-supplies) ja tem RBAC/ownership
+  // proprios cobertos em driver-trips.e2e-spec.ts -- nao duplicado aqui.
+  describe('RBAC', () => {
+    it('DRIVER (papel de usuario) nao acessa /fuel-supplies (403 em leitura e escrita)', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('RbacDriver');
+      const auth = `Bearer ${adminAccessToken}`;
+      const driverAuth = await createUserWithRole(tenantId, auth, 'DRIVER');
+      const station = await createFuelStation(auth);
+      const vehicleId = await createVehicle(auth);
+      const driverId = await createDriver(auth);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/fuel-supplies')
+        .set('Authorization', driverAuth)
+        .expect(403);
+      await createSupply(driverAuth, { vehicleId, driverId, fuelStationId: station.id }).expect(403);
+    });
+
+    it('AUDITOR le normalmente mas nao pode criar/editar/excluir (403)', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('RbacAuditor');
+      const auth = `Bearer ${adminAccessToken}`;
+      const auditorAuth = await createUserWithRole(tenantId, auth, 'AUDITOR');
+      const station = await createFuelStation(auth);
+      const vehicleId = await createVehicle(auth);
+      const driverId = await createDriver(auth);
+      const createRes = await createSupply(auth, {
+        vehicleId,
+        driverId,
+        fuelStationId: station.id,
+      }).expect(201);
+      const id = createRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .get('/api/v1/fuel-supplies')
+        .set('Authorization', auditorAuth)
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/v1/fuel-supplies/dashboard')
+        .set('Authorization', auditorAuth)
+        .expect(200);
+      await createSupply(auditorAuth, { vehicleId, driverId, fuelStationId: station.id }).expect(403);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/fuel-supplies/${id}`)
+        .set('Authorization', auditorAuth)
+        .send({ liters: 300 })
+        .expect(403);
+      await request(app.getHttpServer())
+        .delete(`/api/v1/fuel-supplies/${id}`)
+        .set('Authorization', auditorAuth)
+        .expect(403);
+    });
+  });
+
+  // Fase 107 -- confirma que GET /fuel-supplies e GET /fuel-supplies/dashboard
+  // continuam com contagem de queries FIXA (nunca 1 por registro) apos o
+  // include de trip/tripLabel adicionado nesta fase.
+  describe('ausencia de N+1', () => {
+    it('a contagem de queries de GET /fuel-supplies e GET /fuel-supplies/dashboard nao cresce com o numero de abastecimentos', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('N1Fuel');
+      const auth = `Bearer ${adminAccessToken}`;
+      const station = await createFuelStation(auth);
+      const vehicleId = await createVehicle(auth);
+      const driverId = await createDriver(auth);
+      const tripId = await setupTrip(auth, vehicleId, driverId);
+
+      async function seedSupplies(count: number, odometerStart: number): Promise<void> {
+        for (let i = 0; i < count; i += 1) {
+          await createSupply(auth, {
+            tripId,
+            fuelStationId: station.id,
+            odometerKm: odometerStart + i * 10,
+            supplyDate: new Date(2026, 8, 2, 10, i).toISOString(),
+          }).expect(201);
+        }
+      }
+
+      async function countQueriesDuring<T>(action: () => Promise<T>): Promise<number> {
+        let queries = 0;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (prisma as any).$use(async (_params: unknown, next: (p: unknown) => Promise<unknown>) => {
+          queries += 1;
+          return next(_params);
+        });
+        await action();
+        return queries;
+      }
+
+      await seedSupplies(5, 100000);
+      const queriesAt5List = await countQueriesDuring(() =>
+        request(app.getHttpServer())
+          .get('/api/v1/fuel-supplies')
+          .query({ pageSize: 50 })
+          .set('Authorization', auth)
+          .expect(200),
+      );
+      const queriesAt5Dashboard = await countQueriesDuring(() =>
+        request(app.getHttpServer())
+          .get('/api/v1/fuel-supplies/dashboard')
+          .set('Authorization', auth)
+          .expect(200),
+      );
+
+      await seedSupplies(20, 200000);
+      const queriesAt25List = await countQueriesDuring(() =>
+        request(app.getHttpServer())
+          .get('/api/v1/fuel-supplies')
+          .query({ pageSize: 50 })
+          .set('Authorization', auth)
+          .expect(200),
+      );
+      const queriesAt25Dashboard = await countQueriesDuring(() =>
+        request(app.getHttpServer())
+          .get('/api/v1/fuel-supplies/dashboard')
+          .set('Authorization', auth)
+          .expect(200),
+      );
+
+      // N+1 real produziria um crescimento ~proporcional (5x mais registros
+      // aqui). A arquitetura atual usa um numero FIXO de consultas (findMany +
+      // count / aggregate + groupBys + points), entao o crescimento esperado
+      // e proximo de zero -- limiar de +2 cobre variacao natural sem deixar
+      // passar uma regressao real.
+      expect(queriesAt25List).toBeLessThanOrEqual(queriesAt5List + 2);
+      expect(queriesAt25Dashboard).toBeLessThanOrEqual(queriesAt5Dashboard + 2);
+    }, 30_000);
   });
 });

@@ -251,6 +251,131 @@ describe('Fleet Maintenance -- planos e dashboard (e2e)', () => {
       const driverAuth = await createUserWithRole(tenantId, adminAuth, 'DRIVER');
       await request(app.getHttpServer()).get('/api/v1/maintenance/plans').set('Authorization', driverAuth).expect(403);
     });
+
+    // Fase 108 -- fecha a lacuna real: ate aqui so o dashboard de frota
+    // (GET /fleet-operations/maintenance) mostrava a avaliacao de vencimento
+    // de um plano; as rotas de CRUD de /maintenance/plans nunca devolviam
+    // isso. Reaproveita a MESMA funcao pura (evaluateMaintenancePlan),
+    // testada isoladamente em maintenance-plan-status.util.spec.ts -- aqui
+    // so confirma que o service liga os dados reais (VehicleMaintenance
+    // COMPLETED + Vehicle.odometerKm) corretamente via a rota HTTP.
+    describe('avaliacao de vencimento (Fase 108)', () => {
+      async function createPlanWithLastService(
+        adminAuth: string,
+        vehicleId: string,
+        lastServiceOdometerKm: number,
+      ): Promise<string> {
+        const planRes = await request(app.getHttpServer())
+          .post('/api/v1/maintenance/plans')
+          .set('Authorization', adminAuth)
+          .send({ vehicleId, name: 'Troca de óleo', component: 'ENGINE_OIL', intervalKm: 10000, alertBeforeKm: 1000 })
+          .expect(201);
+        const planId = planRes.body.data.id as string;
+        await createCompletedMaintenance(adminAuth, vehicleId, {
+          maintenancePlanId: planId,
+          odometerKm: lastServiceOdometerKm,
+        });
+        return planId;
+      }
+
+      it('UNKNOWN quando o plano nunca teve um servico COMPLETED vinculado', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanEvalUnknown');
+        const vehicleId = await createVehicle(adminAuth);
+        const planRes = await request(app.getHttpServer())
+          .post('/api/v1/maintenance/plans')
+          .set('Authorization', adminAuth)
+          .send({ vehicleId, name: 'Troca de óleo', component: 'ENGINE_OIL', intervalKm: 10000 })
+          .expect(201);
+
+        expect(planRes.body.data.status).toBe('UNKNOWN');
+        expect(planRes.body.data.dueOdometerKm).toBeNull();
+      });
+
+      it('OK quando falta mais que alertBeforeKm para o proximo vencimento', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanEvalOk');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlanWithLastService(adminAuth, vehicleId, 90000);
+        await setVehicleOdometer(adminAuth, vehicleId, 91000); // proximo vencimento: 100000, faltam 9000
+
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/maintenance/plans/${planId}`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(res.body.data.status).toBe('OK');
+        expect(res.body.data.dueOdometerKm).toBe(100000);
+      });
+
+      it('DUE_SOON quando falta menos que alertBeforeKm para o vencimento', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanEvalDueSoon');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlanWithLastService(adminAuth, vehicleId, 90000);
+        await setVehicleOdometer(adminAuth, vehicleId, 99500); // faltam 500, alertBeforeKm=1000
+
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/maintenance/plans/${planId}`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(res.body.data.status).toBe('DUE_SOON');
+      });
+
+      it('OVERDUE quando o odometro atual ja passou do vencimento, com overdueByKm correto', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanEvalOverdue');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlanWithLastService(adminAuth, vehicleId, 90000);
+        await setVehicleOdometer(adminAuth, vehicleId, 100500);
+
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/maintenance/plans/${planId}`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(res.body.data.status).toBe('OVERDUE');
+        expect(res.body.data.overdueByKm).toBe(500);
+
+        // Mesma avaliacao refletida na listagem (sem N+1 -- ver suite dedicada abaixo).
+        const listRes = await request(app.getHttpServer())
+          .get('/api/v1/maintenance/plans')
+          .set('Authorization', adminAuth)
+          .query({ vehicleId })
+          .expect(200);
+        expect(listRes.body.data.items[0].status).toBe('OVERDUE');
+      });
+    });
+
+    describe('auditoria', () => {
+      it('registra maintenance_plan.created/.updated/.deleted', async () => {
+        const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PlanAudit');
+        const vehicleId = await createVehicle(adminAuth);
+
+        const createRes = await request(app.getHttpServer())
+          .post('/api/v1/maintenance/plans')
+          .set('Authorization', adminAuth)
+          .send({ vehicleId, name: 'Troca de óleo', component: 'ENGINE_OIL', intervalKm: 10000 })
+          .expect(201);
+        const planId = createRes.body.data.id as string;
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/maintenance/plans/${planId}`)
+          .set('Authorization', adminAuth)
+          .send({ intervalKm: 12000 })
+          .expect(200);
+        await request(app.getHttpServer()).delete(`/api/v1/maintenance/plans/${planId}`).set('Authorization', adminAuth).expect(204);
+
+        const logs = await prisma.auditLog.findMany({
+          where: { tenantId, entityName: 'MaintenancePlan', entityId: planId },
+          orderBy: { createdAt: 'asc' },
+        });
+        expect(logs.map((l) => l.action)).toEqual([
+          'maintenance_plan.created',
+          'maintenance_plan.updated',
+          'maintenance_plan.deleted',
+        ]);
+        for (const log of logs) {
+          expect(log.tenantId).toBe(tenantId);
+          expect(log.userId).toBeTruthy();
+          expect(log.ipAddress).toBeTruthy();
+        }
+      });
+    });
   });
 
   // ==========================================================================
@@ -661,6 +786,36 @@ describe('Fleet Maintenance -- planos e dashboard (e2e)', () => {
           .get('/api/v1/fleet-operations/maintenance')
           .set('Authorization', adminAuth)
           .expect(200);
+        queriesByCheckpoint.push(queryCount);
+      }
+
+      const [queriesFor10, , , queriesFor100] = queriesByCheckpoint;
+      expect(queriesFor10).toBeGreaterThan(0);
+      expect(queriesFor100).toBeLessThanOrEqual(queriesFor10 + 1);
+    }, 180000);
+
+    // Fase 108 -- a avaliacao de vencimento (evaluatePlansInBatch) adicionada
+    // ao GET /maintenance/plans usa o MESMO padrao de 2 queries em lote
+    // (nunca 1 por plano) ja comprovado acima para o dashboard -- confirma
+    // que a contagem tambem nao cresce aqui.
+    it('a contagem de queries de GET /maintenance/plans nao cresce entre 10, 25, 50 e 100 planos', async () => {
+      const { adminAuth } = await createTenantAndLoginOnCountingApp('N1Plans');
+      const checkpoints = [10, 25, 50, 100];
+      const queriesByCheckpoint: number[] = [];
+      let seeded = 0;
+
+      for (const checkpoint of checkpoints) {
+        while (seeded < checkpoint) {
+          await seedVehicleWithMaintenance(adminAuth);
+          seeded += 1;
+        }
+        queryCount = 0;
+        const res = await request(countingApp.getHttpServer())
+          .get('/api/v1/maintenance/plans')
+          .set('Authorization', adminAuth)
+          .query({ pageSize: 100 })
+          .expect(200);
+        expect(res.body.data.items).toHaveLength(checkpoint);
         queriesByCheckpoint.push(queryCount);
       }
 

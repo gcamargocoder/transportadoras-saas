@@ -13,6 +13,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { RECEIVABLE_READ_ROLES, RECEIVABLE_WRITE_ROLES } from '../constants/receivable-roles.constants';
+import { CreateReceivableDto } from '../dto/create-receivable.dto';
 import { FindReceivablesDashboardQueryDto } from '../dto/find-receivables-dashboard-query.dto';
 import { FindReceivablesQueryDto } from '../dto/find-receivables-query.dto';
 import { GenerateReceivableDto } from '../dto/generate-receivable.dto';
@@ -55,6 +56,23 @@ export class ReceivablesController {
     return this.receivablesService.generateFromBilling(
       this.tenantContext.requireTenantId(),
       billingId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post()
+  @Roles(...RECEIVABLE_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Cria um titulo MANUAL (sem viagem/faturamento de origem) -- ex: servico avulso, locacao, ressarcimento. ' +
+      'Quando installments > 1, gera todas as parcelas de uma vez (mesmo installmentGroupId).',
+  })
+  @ApiCreatedResponse({ type: ReceivableEntity, isArray: true })
+  create(@Body() dto: CreateReceivableDto): Promise<ReceivableEntity[]> {
+    return this.receivablesService.create(
+      this.tenantContext.requireTenantId(),
       dto,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,

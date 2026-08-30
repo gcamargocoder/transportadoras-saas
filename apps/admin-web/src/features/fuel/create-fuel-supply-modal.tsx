@@ -58,9 +58,14 @@ type FormValues = z.infer<typeof schema>;
 export function CreateFuelSupplyModal({
   open,
   onClose,
+  defaultTripId,
 }: {
   open: boolean;
   onClose: () => void;
+  // Fase 107 -- pre-seleciona a viagem quando aberto a partir da aba
+  // "Combustível" da própria viagem (mesmo padrão de `CreateTollModal`
+  // `tripId`); continua editável, nunca travado.
+  defaultTripId?: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -73,7 +78,7 @@ export function CreateFuelSupplyModal({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { fuelType: 'DIESEL_S10' },
+    defaultValues: { fuelType: 'DIESEL_S10', tripId: defaultTripId },
   });
 
   const tripId = watch('tripId');

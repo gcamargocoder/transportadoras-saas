@@ -46,6 +46,9 @@ export function toTireEntity(tire: TireWithRelations, lifecycle?: TireLifecycleR
         interventionsCount: lifecycle.interventionsCount,
         daysInstalled: lifecycle.daysInstalled,
         costPerKm: lifecycle.costPerKm,
+        distanceTraveledSinceInstallKm: lifecycle.distanceTraveledSinceInstallKm,
+        remainingLifespanKm: lifecycle.remainingLifespanKm,
+        lifespanUsedPercent: lifecycle.lifespanUsedPercent,
       })
     : null;
   return entity;

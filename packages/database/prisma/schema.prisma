@@ -1238,6 +1238,13 @@ model VehicleMaintenance {
   /// (preventiva agendada). Opcional -- corretivas e preventivas avulsas
   /// nunca tem plano.
   maintenancePlanId    String?                    @map("maintenance_plan_id") @db.Uuid
+  /// Fase 111 -- vinculo opcional com a execucao de checklist (pre/pos-
+  /// viagem) cuja nao-conformidade critica motivou a abertura desta OS.
+  /// MESMO padrao ja usado por TireMovement.maintenanceId (Fase 109): so
+  /// preenchido quando o admin abre a OS explicitamente a partir de um
+  /// checklist (nunca criado automaticamente) -- nenhuma segunda maquina de
+  /// estados "checklist em manutencao".
+  checklistExecutionId String?                    @map("checklist_execution_id") @db.Uuid
   createdAt            DateTime                   @default(now()) @map("created_at")
   updatedAt            DateTime                   @updatedAt @map("updated_at")
 
@@ -1245,10 +1252,14 @@ model VehicleMaintenance {
   vehicle            Vehicle              @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   responsibleUser    UserAccount?         @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull)
   maintenancePlan    MaintenancePlan?     @relation(fields: [maintenancePlanId], references: [id], onDelete: SetNull)
+  checklistExecution ChecklistExecution?  @relation(fields: [checklistExecutionId], references: [id], onDelete: SetNull)
   parts              MaintenancePart[]
   /// Fase 83 -- saidas de estoque geradas ao concluir esta OS (ver
   /// PartsService.consumePartsForMaintenance).
   partStockMovements PartStockMovement[]
+  /// Fase 109 -- movimentacoes de pneu (troca/instalacao/remocao) vinculadas
+  /// a esta OS, quando aplicavel (ver TireMovement.maintenanceId).
+  tireMovements      TireMovement[]
   /// Fase 84 -- oficina/fornecedor vinculados (ver comentario de workshopId/
   /// supplierId acima).
   workshopProvider   MaintenanceProvider? @relation("MaintenanceWorkshop", fields: [workshopId], references: [id], onDelete: SetNull)
@@ -1262,6 +1273,7 @@ model VehicleMaintenance {
   @@index([maintenancePlanId])
   @@index([workshopId])
   @@index([supplierId])
+  @@index([checklistExecutionId])
   @@map("vehicle_maintenances")
 }
 
@@ -1555,19 +1567,29 @@ model TireMovement {
   newPosition          String?           @map("new_position")
   odometerKm           Decimal?          @map("odometer_km") @db.Decimal(10, 2)
   reason               String?
+  /// Fase 109 -- vinculo opcional com a OS (VehicleMaintenance) que motivou
+  /// esta troca/movimentacao, quando aplicavel. MESMO padrao ja usado por
+  /// PartStockMovement.maintenanceId (Fase 83): uma OS pode estar ligada a
+  /// varias movimentacoes de pneu (troca de mais de um pneu na mesma
+  /// visita), cada uma sua propria linha -- nunca uma segunda maquina de
+  /// estados "pneu em manutencao". Ausente = movimentacao avulsa, sem
+  /// vinculo com nenhuma OS (comportamento identico ao pre-Fase 109).
+  maintenanceId        String?           @map("maintenance_id") @db.Uuid
   createdBy            String            @map("created_by") @db.Uuid
   createdAt            DateTime          @default(now()) @map("created_at")
 
-  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tire            Tire        @relation(fields: [tireId], references: [id], onDelete: Cascade)
-  previousVehicle Vehicle?    @relation("TireMovementPreviousVehicle", fields: [previousVehicleId], references: [id], onDelete: SetNull)
-  newVehicle      Vehicle?    @relation("TireMovementNewVehicle", fields: [newVehicleId], references: [id], onDelete: SetNull)
-  previousTrailer Trailer?    @relation("TireMovementPreviousTrailer", fields: [previousTrailerId], references: [id], onDelete: SetNull)
-  newTrailer      Trailer?    @relation("TireMovementNewTrailer", fields: [newTrailerId], references: [id], onDelete: SetNull)
-  creator         UserAccount @relation("TireMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tire            Tire                @relation(fields: [tireId], references: [id], onDelete: Cascade)
+  previousVehicle Vehicle?            @relation("TireMovementPreviousVehicle", fields: [previousVehicleId], references: [id], onDelete: SetNull)
+  newVehicle      Vehicle?            @relation("TireMovementNewVehicle", fields: [newVehicleId], references: [id], onDelete: SetNull)
+  previousTrailer Trailer?            @relation("TireMovementPreviousTrailer", fields: [previousTrailerId], references: [id], onDelete: SetNull)
+  newTrailer      Trailer?            @relation("TireMovementNewTrailer", fields: [newTrailerId], references: [id], onDelete: SetNull)
+  maintenance     VehicleMaintenance? @relation(fields: [maintenanceId], references: [id], onDelete: SetNull)
+  creator         UserAccount         @relation("TireMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([tenantId, tireId])
+  @@index([maintenanceId])
   @@map("tire_movements")
 }
 
@@ -2916,6 +2938,10 @@ enum NotificationType {
   /// 30 dias) -- nunca um segundo limiar. Contract.status=ACTIVE com
   /// endDate dentro do limiar (inclusive ja vencido).
   CONTRACT_EXPIRING
+  /// Fase 111 -- ChecklistExecution COMPLETED com item critical+required
+  /// respondido NAO (mesmo criterio de hasCriticalNonConformity/
+  /// checklist-non-conformity.util.ts, nunca uma segunda regra).
+  CHECKLIST_CRITICAL_NON_CONFORMITY
 
   @@map("notification_type")
 }
@@ -3829,14 +3855,17 @@ model ChecklistExecution {
   createdAt          DateTime                 @default(now()) @map("created_at")
   updatedAt          DateTime                 @updatedAt @map("updated_at")
 
-  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  template ChecklistTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  trip     Trip?               @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  driver   Driver?             @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  vehicle  Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  trailer  Trailer?            @relation(fields: [trailerId], references: [id], onDelete: SetNull)
-  answers  ChecklistAnswer[]
-  evidence ChecklistEvidence[]
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template     ChecklistTemplate    @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  trip         Trip?                @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  driver       Driver?              @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle      Vehicle?             @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  trailer      Trailer?             @relation(fields: [trailerId], references: [id], onDelete: SetNull)
+  answers      ChecklistAnswer[]
+  evidence     ChecklistEvidence[]
+  /// Fase 111 -- OS(s) abertas a partir de uma nao-conformidade critica
+  /// encontrada neste checklist (ver VehicleMaintenance.checklistExecutionId).
+  maintenances VehicleMaintenance[]
 
   @@unique([tenantId, deviceEventId])
   @@index([tenantId, status])
@@ -4032,6 +4061,14 @@ model FiscalDocument {
   customer         Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
   creator          UserAccount       @relation("FiscalDocumentCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   updater          UserAccount?      @relation("FiscalDocumentUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  /// Fase Fiscal/XML -- lado reverso de Payable.fiscalDocumentId (1:1
+  /// opcional). Presente quando o usuario gerou uma conta a pagar a partir
+  /// deste documento (autopreenchimento, nunca automatico) -- ver
+  /// FiscalDocumentsService/PayablesService.create.
+  payable          Payable?
+  /// Fase Fiscal/XML -- lado reverso de Receivable.fiscalDocumentId, mesmo
+  /// principio de `payable` acima.
+  receivable       Receivable?
 
   @@unique([tenantId, accessKey])
   @@index([tenantId, documentType])
@@ -4816,45 +4853,69 @@ enum ReceivablePaymentMethod {
 /// originalAmount/dueDate) porque OVERDUE depende da passagem do tempo
 /// (uma coluna estatica ficaria desatualizada sem um job).
 model Receivable {
-  id             String           @id @default(uuid()) @db.Uuid
-  tenantId       String           @map("tenant_id") @db.Uuid
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
   /// Copiado de Trip.customerId no momento da geracao -- nulo quando a
   /// viagem nao tinha cliente vinculado (mesmo estado ja possivel em
-  /// TripRevenue.customerId).
-  customerId     String?          @map("customer_id") @db.Uuid
-  tripId         String           @map("trip_id") @db.Uuid
-  /// @unique -- garante a idempotencia exigida (secao 19): nunca 2 titulos
-  /// para o mesmo faturamento, reforcado por constraint de banco (nunca so
-  /// em memoria).
-  billingId      String           @unique @map("billing_id") @db.Uuid
-  description    String
-  originalAmount Decimal          @map("original_amount") @db.Decimal(12, 2)
+  /// TripRevenue.customerId), OU informado diretamente num titulo manual
+  /// (Fase Financeiro CP/CR -- ver comentario acima do model).
+  customerId         String?          @map("customer_id") @db.Uuid
+  /// Nullable desde a Fase Financeiro CP/CR: um titulo MANUAL (POST
+  /// /receivables, sem faturamento de viagem -- ex: servico avulso) nao tem
+  /// viagem nenhuma. Titulos gerados por POST /receivables/from-billing
+  /// continuam sempre preenchendo este campo (copiado de TripBilling.tripId).
+  tripId             String?          @map("trip_id") @db.Uuid
+  /// Nullable pelo mesmo motivo de tripId acima -- um titulo manual nao tem
+  /// faturamento de origem. @unique continua garantindo a idempotencia
+  /// (secao 19): nunca 2 titulos para o mesmo faturamento (Postgres permite
+  /// varios NULL sob unique -- nao restringe titulos manuais entre si).
+  billingId          String?          @unique @map("billing_id") @db.Uuid
+  /// Fase Fiscal/XML -- origem alternativa a billingId: titulo MANUAL gerado
+  /// a partir de um FiscalDocument (NF-e/CT-e com valor extraido do XML,
+  /// autopreenchimento no formulario de criacao manual -- ver
+  /// ReceivablesService.create). @unique pelo mesmo motivo de billingId:
+  /// nunca 2 titulos para o mesmo documento fiscal. Mutuamente exclusivo com
+  /// parcelamento (installments) -- ver validacao no service.
+  fiscalDocumentId   String?          @unique @map("fiscal_document_id") @db.Uuid
+  /// Fase Financeiro CP/CR -- parcelamento (somente na criacao MANUAL, ver
+  /// ReceivablesService.create). Todas as parcelas de um mesmo titulo
+  /// parcelado compartilham o mesmo installmentGroupId (UUID gerado na
+  /// criacao, nunca reaproveitado de outro model). Titulos nao parcelados
+  /// (incluindo todos os gerados a partir de faturamento) tem os 3 campos
+  /// nulos.
+  installmentGroupId String?          @map("installment_group_id") @db.Uuid
+  installmentNumber  Int?             @map("installment_number")
+  installmentTotal   Int?             @map("installment_total")
+  description        String
+  originalAmount     Decimal          @map("original_amount") @db.Decimal(12, 2)
   /// Materializado -- ver comentario do model acima. Nunca editado direto,
   /// sempre incrementado dentro da transacao que cria um ReceivablePayment.
-  receivedAmount Decimal          @default(0) @map("received_amount") @db.Decimal(12, 2)
-  issueDate      DateTime         @map("issue_date")
-  dueDate        DateTime         @map("due_date")
+  receivedAmount     Decimal          @default(0) @map("received_amount") @db.Decimal(12, 2)
+  issueDate          DateTime         @map("issue_date")
+  dueDate            DateTime         @map("due_date")
   /// Ver comentario do enum ReceivableStatus -- nunca OVERDUE aqui.
-  status         ReceivableStatus @default(OPEN)
+  status             ReceivableStatus @default(OPEN)
   /// Cancelamento (secao 10) -- preserva historico de pagamentos ja
   /// registrados, apenas bloqueia novos.
-  cancelledAt    DateTime?        @map("cancelled_at")
-  cancelledBy    String?          @map("cancelled_by") @db.Uuid
-  createdBy      String           @map("created_by") @db.Uuid
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
+  cancelledAt        DateTime?        @map("cancelled_at")
+  cancelledBy        String?          @map("cancelled_by") @db.Uuid
+  createdBy          String           @map("created_by") @db.Uuid
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
 
-  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer  Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  trip      Trip                @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  billing   TripBilling         @relation(fields: [billingId], references: [id], onDelete: Cascade)
-  creator   UserAccount         @relation("ReceivableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  canceller UserAccount?        @relation("ReceivableCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
-  payments  ReceivablePayment[]
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer       Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  trip           Trip?               @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  billing        TripBilling?        @relation(fields: [billingId], references: [id], onDelete: Cascade)
+  fiscalDocument FiscalDocument?     @relation(fields: [fiscalDocumentId], references: [id], onDelete: SetNull)
+  creator        UserAccount         @relation("ReceivableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  canceller      UserAccount?        @relation("ReceivableCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  payments       ReceivablePayment[]
 
   @@index([tenantId])
   @@index([tenantId, customerId])
   @@index([tenantId, tripId])
+  @@index([tenantId, installmentGroupId])
   @@index([tenantId, dueDate])
   @@index([tenantId, status])
   @@map("receivables")
@@ -4872,6 +4933,18 @@ model ReceivablePayment {
   amount                 Decimal                 @db.Decimal(12, 2)
   paymentDate            DateTime                @map("payment_date")
   paymentMethod          ReceivablePaymentMethod @map("payment_method")
+  /// Fase Financeiro CP/CR -- juros/multa por atraso, sempre informados
+  /// manualmente pelo usuario (nunca calculados por uma taxa automatica --
+  /// o projeto nao modela nenhuma regra de juros/mora). Somam ao valor
+  /// REAL recebido (FinancialTransaction), mas nunca abatem o saldo do
+  /// titulo (Receivable.originalAmount nunca inclui juros/multa).
+  interestAmount         Decimal?                @map("interest_amount") @db.Decimal(12, 2)
+  fineAmount             Decimal?                @map("fine_amount") @db.Decimal(12, 2)
+  /// Desconto concedido neste recebimento -- ABATE o saldo do titulo (soma
+  /// a receivedAmount igual que `amount`, ver ReceivablesService.
+  /// registerPayment), mas NAO gera movimentacao financeira real (nenhum
+  /// dinheiro correspondente entra na FinancialTransaction).
+  discountAmount         Decimal?                @map("discount_amount") @db.Decimal(12, 2)
   reference              String?
   notes                  String?                 @db.Text
   /// Fase 79 -- conta financeira onde o recebimento efetivamente entrou.
@@ -4900,16 +4973,18 @@ model ReceivablePayment {
 
 // ============================================================================
 // CONTAS A PAGAR (Fase 73) — espelho de "CONTAS A RECEBER" (Fase 72) para o
-// lado da despesa. Payable e um titulo gerado A PARTIR de uma TripExpense
-// (1:1, expenseId @unique garante idempotencia -- nunca 2 titulos para a
-// mesma despesa), nunca um segundo ledger de despesas: TripExpense
-// continua sendo a UNICA fonte de verdade do custo operacional; Payable
-// so adiciona o que TripExpense nao tem (dueDate + historico de pagamento
-// real via PayablePayment). category/paymentMethod REAPROVEITAM os enums
-// ja existentes (ExpenseCategory/ExpensePaymentMethod) -- nenhum enum
-// paralelo. O projeto nao possui um model Supplier: supplierName e um
-// snapshot de texto livre (TripExpense.supplier), nunca uma relacao
-// inventada (ver docs/payables.md).
+// lado da despesa. Payable e gerado A PARTIR de uma TripExpense (1:1,
+// expenseId @unique garante idempotencia -- nunca 2 titulos para a mesma
+// despesa) OU criado MANUALMENTE (Fase Financeiro CP/CR -- tripId/expenseId
+// nulos, para custos administrativos sem viagem: aluguel, seguro, fornecedor
+// nao-operacional). TripExpense continua sendo a UNICA fonte de verdade do
+// custo OPERACIONAL da viagem; Payable so adiciona o que TripExpense nao tem
+// (dueDate + historico de pagamento real via PayablePayment) e, para
+// titulos manuais, e a UNICA fonte (nao ha TripExpense correspondente).
+// category/paymentMethod REAPROVEITAM os enums ja existentes
+// (ExpenseCategory/ExpensePaymentMethod) -- nenhum enum paralelo. O projeto
+// nao possui um model Supplier: supplierName e um snapshot/entrada de texto
+// livre, nunca uma relacao inventada (ver docs/payables.md).
 // ============================================================================
 
 /// Mesmo espirito de ReceivableStatus (Fase 72): nunca contem OVERDUE
@@ -4930,39 +5005,64 @@ enum PayableStatus {
 /// de PayablePayment.amount, atualizado na mesma transacao de cada
 /// pagamento), mesmo motivo de Receivable.receivedAmount (Fase 72).
 model Payable {
-  id             String          @id @default(uuid()) @db.Uuid
-  tenantId       String          @map("tenant_id") @db.Uuid
-  tripId         String          @map("trip_id") @db.Uuid
-  /// @unique -- idempotencia (secao 22): nunca 2 titulos para a mesma despesa.
-  expenseId      String          @unique @map("expense_id") @db.Uuid
+  id                 String          @id @default(uuid()) @db.Uuid
+  tenantId           String          @map("tenant_id") @db.Uuid
+  /// Nullable desde a Fase Financeiro CP/CR: um titulo MANUAL (POST
+  /// /payables, sem despesa de viagem -- ex: aluguel, seguro, fornecedor
+  /// administrativo) nao tem viagem nenhuma. Titulos gerados por POST
+  /// /payables/from-expense continuam sempre preenchendo este campo
+  /// (copiado de TripExpense.tripId).
+  tripId             String?         @map("trip_id") @db.Uuid
+  /// Nullable pelo mesmo motivo de tripId acima. @unique continua
+  /// garantindo a idempotencia (secao 22): nunca 2 titulos para a mesma
+  /// despesa (Postgres permite varios NULL sob unique -- nao restringe
+  /// titulos manuais entre si).
+  expenseId          String?         @unique @map("expense_id") @db.Uuid
+  /// Fase Fiscal/XML -- origem alternativa a expenseId: titulo MANUAL gerado
+  /// a partir de um FiscalDocument (NF-e/CT-e com valor extraido do XML,
+  /// autopreenchimento no formulario de criacao manual -- ver
+  /// PayablesService.create). @unique pelo mesmo motivo de expenseId: nunca
+  /// 2 titulos para o mesmo documento fiscal. Mutuamente exclusivo com
+  /// parcelamento (installments) -- um documento fiscal gera 1 titulo, nunca
+  /// N parcelas (ver validacao no service).
+  fiscalDocumentId   String?         @unique @map("fiscal_document_id") @db.Uuid
   /// Snapshot de TripExpense.supplier (texto livre) -- o projeto nao possui
-  /// um model Supplier estruturado, entao nunca inventamos uma relacao.
-  supplierName   String?         @map("supplier_name")
-  /// Snapshot de TripExpense.category -- reaproveita o enum ja existente
-  /// (nunca um enum paralelo, secao 13).
-  category       ExpenseCategory
-  description    String
-  originalAmount Decimal         @map("original_amount") @db.Decimal(12, 2)
+  /// um model Supplier estruturado, entao nunca inventamos uma relacao. Num
+  /// titulo manual, informado diretamente pelo usuario (mesmo campo).
+  supplierName       String?         @map("supplier_name")
+  /// Snapshot de TripExpense.category quando gerado a partir de despesa, ou
+  /// escolhido diretamente pelo usuario num titulo manual -- reaproveita o
+  /// enum ja existente (nunca um enum paralelo, secao 13).
+  category           ExpenseCategory
+  description        String
+  originalAmount     Decimal         @map("original_amount") @db.Decimal(12, 2)
   /// Materializado -- ver comentario do model acima.
-  paidAmount     Decimal         @default(0) @map("paid_amount") @db.Decimal(12, 2)
-  issueDate      DateTime        @map("issue_date")
-  dueDate        DateTime        @map("due_date")
-  status         PayableStatus   @default(OPEN)
-  cancelledAt    DateTime?       @map("cancelled_at")
-  cancelledBy    String?         @map("cancelled_by") @db.Uuid
-  createdBy      String          @map("created_by") @db.Uuid
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @updatedAt @map("updated_at")
+  paidAmount         Decimal         @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  issueDate          DateTime        @map("issue_date")
+  dueDate            DateTime        @map("due_date")
+  status             PayableStatus   @default(OPEN)
+  cancelledAt        DateTime?       @map("cancelled_at")
+  cancelledBy        String?         @map("cancelled_by") @db.Uuid
+  /// Fase Financeiro CP/CR -- parcelamento (somente na criacao MANUAL, ver
+  /// PayablesService.create). Mesmo desenho de Receivable.installmentGroupId.
+  installmentGroupId String?         @map("installment_group_id") @db.Uuid
+  installmentNumber  Int?            @map("installment_number")
+  installmentTotal   Int?            @map("installment_total")
+  createdBy          String          @map("created_by") @db.Uuid
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
 
-  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip      Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  expense   TripExpense      @relation(fields: [expenseId], references: [id], onDelete: Cascade)
-  creator   UserAccount      @relation("PayableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  canceller UserAccount?     @relation("PayableCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
-  payments  PayablePayment[]
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip           Trip?            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  expense        TripExpense?     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  fiscalDocument FiscalDocument?  @relation(fields: [fiscalDocumentId], references: [id], onDelete: SetNull)
+  creator        UserAccount      @relation("PayableCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  canceller      UserAccount?     @relation("PayableCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  payments       PayablePayment[]
 
   @@index([tenantId])
   @@index([tenantId, tripId])
+  @@index([tenantId, installmentGroupId])
   @@index([tenantId, dueDate])
   @@index([tenantId, status])
   @@index([tenantId, category])
@@ -4980,6 +5080,15 @@ model PayablePayment {
   amount                 Decimal              @db.Decimal(12, 2)
   paymentDate            DateTime             @map("payment_date")
   paymentMethod          ExpensePaymentMethod @map("payment_method")
+  /// Fase Financeiro CP/CR -- juros/multa por atraso, sempre informados
+  /// manualmente (nunca calculados por uma taxa automatica). Somam ao valor
+  /// REAL pago (FinancialTransaction), mas nunca abatem o saldo do titulo.
+  interestAmount         Decimal?             @map("interest_amount") @db.Decimal(12, 2)
+  fineAmount             Decimal?             @map("fine_amount") @db.Decimal(12, 2)
+  /// Desconto concedido neste pagamento -- ABATE o saldo do titulo (soma a
+  /// paidAmount igual que `amount`, ver PayablesService.registerPayment),
+  /// mas NAO gera movimentacao financeira real.
+  discountAmount         Decimal?             @map("discount_amount") @db.Decimal(12, 2)
   reference              String?
   notes                  String?              @db.Text
   /// Fase 79 -- conta financeira de onde o pagamento efetivamente saiu.

@@ -314,6 +314,52 @@ describe('Fleet Operations Tires Overview (e2e)', () => {
       const alert = data.tireAlerts.find((a: { type: string; vehicleId: string }) => a.type === 'TIRE_NEAR_REPLACEMENT' && a.vehicleId === vehicle);
       expect(alert).toMatchObject({ severity: 'ATTENTION', value: 2 });
     });
+
+    // Fase 110 -- mesmo indicador (nearReplacementCount/tireAlerts), agora
+    // tambem reagindo a distancia percorrida vs Tire.expectedLifespanKm
+    // (nao so ao sulco medido manualmente).
+    it('gera TIRE_NEAR_REPLACEMENT por DISTANCIA quando o pneu ja rodou 90%+ da vida util esperada (mesmo com sulco alto)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('NearReplacementDistance');
+      const vehicle = await createVehicle(adminAuth);
+
+      const wornByDistance = await createTire(adminAuth, { initialTreadDepthMm: 20, expectedLifespanKm: 80000 });
+      await mountTireOnVehicle(adminAuth, wornByDistance, vehicle);
+      // bumpa Vehicle.odometerKm para 130000 (mesma regra do abastecimento, Fase 110)
+      const other = await createTire(adminAuth, { initialTreadDepthMm: 20 });
+      await request(app.getHttpServer())
+        .post(`/api/v1/tires/${other}/movements`)
+        .set('Authorization', adminAuth)
+        .send({ newLocationType: 'VEHICLE', newVehicleId: vehicle, newPosition: 'Dianteiro Direito', odometerKm: 130000 })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/tires')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      const data = res.body.data;
+
+      expect(data.nearReplacementCount).toBe(1);
+      const alert = data.tireAlerts.find(
+        (a: { type: string; vehicleId: string }) => a.type === 'TIRE_NEAR_REPLACEMENT' && a.vehicleId === vehicle,
+      );
+      expect(alert).toBeTruthy();
+      expect(alert.severity).toBe('ATTENTION');
+    });
+
+    it('pneu sem expectedLifespanKm ou bem abaixo da vida util nunca conta em nearReplacementCount por distancia', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('NearReplacementDistanceOk');
+      const vehicle = await createVehicle(adminAuth);
+
+      const okTire = await createTire(adminAuth, { initialTreadDepthMm: 20, expectedLifespanKm: 80000 });
+      await mountTireOnVehicle(adminAuth, okTire, vehicle);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/fleet-operations/tires')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.nearReplacementCount).toBe(0);
+      expect(res.body.data.tireAlerts).toEqual([]);
+    });
   });
 
   // ==========================================================================

@@ -24,6 +24,9 @@ const schema = z.object({
   financialAccountId: z.string().min(1, 'Selecione a conta financeira.'),
   reference: z.string().optional(),
   notes: z.string().optional(),
+  interestAmount: z.coerce.number().min(0, 'Nao pode ser negativo.').optional(),
+  fineAmount: z.coerce.number().min(0, 'Nao pode ser negativo.').optional(),
+  discountAmount: z.coerce.number().min(0, 'Nao pode ser negativo.').optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -68,6 +71,9 @@ export function PayableRegisterPaymentModal({
         paymentDate: new Date(values.paymentDate).toISOString(),
         reference: values.reference || undefined,
         notes: values.notes || undefined,
+        interestAmount: values.interestAmount || undefined,
+        fineAmount: values.fineAmount || undefined,
+        discountAmount: values.discountAmount || undefined,
       }),
     onSuccess: (_, values) => {
       const accountName = accounts.find((a) => a.id === values.financialAccountId)?.name ?? '';
@@ -151,6 +157,30 @@ export function PayableRegisterPaymentModal({
         </FormField>
         <FormField label="Observações" htmlFor="payable-payment-notes" hint="Opcional" className="sm:col-span-2">
           <Input id="payable-payment-notes" {...register('notes')} />
+        </FormField>
+        <FormField
+          label="Juros (R$)"
+          htmlFor="payable-payment-interest"
+          hint="Opcional — não abate o saldo do título"
+          error={errors.interestAmount?.message}
+        >
+          <Input id="payable-payment-interest" type="number" step="0.01" min={0} {...register('interestAmount')} />
+        </FormField>
+        <FormField
+          label="Multa (R$)"
+          htmlFor="payable-payment-fine"
+          hint="Opcional — não abate o saldo do título"
+          error={errors.fineAmount?.message}
+        >
+          <Input id="payable-payment-fine" type="number" step="0.01" min={0} {...register('fineAmount')} />
+        </FormField>
+        <FormField
+          label="Desconto (R$)"
+          htmlFor="payable-payment-discount"
+          hint="Opcional — abate o saldo, mas não movimenta caixa"
+          error={errors.discountAmount?.message}
+        >
+          <Input id="payable-payment-discount" type="number" step="0.01" min={0} {...register('discountAmount')} />
         </FormField>
       </form>
     </Modal>

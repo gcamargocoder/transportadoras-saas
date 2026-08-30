@@ -1,12 +1,17 @@
-# Contas a receber (Fase 72)
+# Contas a receber (Fase 72 + Fase Financeiro CP/CR)
 
 ## Objetivo
 
 Transformar o faturamento operacional já existente (Fase 60, `TripBilling`)
 em uma visão de **cobrança e acompanhamento**: quanto está em aberto,
 vencido, a vencer, recebido — por título e por cliente. Não é um segundo
-sistema financeiro: `Receivable` é gerado **a partir de** um `TripBilling`
-existente, nunca uma fonte de verdade paralela.
+sistema financeiro. Na Fase 72, `Receivable` só podia ser gerado **a
+partir de** um `TripBilling` existente. A fase "Financeiro CP/CR"
+(auditoria/consolidação do módulo, ver seção abaixo) adicionou uma
+segunda origem: **criação manual**, para receitas sem vínculo com uma
+viagem (serviço avulso, locação, ressarcimento). `TripBilling` continua
+sendo a única fonte de verdade do faturamento **operacional** da viagem —
+a criação manual nunca duplica nem substitui isso.
 
 ## Auditoria (o que já existia antes desta fase)
 
@@ -109,6 +114,53 @@ completo filtrado em memória) — ver `buildReceivableStatusWhere`.
   `TripBillingService.invoice`, que também não tem proteção contra
   double-submit do cliente — fora do escopo desta fase introduzir
   idempotency keys em toda a API financeira).
+
+## Origem em documento fiscal (Fase Fiscal/XML)
+
+`POST /receivables` também aceita `fiscalDocumentId` opcional -- mesmo
+princípio de `docs/payables.md` (seção "Origem em documento fiscal"):
+vincula o título ao `FiscalDocument` de origem, autopreenchimento no
+formulário de criação manual, `@unique` garante no máximo 1 título por
+documento, mutuamente exclusivo com `installments > 1`. Ver
+`docs/fiscal-documents.md`, seção 18.
+
+## Título manual e parcelamento (Fase Financeiro CP/CR)
+
+`POST /receivables` cria um título **sem** `TripBilling` de origem —
+`tripId`/`billingId` ficam `null` (ambos passaram a ser opcionais no
+schema; `billingId` continua `@unique`, então a garantia "no máximo um
+título por faturamento" se mantém intacta para os títulos derivados —
+Postgres permite múltiplos `NULL` sob uma coluna `@unique`). `customerId`
+é **exigido** neste fluxo (diferente do fluxo derivado, onde pode ser
+nulo se a viagem não tinha cliente) — um título manual precisa identificar
+quem deve. Demais campos: `description`, `originalAmount`, `issueDate`,
+`dueDate`.
+
+**Parcelamento** (`installments`, 1-360) existe **somente** neste fluxo
+manual — nunca em `POST /receivables/from-billing/:billingId`, porque ali
+`billingId` é `@unique` e gerar N títulos para um único faturamento
+violaria essa garantia. `originalAmount` é dividido igualmente entre as
+parcelas (`common/utils/installment-plan.util.ts`, compartilhado com
+`PayablesService`); a última parcela absorve o resto do arredondamento
+para que a soma seja sempre exatamente `originalAmount`. Vencimentos:
+mensal a partir de `dueDate`, com o dia clampado ao último dia do mês
+quando o mês de origem não existe no destino. Todas as parcelas de um
+mesmo lançamento compartilham `installmentGroupId`; títulos não
+parcelados (incluindo todos os derivados de faturamento) têm
+`installmentGroupId`/`installmentNumber`/`installmentTotal` `null`.
+
+## Juros, multa e desconto no recebimento
+
+`POST /receivables/:id/payments` aceita três campos opcionais em
+`ReceivablePayment`: `interestAmount`, `fineAmount`, `discountAmount`.
+Sempre digitados manualmente — nenhuma regra de taxa/mora automática.
+`amount + discountAmount` quita o título (soma em `receivedAmount`);
+`discountAmount` nunca movimenta caixa. `amount + interestAmount +
+fineAmount` é o valor real creditado na `FinancialTransaction` (CREDIT)
+vinculada ao recebimento. O gate de saldo e o CAS de concorrência (Fase
+79, seção 20) continuam os mesmos — nenhuma mudança em
+`balance-status.util.ts` (mesmo racional de `docs/payables.md`, seção
+"Juros, multa e desconto no pagamento").
 
 ## Diferença entre resultado financeiro (Fase 71) e contas a receber (Fase 72)
 

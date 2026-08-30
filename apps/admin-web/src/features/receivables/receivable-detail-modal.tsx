@@ -64,10 +64,17 @@ export function ReceivableDetailModal({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-ink">{receivable.description}</p>
-                <a href={`/trips/${receivable.tripId}`} className="text-xs text-brand-700 hover:underline">
-                  {receivable.tripLabel ?? receivable.tripId}
-                </a>
-                <p className="mt-0.5 text-xs text-ink-subtle">{receivable.customerName ?? 'Sem cliente vinculado'}</p>
+                {receivable.tripId ? (
+                  <a href={`/trips/${receivable.tripId}`} className="text-xs text-brand-700 hover:underline">
+                    {receivable.tripLabel ?? receivable.tripId}
+                  </a>
+                ) : (
+                  <span className="text-xs text-ink-subtle">Título manual — sem viagem vinculada</span>
+                )}
+                <p className="mt-0.5 text-xs text-ink-subtle">
+                  {receivable.customerName ?? 'Sem cliente vinculado'}
+                  {receivable.installmentTotal ? ` · Parcela ${receivable.installmentNumber}/${receivable.installmentTotal}` : ''}
+                </p>
               </div>
               <Badge tone={RECEIVABLE_STATUS_TONE[receivable.status]}>{RECEIVABLE_STATUS_LABELS[receivable.status]}</Badge>
             </div>
@@ -122,6 +129,13 @@ export function ReceivableDetailModal({
                         <span className="block text-xs text-ink-subtle">
                           {p.creatorName ?? '—'} em {formatDateTime(p.createdAt)}
                         </span>
+                        {(p.interestAmount || p.fineAmount || p.discountAmount) && (
+                          <span className="mt-0.5 block text-xs text-ink-subtle">
+                            {p.interestAmount ? `Juros ${formatCurrency(p.interestAmount)} ` : ''}
+                            {p.fineAmount ? `Multa ${formatCurrency(p.fineAmount)} ` : ''}
+                            {p.discountAmount ? `Desconto ${formatCurrency(p.discountAmount)}` : ''}
+                          </span>
+                        )}
                         {/* Fase 79 -- ja vem no MESMO payload (sem consulta extra); nulo so para
                             recebimentos anteriores a esta fase. */}
                         {p.financialAccountId ? (

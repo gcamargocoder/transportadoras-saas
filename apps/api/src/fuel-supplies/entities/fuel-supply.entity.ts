@@ -24,6 +24,14 @@ export class FuelSupplyEntity {
   tripId!: string | null;
 
   @ApiProperty({
+    nullable: true,
+    description:
+      'Fase 107 -- "origem -> destino" da viagem vinculada (mesma convencao ja usada em ' +
+      'TripBillingEntity/FinanceReconciliationEntity). Nulo quando tripId e nulo.',
+  })
+  tripLabel!: string | null;
+
+  @ApiProperty({
     format: 'uuid',
     nullable: true,
     description: 'Nulo quando o abastecimento foi registrado apenas com localizacao (app do motorista, sem posto identificado).',

@@ -83,6 +83,9 @@ export interface CreateTireMovementPayload {
   newPosition?: string | undefined;
   odometerKm?: number | undefined;
   reason?: string | undefined;
+  // Fase 109 -- OS (VehicleMaintenance) que motivou esta troca, quando
+  // aplicavel.
+  maintenanceId?: string | undefined;
 }
 
 export function createTireMovement(tireId: string, payload: CreateTireMovementPayload) {

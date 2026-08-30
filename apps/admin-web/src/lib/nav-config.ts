@@ -2,10 +2,12 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeftRight,
+  BarChart3,
   Bell,
   Building2,
   CalendarClock,
   CircleDot,
+  ClipboardCheck,
   Container,
   FileCheck,
   FileText,
@@ -23,6 +25,7 @@ import {
   Package,
   PackageCheck,
   Percent,
+  Radar,
   ShieldAlert,
   ShieldCheck,
   Link2,
@@ -109,10 +112,32 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Operação',
     items: [
       { label: 'Monitoramento', href: '/operations', icon: Activity, roles: TRIP_READ_ROLES },
+      // Fase 105 -- Torre de Controle: mesma fonte de dados/roles do
+      // Monitoramento (GET /trips/operations/active, enriquecido com
+      // entregas/ocorrencias/atraso), apresentacao dedicada a identificar
+      // viagens que exigem intervencao. Mesmo modulo/roles de Viagens.
+      {
+        label: 'Torre de Controle',
+        href: '/operations/control-tower',
+        icon: Radar,
+        roles: TRIP_READ_ROLES,
+        module: TenantModule.TRIPS,
+      },
       {
         label: 'Gestão da frota',
         href: '/operations/fleet',
         icon: LayoutGrid,
+        roles: FLEET_OPERATIONS_READ_ROLES,
+        module: TenantModule.DASHBOARDS,
+      },
+      // Fase 104 -- area central de Relatorios Operacionais: composicao de
+      // indicadores ja existentes (nenhum dashboard/calculo novo), mesmo
+      // grupo/modulo de "Gestao da frota" (a mais proxima em escopo:
+      // agrega multiplos dominios operacionais).
+      {
+        label: 'Relatórios Operacionais',
+        href: '/operations/reports',
+        icon: BarChart3,
         roles: FLEET_OPERATIONS_READ_ROLES,
         module: TenantModule.DASHBOARDS,
       },
@@ -142,6 +167,20 @@ export const NAV_GROUPS: NavGroup[] = [
         label: 'Ocorrências de Entrega',
         href: '/operations/delivery-occurrences',
         icon: AlertTriangle,
+        roles: TRIP_READ_ROLES,
+        module: TenantModule.TRIPS,
+      },
+      // Fase 115 -- Gestao de Excecoes Operacionais: visao CROSS-TRIP de
+      // TODAS as TripOccurrence (gerais + de entrega), mesmo modulo/roles.
+      // Distinta de "Ocorrências de Entrega" (so o subconjunto vinculado a
+      // uma parada) e do dashboard estatistico/historico em
+      // /operations/fleet/occurrences (contagens/ranking/tendencia, sem
+      // lista acionavel por item) -- as 3 telas coexistem sem sobreposicao
+      // de proposito.
+      {
+        label: 'Ocorrências Operacionais',
+        href: '/operations/occurrences',
+        icon: ShieldAlert,
         roles: TRIP_READ_ROLES,
         module: TenantModule.TRIPS,
       },
@@ -196,6 +235,13 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Wrench,
         roles: FLEET_READ_ROLES,
         module: TenantModule.MAINTENANCE,
+      },
+      {
+        label: 'Checklists',
+        href: '/checklists',
+        icon: ClipboardCheck,
+        roles: FLEET_READ_ROLES,
+        module: TenantModule.CHECKLIST,
       },
       {
         label: 'Peças',

@@ -13,6 +13,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { PAYABLE_READ_ROLES, PAYABLE_WRITE_ROLES } from '../constants/payable-roles.constants';
+import { CreatePayableDto } from '../dto/create-payable.dto';
 import { FindPayablesDashboardQueryDto } from '../dto/find-payables-dashboard-query.dto';
 import { FindPayablesQueryDto } from '../dto/find-payables-query.dto';
 import { GeneratePayableDto } from '../dto/generate-payable.dto';
@@ -54,6 +55,23 @@ export class PayablesController {
     return this.payablesService.generateFromExpense(
       this.tenantContext.requireTenantId(),
       expenseId,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post()
+  @Roles(...PAYABLE_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Cria um titulo MANUAL (sem viagem/despesa de origem) -- ex: aluguel, seguro, fornecedor administrativo. ' +
+      'Quando installments > 1, gera todas as parcelas de uma vez (mesmo installmentGroupId).',
+  })
+  @ApiCreatedResponse({ type: PayableEntity, isArray: true })
+  create(@Body() dto: CreatePayableDto): Promise<PayableEntity[]> {
+    return this.payablesService.create(
+      this.tenantContext.requireTenantId(),
       dto,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,

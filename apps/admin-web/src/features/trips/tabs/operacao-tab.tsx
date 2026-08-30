@@ -2,10 +2,12 @@
 
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
+import { useRouter } from 'next/navigation';
 import { useMemo } from 'react';
 import { Badge } from '../../../components/ui/badge';
 import { Card } from '../../../components/ui/card';
 import { DataTable } from '../../../components/ui/data-table';
+import { CHECKLIST_STATUS_LABELS, CHECKLIST_STATUS_TONE } from '../../checklists/status';
 import { listChecklistExecutions } from '../../../lib/api/checklist.api';
 import { listFuelSupplies } from '../../../lib/api/fuel.api';
 import { listAxleEvents, listTripLocations, listTripStops } from '../../../lib/api/trip-operations.api';
@@ -16,7 +18,6 @@ import {
   TRIP_STOP_TYPE_LABELS,
 } from '../../../lib/labels';
 import type { AxleEventEntity, ChecklistExecutionEntity, FuelSupplyEntity, TripStopEntity } from '../../../types/entities';
-import type { ChecklistExecutionStatus } from '../../../types/enums';
 import { formatCurrency, formatDateTime, formatNumber } from '../../../utils/format';
 import { SYNC_STATUS_TONE, TRIP_STOP_TYPE_TONE } from '../operation-status';
 
@@ -24,27 +25,13 @@ import { SYNC_STATUS_TONE, TRIP_STOP_TYPE_TONE } from '../operation-status';
 // (Fases 25/38), so nunca tinham visibilidade na tela da viagem -- somente
 // leitura aqui, reaproveitando os endpoints administrativos ja existentes
 // (?tripId=), sem sub-recurso novo em TripsController.
-const CHECKLIST_STATUS_LABELS: Record<ChecklistExecutionStatus, string> = {
-  DRAFT: 'Rascunho',
-  IN_PROGRESS: 'Em andamento',
-  COMPLETED: 'Concluído',
-  FAILED: 'Reprovado',
-  CANCELLED: 'Cancelado',
-};
-
-const CHECKLIST_STATUS_TONE: Record<ChecklistExecutionStatus, 'neutral' | 'info' | 'success' | 'danger' | 'warning'> = {
-  DRAFT: 'neutral',
-  IN_PROGRESS: 'info',
-  COMPLETED: 'success',
-  FAILED: 'danger',
-  CANCELLED: 'warning',
-};
 
 // Fase 25 -- visibilidade administrativa (somente leitura) do que o app do
 // motorista registrou: ultima posicao, paradas e excecoes de eixo. Sem
 // mapa nesta fase (ver secao 20 da fase); so tabelas/cards, reaproveitando
 // os componentes de UI ja usados nas outras abas de viagem.
 export function OperacaoTab({ tripId }: { tripId: string }): JSX.Element {
+  const router = useRouter();
   const locationsQuery = useQuery({
     queryKey: ['trip-locations', tripId],
     queryFn: () => listTripLocations(tripId),
@@ -232,6 +219,7 @@ export function OperacaoTab({ tripId }: { tripId: string }): JSX.Element {
           isError={checklistsQuery.isError}
           onRetry={() => checklistsQuery.refetch()}
           getRowId={(c) => c.id}
+          onRowClick={(c) => router.push(`/checklists/${c.id}`)}
           emptyTitle="Nenhum checklist registrado nesta viagem"
         />
       </div>

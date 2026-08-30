@@ -45,16 +45,35 @@ estado não-terminal. A máquina de estados (`ALLOWED_TRANSITIONS`,
 frontend nunca decide se uma transição é válida, só reflete o erro 409
 quando o backend rejeita.
 
-## 2. Pré-requisitos de início (`assertCanStart`) — sem alteração
+## 2. Pré-requisitos de início (`assertCanStart`)
 
-Já bloqueava, antes desta fase: motorista inativo, motorista já em outra
+Já bloqueava, antes da Fase 111: motorista inativo, motorista já em outra
 viagem ativa, veículo inexistente, veículo em `MAINTENANCE`, veículo não
-`ACTIVE`, veículo já em outra viagem ativa. Reaproveitado integralmente —
-nenhuma validação nova foi adicionada aqui (checklist/documentos
-permanecem sem obrigatoriedade de bloqueio, pois o projeto não tem essa
-regra de negócio definida; inventar isso violaria a seção 3 do pedido,
-"não criar obrigação de documento fiscal onde o projeto ainda não possui
-regra de obrigatoriedade").
+`ACTIVE`, veículo já em outra viagem ativa.
+
+**Fase 111 -- checklist pré-viagem obrigatório (opt-in por tenant, NOVO)**:
+fecha o gap "bloqueio de início de viagem somente quando houver regra
+operacional realmente necessária" (Fase 111). Novo método
+`assertPreTripChecklistSatisfied`, chamado ao final de `assertCanStart`:
+lido `TenantSettings.preferences.requirePreTripChecklist` (JSON livre já
+existente, mesmo padrão de `stopDurationThresholdsMinutes` da Fase 44,
+`resolveRequirePreTripChecklist`, `trips/utils/trip-preferences.util.ts`) --
+**default `false`**, nenhum tenant existente é afetado a menos que ative
+explicitamente via `PATCH /tenant-settings`. Quando ligado e a viagem tem
+veículo vinculado (composição), bloqueia com `409` em 2 casos:
+
+- não existe nenhum `ChecklistExecution` do tipo `PRE_TRIP` para aquela
+  viagem, ou existe mas ainda não está `COMPLETED`;
+- existe e está `COMPLETED`, mas tem não-conformidade crítica
+  (`hasCriticalNonConformity`, mesma função pura já usada em
+  `GET /checklists/executions` e no coletor de notificações, ver
+  `docs/checklist-module.md`).
+
+Sem veículo vinculado, nada é checado (nunca inventa um veículo). Mesmo
+método usado tanto por `PATCH /trips/:id/status` (admin) quanto por
+`POST driver/trips/:id/start` (Driver App, via
+`DriverTripsService.start → TripsService.updateStatus`) -- um único ponto
+de checagem, nunca duas regras.
 
 ## 3. Composição da viagem — imutabilidade histórica (NOVO)
 
@@ -148,6 +167,12 @@ reaproveitando os endpoints administrativos já existentes com filtro
 — **nenhum sub-recurso novo** criado em `TripsController` (a seção 27 do
 pedido só pede criar o que faltar; um filtro já existente resolve o mesmo
 caso de uso).
+
+**Fase 111**: a tabela de checklists desta aba passou a ser clicável --
+cada linha navega para `/checklists/:id` (novo, ver
+`docs/checklist-module.md`), a primeira tela administrativa de
+detalhe/drill-down do módulo (antes só listagem, sem visão de respostas/
+evidências).
 
 ## 8. Fiscal, pedágio, financeiro — sem alteração
 
@@ -281,3 +306,263 @@ de qualquer mutação).
 ## 17. Pendências reais
 
 Nenhuma pendência de escopo desta fase.
+
+## 18. Fase 112 — Planejamento de Viagens
+
+Consolida o planejamento operacional (antes do início da viagem),
+reaproveitando integralmente `Trip`, `RouteVersion`/`RoutePlan`,
+`TripDeliveryStop` e os motores já existentes — nenhuma estrutura nova.
+
+**Auditoria prévia — o que já cobria o escopo pedido, sem alteração:**
+
+- Seleção/validação de veículo, carreta, motorista e composição: já
+  resolvido pela Fase 14/87/90 (`assertCanStart`, `assertDriverAvailable`,
+  imutabilidade da composição da Fase 66 seção 3).
+- Definição/organização de entregas e paradas antes da partida: já
+  resolvido pela Fase 88/99 (`TripDeliveryStop`, bloqueia só
+  `COMPLETED`/`CANCELLED`, PLANNED sempre editável).
+- Previsão de rota/distância/duração/pedágio: já resolvido pela Fase
+  23/26 (`RoutingService`, sub-recurso `trips/:tripId/route-plan`), já
+  funcional em qualquer status da viagem, sem gate para `IN_PROGRESS`.
+- Conflito de jornada: `DriverShift` é um relógio de ponto em tempo real,
+  sem dados de escala/horas legais a validar contra — a única validação
+  possível sem inventar uma regra de negócio é a sobreposição
+  motorista×viagem já feita por `assertDriverAvailable`. Nenhum gap real
+  aqui.
+
+**Gaps reais implementados:**
+
+1. **`POST /trips/:id/metrics/sync-from-route` (NOVO)** —
+   `TripMetricsService.syncPlannedFromRoute`. Antes da Fase 112,
+   `TripMetrics.planned*` (distância/duração/combustível/pedágio/custo)
+   só existia via preenchimento manual (`PATCH /trips/:id/metrics`),
+   nunca derivado da rota já calculada — o gap central da fase. O novo
+   endpoint deriva:
+   - distância/duração/pedágio: direto do `RoutePlan` selecionado
+     (`distanceMeters`, `durationSeconds`, `totalTollAmount`);
+   - combustível previsto: `distanciaKm / consumoMédioKm/L`, usando
+     `computeAverageConsumptionKmL` (Fase 18, mesma função já usada no
+     histórico de consumo do veículo) sobre o histórico real de
+     `FuelSupply` do veículo — nunca um consumo médio de mercado
+     inventado; fica `null` sem histórico suficiente;
+   - custo previsto: pedágio + (combustível × preço médio/litro pago
+     historicamente pelo veículo).
+
+   Bloqueado com `409` (a) sem `RoutePlan` calculado, e (b) a partir do
+   momento em que a viagem sai de `PLANNED`/`WAITING_DRIVER`/
+   `WAITING_DEPARTURE` — o planejado é uma baseline congelada, nunca
+   reescrita silenciosamente após a partida (mesmo princípio já central
+   ao par `planned`/`actual` da Fase 66 seção 6). Auditado como
+   `trip_metrics.synced_from_route`.
+
+2. **`GET /trips/:id/summary` — resumo de prontidão (NOVO)**. Estendida
+   (não duplicada) a entidade já existente com campos só-leitura que
+   consolidam a liberação da viagem para aprovação:
+   - `readyToStart`/`notReadyReason`: chama o próprio
+     `assertCanStart` (try/catch) e reflete o resultado — nunca
+     reimplementa a regra, garante zero divergência com o que acontece
+     de fato ao iniciar a viagem;
+   - `hasComposition`, `routePlanComputed`, `plannedMetricsSynced`:
+     flags de progresso do planejamento;
+   - `preTripChecklistRequired`/`preTripChecklistStatus`/
+     `preTripChecklistHasCriticalNonConformity`: mesmos dados/regra da
+     Fase 111 (`resolveRequirePreTripChecklist`,
+     `hasCriticalNonConformity`), agora também visíveis no resumo;
+   - `plannedWeightKg`/`vehicleCapacityKg`/`withinCapacity`: validação
+     de capacidade **informativa** (nunca bloqueia o início). Peso
+     previsto lido de `TripFreight.calculationInput.weightKg` (Fase 59,
+     já gravado quando o frete é precificado — nenhum campo novo) contra
+     `Vehicle.cargoCapacityKg`. Como `Trailer` não tem campo de
+     capacidade no schema, uma validação bloqueante marcaria
+     incorretamente carga transportada na carreta como "acima da
+     capacidade" do cavalo — por isso o resultado é só um indicador
+     (`withinCapacity = null` quando falta um dos dois dados reais).
+
+3. **Frontend (`apps/admin-web`)** — sem tela nova, dados plugados nas
+   abas já existentes da viagem:
+   - aba "Rota": botão "Sincronizar métricas previstas" ao lado de
+     "Recalcular rota" (visível só com rota calculada e planejamento
+     ainda aberto, mesma regra `planningAllowed` já usada pela aba de
+     entregas);
+   - aba "Visão geral": novo card "Prontidão do planejamento" (badges de
+     prontidão/composição/rota/métricas/checklist/capacidade), visível
+     só antes da partida real (`!trip.actualDeparture`). O checklist
+     pré-viagem continua tendo sua tabela completa só na aba "Operação"
+     (Fase 66 seção 7) — o card novo mostra apenas o status mais
+     recente, sem duplicar a listagem.
+
+**Torre de Controle / Driver App**: auditado, sem alteração. A Torre de
+Controle já expõe `operationalStatus`/`TripStatus` por trip — nenhum
+sub-recurso novo foi necessário para refletir prontidão de planejamento
+ali. O Driver App não referencia `GET /trips/:id/summary` nem
+`TripMetrics` (confirmado por busca no código-fonte) — é uma tela
+administrativa/despacho, o fluxo de execução do app não foi tocado.
+
+**RBAC/multi-tenant/N+1**: `syncPlannedFromRoute` usa os mesmos guards
+(`TRIP_WRITE_ROLES`) e `tenantId` de todo o módulo de viagens. O resumo
+(`getSummary`) é uma leitura de um único registro — as consultas
+adicionais (settings, checklist, frete, mais as internas de
+`assertCanStart`) são um número fixo pequeno por chamada, não crescem
+com o tamanho de nenhuma lista — não é um caso de N+1.
+
+**Testes**: `test/routing.e2e-spec.ts` ganhou 10 novos testes cobrindo
+sync-from-route (bloqueio sem rota, com/sem histórico de combustível,
+resincronização após recálculo, bloqueio após partida) e o resumo de
+prontidão (`readyToStart` refletindo `assertCanStart`, flags de
+progresso, capacidade dentro/fora/sem dado). Regressão completa
+executada: `trips.e2e-spec.ts`, `routing.e2e-spec.ts`,
+`checklists.e2e-spec.ts`, `drivers*.e2e-spec.ts`, `fleet*.e2e-spec.ts`,
+`maintenance*.e2e-spec.ts`, `tire*.e2e-spec.ts`, `trip-*.e2e-spec.ts` —
+sem regressões.
+
+## 19. Fase 116 — Fechamento Operacional da Viagem
+
+Auditoria de fechamento: percorrido o fluxo completo planejamento →
+execução → entrega → encerramento (`Trip`/status, composição, `RoutePlan`/
+`RouteVersion`, `TripDeliveryStop`, ETA, POD/documentos fiscais,
+`TripOccurrence`, checklist, abastecimento, manutenção/OS, pneus, despesas/
+receitas/adiantamentos, `TripMetrics`, Torre de Controle, Driver App,
+auditoria) — nada foi alterado além dos gaps reais listados abaixo (regra
+explícita da fase: item já correto permanece intocado).
+
+### 19.1 Auditado e já correto — sem alteração
+
+- **Composição** (veículo/carreta/motorista): já imutável após a partida
+  desde a Fase 66 (seção 3) — cobre também viagens já `COMPLETED`.
+- **`TripDeliveryStop`**: transição de status já bloqueada (409) quando a
+  viagem está `COMPLETED`/`CANCELLED` (`TripDeliveryStopsService.
+  updateStatus`) — nenhuma mudança necessária.
+- **ETA**: `TripEtaService.compute` já devolve a mensagem "viagem já
+  concluída/cancelada" e nenhuma previsão para `COMPLETED`/`CANCELLED`
+  desde a Fase 91.
+- **`TripExpense`/`TripRevenue`/`TripAdvance`**: já bloqueiam só viagens
+  `CANCELLED` (nunca ocorreram) e continuam aceitando lançamentos numa
+  viagem `COMPLETED` (comprovante/pedágio chegam depois na vida real) —
+  comportamento correto, não uma lacuna.
+- **`TripSettlement`** (fechamento financeiro, Fase 71): nunca leu
+  `Trip.status`, por desenho — é um workflow financeiro independente e
+  auto-contido. Nenhuma integração nova criada aqui (regra 6 do pedido:
+  só com gap comprovado, e nenhum foi encontrado).
+- **Checklist pós-viagem** (`ChecklistType.POST_TRIP`, já existe no
+  enum): **nenhuma** `TenantSettings.preferences` equivalente a
+  `requirePreTripChecklist` (Fase 111) existe para exigi-lo no
+  encerramento — diferente do checklist pré-viagem, não há nenhum
+  modelo/config já existente para reaproveitar. Criar essa exigência
+  agora seria inventar uma regra operacional nova (regra 7 do pedido) —
+  não implementado.
+- **Pendências documentais no encerramento**: buscado no código inteiro
+  qualquer conceito de "documento obrigatório" (fiscal ou POD) — não
+  existe nenhum (nem campo, nem enum, nem preferência de tenant). Não há
+  o que consolidar sem inventar uma regra fiscal/documental (regra 7).
+- **Torre de Controle**: exclusão de viagens terminadas de
+  `GET /trips/operations/active` é intencional (painel de operação
+  ATIVA) — o histórico completo já existe em `GET /trips` (listagem).
+- **Driver App**: `FinishTripScreen` já é deliberadamente minimalista
+  desde a Fase 28 ("não pede nada que o sistema já saiba", "nunca
+  bloqueia o encerramento") — o motorista já reporta entregas/ocorrências
+  nas próprias telas antes de finalizar; nenhuma lacuna real que exija
+  ação adicional dele foi encontrada, então o app não foi alterado.
+  Confirmado também que o Driver App nunca leu `GET /trips/:id/summary`
+  nem os campos alterados nesta fase — admin-web e Driver App continuam
+  lendo os mesmos `Trip`/`TripDeliveryStop`/`TripOccurrence`, sem
+  divergência de estado.
+- **Manutenção/OS e pneus**: sem vínculo direto com o encerramento da
+  viagem (são por veículo, não por viagem) além do já existente
+  (checklist crítico → OS, Fase 111) — nada a consolidar aqui.
+- **Auditoria**: `AuditService.log` já cobre toda mutação relevante do
+  ciclo de vida (`trip.arrived`, transições de status, criação/resolução
+  de ocorrências etc.) — nenhum gap.
+
+### 19.2 Gaps reais encontrados e corrigidos
+
+1. **`GET /trips/:id/summary` não consolidava o estado das entregas/
+   ocorrências no encerramento.** A mesma tela que já mostra "prontidão
+   para iniciar" (Fase 112) não tinha o equivalente para "o que falta
+   resolver antes/depois de encerrar" — só disponível navegando para as
+   abas Entregas/Ocorrências. Adicionados `deliverySummary`
+   (`TripOperationDeliverySummaryEntity`, MESMA entidade/fórmula já usada
+   na Torre de Controle, Fase 105) e `openOccurrencesCount`/
+   `criticalOpenOccurrencesCount` — 3 queries em lote a mais (1
+   `groupBy`, 2 `count`), sempre um número fixo por viagem, nunca N+1.
+   **Puramente informativo — não bloqueia a conclusão da viagem.**
+   Frontend: novo card "Consolidação do encerramento" em
+   `overview-tab.tsx`, visível a partir da partida real (espelha a
+   condição inversa do card de planejamento).
+2. **Bug real: `readyToStart` chamava `assertCanStart` mesmo para
+   viagens que já partiram.** Uma viagem `COMPLETED`/`IN_PROGRESS`/
+   `PAUSED` podia mostrar `notReadyReason` enganoso (ex.: "motorista já
+   está em outra viagem ativa", só porque ele foi despachado de novo
+   depois). Corrigido: `assertCanStart` só é chamado quando
+   `assertTripPlanningAllowed` (mesmo critério já usado em toda a
+   trava de planejamento) confirma que a viagem ainda não partiu; depois
+   disso, `readyToStart` fica sempre `true`/`notReadyReason` sempre
+   `null` (nada mais a validar). Efeito colateral positivo: menos 2
+   queries desperdiçadas por consulta de resumo de uma viagem já
+   iniciada/concluída.
+3. **`PATCH /trips/:id/metrics` (métricas previstas, entrada manual)
+   nunca teve a trava de "planejamento encerrado".** Desde a Fase 112,
+   `POST .../metrics/sync-from-route` já bloqueia reescrever
+   `TripMetrics.planned*` depois da partida (é um snapshot congelado,
+   ver seção 6/`docs/trip-financial-result.md`) — mas o endpoint manual,
+   que existe desde a criação do módulo, nunca teve essa trava. Um admin
+   podia reescrever a baseline prevista de uma viagem já `COMPLETED`,
+   contradizendo o próprio conceito de "previsto x executado" depois do
+   fechamento. Corrigido reaproveitando a MESMA trava/mensagem de
+   `syncPlannedFromRoute` — nenhuma regra nova, só a consistência entre
+   as duas formas de escrever o mesmo dado.
+4. **`RoutingService` nunca impedia recalcular/trocar a rota de uma
+   viagem já `COMPLETED`/`CANCELLED`.** As 4 escritas
+   (`computePrimary`/`computeAlternatives`/`select`/`recalculate`, esta
+   última também usada pelo recálculo automático por desvio) não tinham
+   nenhuma verificação de status — um dispatcher podia clicar
+   "Recalcular rota" (botão sempre visível em `rota-tab.tsx`, sem
+   nenhuma trava) numa viagem já encerrada e reescrever silenciosamente
+   `Trip.routePlanId`/o histórico de rota usado durante a execução real.
+   Corrigido com `RoutingService.assertRouteWritable` (novo guard
+   privado, chamado nas 4 escritas) — leitura (`getCurrent`/`getTolls`/
+   `getDriverView`) continua sempre permitida, preservando o histórico
+   visível. Frontend: `rota-tab.tsx` recebeu a prop `tripFinished` (MESMO
+   `TERMINAL_STATUSES` já calculado em `page.tsx`) e oculta os botões de
+   calcular/recalcular/alternativas/selecionar quando a viagem já
+   terminou.
+
+### 19.3 Regras seguidas
+
+Nenhuma entidade nova (todas as 4 correções reaproveitam models/telas já
+existentes); nenhuma emissão de documento fiscal; nenhum Portal do
+Cliente; nenhuma segunda Torre de Controle; nenhum motor de cálculo novo
+(`deliverySummary` reaproveita a fórmula já usada na Fase 105); nenhuma
+integração financeira/ledger nova (`TripSettlement` permanece
+intocado); nenhuma regra de SLA/fiscal/trabalhista/operacional inventada
+(checklist pós-viagem e pendência documental foram explicitamente
+descartados por falta de modelo/config já existente); RBAC, multi-tenant,
+auditoria e N+1 preservados; nenhuma migration (nenhum campo novo
+persistido); comportamento já correto preservado sem alteração
+cosmética.
+
+### 19.4 Testes (Fase 116)
+
+`test/trips.e2e-spec.ts` (+5 cenários): `deliverySummary`/
+`openOccurrencesCount` corretos com a viagem ativa E depois de
+`COMPLETED`; contagens zeradas quando não há entregas/ocorrências;
+`readyToStart=true`/`notReadyReason=null` numa viagem já concluída
+mesmo com o motorista ocupado depois em outra viagem (reproduz e prova a
+correção do bug); `PATCH /trips/:id/metrics` permitido em `PLANNED` e
+bloqueado (409) após `IN_PROGRESS`/`COMPLETED`. `test/routing.e2e-spec.ts`
+(+2 cenários): as 4 escritas de rota bloqueadas (409) numa viagem
+`COMPLETED` e numa `CANCELLED`, leitura confirmada ainda permitida.
+Regressão completa sem alteração de asserções pré-existentes: `trips`,
+`routing` + `trip-routing`, `trip-delivery-stops`, `trip-eta`,
+`trip-operations-monitor`, `driver-trips`, `trip-occurrences-shifts-
+timeline`, `checklists`, `notifications`.
+
+### 19.5 Limitações reais (Fase 116)
+
+- Checklist pós-viagem e "documento obrigatório no encerramento"
+  continuam sem nenhuma exigência automática — exigiriam inventar uma
+  regra/configuração que não existe hoje (fora do escopo desta fase por
+  regra explícita).
+- `TripMetrics.actualDistanceKm` continua `null` quando `COMPLETED` sem
+  `finalOdometerKm` informado (limitação já documentada na seção 16,
+  reconfirmada nesta auditoria — não é uma regressão nem uma lacuna
+  nova).

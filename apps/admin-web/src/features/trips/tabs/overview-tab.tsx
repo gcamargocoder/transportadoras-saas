@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Badge } from '../../../components/ui/badge';
 import { Card, CardBody, CardHeader } from '../../../components/ui/card';
 import { EntitySelect } from '../../../components/ui/entity-select';
 import { ErrorState } from '../../../components/ui/error-state';
@@ -17,6 +18,7 @@ import {
 } from '../../../lib/api/trips.api';
 import { listTollRoutes } from '../../../lib/api/toll-routes.api';
 import { TRIP_WRITE_ROLES, hasRole } from '../../../lib/auth/roles';
+import { CHECKLIST_STATUS_LABELS, CHECKLIST_STATUS_TONE } from '../../checklists/status';
 import { TRIP_STATUS_OPTIONS } from '../status';
 import { TRIP_LOAD_STATUS_LABELS, TRIP_STATUS_LABELS } from '../../../lib/labels';
 import type { TripEntity } from '../../../types/entities';
@@ -143,6 +145,99 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
 
       {summaryQuery.isLoading && <LoadingState label="Carregando resumo" />}
       {summaryQuery.isError && <ErrorState onRetry={() => summaryQuery.refetch()} />}
+
+      {/* Fase 112 -- resumo de prontidao do planejamento, so faz sentido
+          antes da partida real (depois disso a viagem ja esta em execucao). */}
+      {summaryQuery.data && !trip.actualDeparture && (
+        <Card>
+          <CardHeader title="Prontidão do planejamento" />
+          <CardBody>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={summaryQuery.data.readyToStart ? 'success' : 'warning'}>
+                {summaryQuery.data.readyToStart ? 'Pronta para iniciar' : 'Pendências para iniciar'}
+              </Badge>
+              <Badge tone={summaryQuery.data.hasComposition ? 'success' : 'neutral'}>
+                {summaryQuery.data.hasComposition ? 'Composição definida' : 'Sem composição'}
+              </Badge>
+              <Badge tone={summaryQuery.data.routePlanComputed ? 'success' : 'neutral'}>
+                {summaryQuery.data.routePlanComputed ? 'Rota calculada' : 'Rota não calculada'}
+              </Badge>
+              <Badge tone={summaryQuery.data.plannedMetricsSynced ? 'success' : 'neutral'}>
+                {summaryQuery.data.plannedMetricsSynced ? 'Métricas previstas preenchidas' : 'Métricas previstas pendentes'}
+              </Badge>
+              {summaryQuery.data.preTripChecklistRequired && (
+                <Badge
+                  tone={
+                    summaryQuery.data.preTripChecklistStatus
+                      ? CHECKLIST_STATUS_TONE[summaryQuery.data.preTripChecklistStatus]
+                      : 'warning'
+                  }
+                >
+                  Checklist pré-viagem:{' '}
+                  {summaryQuery.data.preTripChecklistStatus
+                    ? CHECKLIST_STATUS_LABELS[summaryQuery.data.preTripChecklistStatus]
+                    : 'Não iniciado'}
+                </Badge>
+              )}
+              {summaryQuery.data.withinCapacity !== null && (
+                <Badge tone={summaryQuery.data.withinCapacity ? 'success' : 'danger'}>
+                  {summaryQuery.data.withinCapacity ? 'Dentro da capacidade' : 'Acima da capacidade do veículo'}
+                </Badge>
+              )}
+            </div>
+            {!summaryQuery.data.readyToStart && summaryQuery.data.notReadyReason && (
+              <p className="mt-3 text-sm text-warning-700">{summaryQuery.data.notReadyReason}</p>
+            )}
+            {summaryQuery.data.plannedWeightKg !== null && (
+              <p className="mt-3 text-sm text-ink-muted">
+                Peso previsto da carga: {formatNumber(summaryQuery.data.plannedWeightKg)} kg
+                {summaryQuery.data.vehicleCapacityKg !== null &&
+                  ` · Capacidade do veículo: ${formatNumber(summaryQuery.data.vehicleCapacityKg)} kg`}
+              </p>
+            )}
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Fase 116 -- consolidacao do fechamento: so faz sentido depois que a
+          viagem de fato partiu (espelha a condicao inversa do card de
+          planejamento acima). Nunca bloqueia a conclusao da viagem -- so
+          informa o que ainda esta em aberto. */}
+      {summaryQuery.data && trip.actualDeparture && (
+        <Card>
+          <CardHeader title="Consolidação do encerramento" />
+          <CardBody>
+            <div className="flex flex-wrap items-center gap-2">
+              {summaryQuery.data.deliverySummary.totalCount === 0 ? (
+                <Badge tone="neutral">Sem entregas planejadas</Badge>
+              ) : (
+                <>
+                  <Badge tone="success">{summaryQuery.data.deliverySummary.completedCount} concluída(s)</Badge>
+                  {summaryQuery.data.deliverySummary.pendingCount + summaryQuery.data.deliverySummary.inProgressCount > 0 && (
+                    <Badge tone="warning">
+                      {summaryQuery.data.deliverySummary.pendingCount + summaryQuery.data.deliverySummary.inProgressCount} pendente(s)
+                    </Badge>
+                  )}
+                  {summaryQuery.data.deliverySummary.failedCount > 0 && (
+                    <Badge tone="danger">{summaryQuery.data.deliverySummary.failedCount} falha(s)</Badge>
+                  )}
+                </>
+              )}
+              {summaryQuery.data.openOccurrencesCount === 0 ? (
+                <Badge tone="success">Sem ocorrências em aberto</Badge>
+              ) : (
+                <>
+                  {summaryQuery.data.criticalOpenOccurrencesCount > 0 && (
+                    <Badge tone="danger">{summaryQuery.data.criticalOpenOccurrencesCount} crítica(s) em aberto</Badge>
+                  )}
+                  <Badge tone="warning">{summaryQuery.data.openOccurrencesCount} ocorrência(s) em aberto</Badge>
+                </>
+              )}
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       {summaryQuery.data && (
         <Card>
           <CardHeader title="Resumo consolidado" />

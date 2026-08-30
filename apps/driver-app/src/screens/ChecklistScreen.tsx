@@ -34,7 +34,7 @@ export function ChecklistScreen({ route, navigation }: Props): React.JSX.Element
       try {
         const [pointer, all] = await Promise.all([
           getActiveChecklistPointer(tripId, type),
-          driverChecklistApi.getAvailableChecklists(),
+          driverChecklistApi.getAvailableChecklists(tripId),
         ]);
         if (cancelled) return;
         const filtered = all.filter((template) => template.type === type);

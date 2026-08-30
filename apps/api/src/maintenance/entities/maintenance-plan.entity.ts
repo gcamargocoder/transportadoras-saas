@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { MaintenanceComponent, VehicleMaintenanceType } from '@prisma/client';
+import { MaintenancePlanEvaluationStatus } from '../../fleet-operations/utils/maintenance-plan-status.util';
 
 export class MaintenancePlanEntity {
   @ApiProperty({ format: 'uuid' })
@@ -40,4 +41,25 @@ export class MaintenancePlanEntity {
 
   @ApiProperty()
   updatedAt!: Date;
+
+  // Fase 108 -- avaliacao ao vivo (nunca persistida) do vencimento deste
+  // plano, MESMA funcao pura ja usada pelo dashboard de frota
+  // (evaluateMaintenancePlan/FleetOperationsMetricsService.computeMaintenancePlanStatus)
+  // e pelo centro de notificacoes (NotificationsService.collectMaintenancePlansDue) --
+  // nenhuma segunda regra de vencimento. UNKNOWN quando o plano nunca teve
+  // um servico COMPLETED vinculado (sem ponto de partida real para calcular).
+  @ApiProperty({ enum: ['OK', 'DUE_SOON', 'OVERDUE', 'UNKNOWN'] })
+  status!: MaintenancePlanEvaluationStatus;
+
+  @ApiProperty({ nullable: true })
+  dueOdometerKm!: number | null;
+
+  @ApiProperty({ nullable: true })
+  dueDate!: Date | null;
+
+  @ApiProperty({ nullable: true })
+  overdueByKm!: number | null;
+
+  @ApiProperty({ nullable: true })
+  overdueByDays!: number | null;
 }

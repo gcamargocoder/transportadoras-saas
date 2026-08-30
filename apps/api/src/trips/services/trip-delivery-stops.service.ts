@@ -399,17 +399,26 @@ export class TripDeliveryStopsService {
     });
   }
 
+  // Fase 113 -- aceita opcionalmente um `tx` (Prisma.TransactionClient) ja
+  // aberto por um chamador (ver TripRoutingService.apply) para que a
+  // reordenacao e uma escrita relacionada do chamador (ex: nova RouteVersion)
+  // sejam uma UNICA transacao atomica -- nunca duas transacoes separadas que
+  // poderiam deixar a sequencia alterada sem o registro correspondente.
+  // Chamado sem `tx` (endpoint de reordenacao manual, Fase 88), abre sua
+  // propria transacao como sempre fez -- nenhuma mudanca de comportamento.
   async reorder(
     tenantId: string,
     tripId: string,
     dto: ReorderTripDeliveryStopsDto,
     actor: AuditActor,
     metadata: RequestMetadata,
+    tx?: Prisma.TransactionClient,
   ): Promise<TripDeliveryStopEntity[]> {
+    const client = tx ?? this.prisma;
     const trip = await this.tripsService.findOwnedOrThrow(tenantId, tripId);
     assertTripPlanningAllowed(trip);
 
-    const existing = await this.prisma.tripDeliveryStop.findMany({
+    const existing = await client.tripDeliveryStop.findMany({
       where: { tenantId, tripId },
       select: { id: true, sequence: true },
     });
@@ -430,20 +439,26 @@ export class TripDeliveryStopsService {
 
     const previous = new Map(existing.map((s) => [s.id, s.sequence]));
 
-    await this.prisma.$transaction(async (tx) => {
+    const applySequenceUpdate = async (writer: Prisma.TransactionClient) => {
       // Mesma tecnica de duas fases do remove() acima -- evita colidir com a
       // constraint unica (tripId, sequence) ao trocar posicoes entre si.
       await Promise.all(
         dto.items.map((item) =>
-          tx.tripDeliveryStop.update({ where: { id: item.id }, data: { sequence: -item.sequence } }),
+          writer.tripDeliveryStop.update({ where: { id: item.id }, data: { sequence: -item.sequence } }),
         ),
       );
       await Promise.all(
         dto.items.map((item) =>
-          tx.tripDeliveryStop.update({ where: { id: item.id }, data: { sequence: item.sequence } }),
+          writer.tripDeliveryStop.update({ where: { id: item.id }, data: { sequence: item.sequence } }),
         ),
       );
-    });
+    };
+
+    if (tx) {
+      await applySequenceUpdate(tx);
+    } else {
+      await this.prisma.$transaction(applySequenceUpdate);
+    }
 
     await this.audit.log({
       tenantId,
@@ -457,7 +472,12 @@ export class TripDeliveryStopsService {
       userAgent: metadata.userAgent,
     });
 
-    return this.findAllForTrip(tenantId, tripId);
+    const stops = await client.tripDeliveryStop.findMany({
+      where: { tenantId, tripId },
+      include: STOP_INCLUDE,
+      orderBy: { sequence: 'asc' },
+    });
+    return stops.map(toTripDeliveryStopEntity);
   }
 
   private async findOwnedStopOrThrow(

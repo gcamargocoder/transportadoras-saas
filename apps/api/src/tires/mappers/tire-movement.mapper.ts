@@ -8,6 +8,9 @@ export type TireMovementWithRelations = TireMovement & {
   previousTrailer: Trailer | null;
   newTrailer: Trailer | null;
   creator: UserAccount;
+  // Fase 109 -- so para o rotulo (numero da OS); null quando maintenanceId
+  // e nulo.
+  maintenance: { serviceOrderNumber: string | null } | null;
 };
 
 export function toTireMovementEntity(movement: TireMovementWithRelations): TireMovementEntity {
@@ -29,6 +32,8 @@ export function toTireMovementEntity(movement: TireMovementWithRelations): TireM
   entity.newPosition = movement.newPosition;
   entity.odometerKm = toNumberOrNull(movement.odometerKm);
   entity.reason = movement.reason;
+  entity.maintenanceId = movement.maintenanceId;
+  entity.maintenanceServiceOrderNumber = movement.maintenance?.serviceOrderNumber ?? null;
   entity.createdBy = movement.createdBy;
   entity.creatorName = movement.creator.name;
   entity.createdAt = movement.createdAt;

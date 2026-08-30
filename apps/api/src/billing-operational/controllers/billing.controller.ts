@@ -6,8 +6,10 @@ import { RequireModule } from '../../tenants/decorators/require-module.decorator
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { BILLING_READ_ROLES } from '../constants/billing-roles.constants';
 import { FindBillingDashboardQueryDto } from '../dto/find-billing-dashboard-query.dto';
+import { FindEligibleTripsQueryDto } from '../dto/find-eligible-trips-query.dto';
 import { FindTripBillingsQueryDto } from '../dto/find-trip-billings-query.dto';
 import { BillingDashboardEntity } from '../entities/billing-dashboard.entity';
+import { PaginatedEligibleTripsForBillingEntity } from '../entities/eligible-trip-for-billing.entity';
 import { PaginatedTripBillingsEntity } from '../entities/paginated-trip-billings.entity';
 import { BillingDashboardService } from '../services/billing-dashboard.service';
 import { BillingListService } from '../services/billing-list.service';
@@ -31,6 +33,19 @@ export class BillingController {
   @ApiOkResponse({ type: PaginatedTripBillingsEntity })
   findAll(@Query() query: FindTripBillingsQueryDto): Promise<PaginatedTripBillingsEntity> {
     return this.billingListService.findAll(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('eligible-trips')
+  @Roles(...BILLING_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 103 -- viagens elegiveis para faturamento: tem valor comercial calculado (TripFreight) e ainda tem ' +
+      'saldo a faturar (nenhum TripBilling ainda, ou um parcialmente faturado). Nunca exige viagem COMPLETED -- ' +
+      'o faturamento ja funciona independente do status da viagem desde a Fase 60; tripStatus e so um filtro.',
+  })
+  @ApiOkResponse({ type: PaginatedEligibleTripsForBillingEntity })
+  findEligibleTrips(@Query() query: FindEligibleTripsQueryDto): Promise<PaginatedEligibleTripsForBillingEntity> {
+    return this.billingListService.findEligibleTrips(this.tenantContext.requireTenantId(), query);
   }
 
   @Get('dashboard')

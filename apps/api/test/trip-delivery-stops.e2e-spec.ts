@@ -829,8 +829,29 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
   });
 
   // ==========================================================================
-  // Driver App -- somente leitura (Fase 88)
+  // Driver App -- leitura (Fase 88) + transicao de status (Fase 106)
   // ==========================================================================
+  async function linkDriverAndLogin(tenantId: string, adminAuth: string, driverId: string): Promise<string> {
+    const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+    const email = `driver-${unique}@teste.com`;
+    const password = 'SenhaForte123!';
+    const userRes = await request(app.getHttpServer())
+      .post('/api/v1/users')
+      .set('Authorization', adminAuth)
+      .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .patch(`/api/v1/drivers/${driverId}/user-link`)
+      .set('Authorization', adminAuth)
+      .send({ userAccountId: userRes.body.data.id })
+      .expect(200);
+    const loginRes = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ tenantId, email, password })
+      .expect(200);
+    return `Bearer ${loginRes.body.data.accessToken as string}`;
+  }
+
   describe('GET /driver/trips/:id/delivery-stops', () => {
     it('motorista consegue ler as paradas planejadas da propria viagem', async () => {
       const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('DriverRead');
@@ -841,25 +862,7 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .set('Authorization', adminAuth)
         .send({ locationId })
         .expect(201);
-
-      const unique = randomUUID().replace(/-/g, '').slice(0, 10);
-      const email = `driver-${unique}@teste.com`;
-      const password = 'SenhaForte123!';
-      const userRes = await request(app.getHttpServer())
-        .post('/api/v1/users')
-        .set('Authorization', adminAuth)
-        .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
-        .expect(201);
-      await request(app.getHttpServer())
-        .patch(`/api/v1/drivers/${driverId}/user-link`)
-        .set('Authorization', adminAuth)
-        .send({ userAccountId: userRes.body.data.id })
-        .expect(200);
-      const loginRes = await request(app.getHttpServer())
-        .post('/api/v1/auth/login')
-        .send({ tenantId, email, password })
-        .expect(200);
-      const driverAuth = `Bearer ${loginRes.body.data.accessToken as string}`;
+      const driverAuth = await linkDriverAndLogin(tenantId, adminAuth, driverId);
 
       const res = await request(app.getHttpServer())
         .get(`/api/v1/driver/trips/${tripId}/delivery-stops`)
@@ -867,6 +870,167 @@ describe('Trip Delivery Stops -- paradas/entregas planejadas (e2e)', () => {
         .expect(200);
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0]).toMatchObject({ tripId, sequence: 1, locationId });
+    });
+  });
+
+  // Fase 106 -- fecha a lacuna real que existia ate aqui: a transicao de
+  // status so era possivel pelo painel administrativo. Reaproveita
+  // INTEGRALMENTE TripDeliveryStopsService.updateStatus (mesmas transicoes/
+  // validacoes ja cobertas para o admin acima) -- aqui so o RBAC/ownership
+  // (endpoint /driver) e testado, nunca a regra de negocio de novo.
+  describe('PATCH /driver/trips/:id/delivery-stops/:stopId/status', () => {
+    it('motorista avanca a propria entrega PENDING -> IN_PROGRESS -> COMPLETED', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('DriverStatus1');
+      const { tripId, driverId } = await setupPlannedTrip(adminAuth);
+      const locationId = await createLocation(adminAuth, `Local ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+      const stopId = stopRes.body.data.id as string;
+      const driverAuth = await linkDriverAndLogin(tenantId, adminAuth, driverId);
+      await startTrip(adminAuth, tripId);
+
+      const inProgress = await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      expect(inProgress.body.data.status).toBe('IN_PROGRESS');
+      expect(inProgress.body.data.actualArrival).toBeTruthy();
+
+      const completed = await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'COMPLETED' })
+        .expect(200);
+      expect(completed.body.data.status).toBe('COMPLETED');
+      expect(completed.body.data.deliveredAt).toBeTruthy();
+
+      // O admin ve a MESMA mudanca -- mesma tabela, nenhum estado paralelo.
+      const adminView = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(adminView.body.data[0].status).toBe('COMPLETED');
+    });
+
+    it('FAILED sem reason e rejeitado (mesma regra do admin)', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('DriverStatus2');
+      const { tripId, driverId } = await setupPlannedTrip(adminAuth);
+      const locationId = await createLocation(adminAuth, `Local ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+      const driverAuth = await linkDriverAndLogin(tenantId, adminAuth, driverId);
+      await startTrip(adminAuth, tripId);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopRes.body.data.id}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'FAILED' })
+        .expect(400);
+
+      const withReason = await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopRes.body.data.id}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'FAILED', reason: 'Endereco nao encontrado' })
+        .expect(200);
+      expect(withReason.body.data.status).toBe('FAILED');
+      expect(withReason.body.data.failureReason).toBe('Endereco nao encontrado');
+    });
+
+    it('transicao invalida (COMPLETED -> PENDING) e rejeitada com 409', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('DriverStatus3');
+      const { tripId, driverId } = await setupPlannedTrip(adminAuth);
+      const locationId = await createLocation(adminAuth, `Local ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+      const driverAuth = await linkDriverAndLogin(tenantId, adminAuth, driverId);
+      await startTrip(adminAuth, tripId);
+      const stopId = stopRes.body.data.id as string;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'COMPLETED' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'PENDING' })
+        .expect(409);
+    });
+
+    it('reenviar a MESMA transicao e idempotente (no-op, sem erro) -- fila offline pode reenviar com seguranca', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('DriverStatus4');
+      const { tripId, driverId } = await setupPlannedTrip(adminAuth);
+      const locationId = await createLocation(adminAuth, `Local ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+      const driverAuth = await linkDriverAndLogin(tenantId, adminAuth, driverId);
+      await startTrip(adminAuth, tripId);
+      const stopId = stopRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      const repeated = await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', driverAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      expect(repeated.body.data.status).toBe('IN_PROGRESS');
+    });
+
+    it('isolamento: motorista de OUTRA viagem/tenant nao consegue alterar a parada (404)', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('DriverStatus5A');
+      const { tripId, driverId: driverIdA } = await setupPlannedTrip(tenantA.adminAuth);
+      const locationId = await createLocation(tenantA.adminAuth, `Local ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', tenantA.adminAuth)
+        .send({ locationId })
+        .expect(201);
+      void driverIdA;
+
+      const tenantB = await createTenantAndLoginAsAdmin('DriverStatus5B');
+      const { driverId: driverIdB } = await setupPlannedTrip(tenantB.adminAuth);
+      const driverAuthB = await linkDriverAndLogin(tenantB.tenantId, tenantB.adminAuth, driverIdB);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopRes.body.data.id}/status`)
+        .set('Authorization', driverAuthB)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(404);
+    });
+
+    it('RBAC: um usuario administrativo (nao DRIVER) recebe 403 neste endpoint', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DriverStatus6');
+      const { tripId } = await setupPlannedTrip(adminAuth);
+      const locationId = await createLocation(adminAuth, `Local ${randomUUID()}`);
+      const stopRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', adminAuth)
+        .send({ locationId })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/driver/trips/${tripId}/delivery-stops/${stopRes.body.data.id}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(403);
     });
   });
 

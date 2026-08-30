@@ -118,7 +118,7 @@ export class MaintenancesService {
     ]);
 
     const result = new PaginatedMaintenancesEntity();
-    result.items = items.map(toMaintenanceEntity);
+    result.items = items.map((item) => toMaintenanceEntity(item));
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
@@ -140,8 +140,17 @@ export class MaintenancesService {
     return this.findAll(tenantId, query);
   }
 
+  // Fase 109 -- tireMovements buscado SOMENTE aqui (nunca em findAll/
+  // listagem), 1 query adicional bounded a UMA OS (mesmo principio ja usado
+  // por TiresService.findOne/lifecycle, Fase 64) -- nunca N+1.
   async findOne(tenantId: string, id: string): Promise<MaintenanceEntity> {
-    return toMaintenanceEntity(await this.findOwnedOrThrow(tenantId, id));
+    const maintenance = await this.findOwnedOrThrow(tenantId, id);
+    const tireMovements = await this.prisma.tireMovement.findMany({
+      where: { tenantId, maintenanceId: id },
+      include: { tire: { select: { fireNumber: true } } },
+      orderBy: { movementDate: 'desc' },
+    });
+    return toMaintenanceEntity(maintenance, tireMovements);
   }
 
   async create(
@@ -156,6 +165,9 @@ export class MaintenancesService {
     }
     if (dto.maintenancePlanId) {
       await this.assertMaintenancePlanBelongsToTenant(tenantId, dto.maintenancePlanId);
+    }
+    if (dto.checklistExecutionId) {
+      await this.assertChecklistExecutionBelongsToTenant(tenantId, dto.checklistExecutionId);
     }
     if (dto.parts?.length) {
       await this.partsService.assertPartsBelongToTenant(
@@ -211,6 +223,7 @@ export class MaintenancesService {
           downtimeMinutes: dto.downtimeMinutes,
           invoiceNumber: dto.invoiceNumber,
           maintenancePlanId: dto.maintenancePlanId,
+          checklistExecutionId: dto.checklistExecutionId,
         }),
         ...(partsItems ? { parts: { create: partsItems } } : {}),
       },
@@ -707,6 +720,18 @@ export class MaintenancesService {
     const plan = await this.prisma.maintenancePlan.findFirst({ where: { id: maintenancePlanId, tenantId } });
     if (!plan) {
       throw new NotFoundException('Plano de manutencao (maintenancePlanId) nao encontrado nesta empresa.');
+    }
+  }
+
+  // Fase 111 -- so existencia/posse por tenant (mesmo padrao de
+  // assertMaintenancePlanBelongsToTenant) -- nenhuma checagem cruzada de
+  // veiculo (o checklist pode legitimamente ser de um veiculo relacionado da
+  // mesma composicao, mesmo principio ja usado para maintenanceId em
+  // TireMovement/PartStockMovement).
+  private async assertChecklistExecutionBelongsToTenant(tenantId: string, checklistExecutionId: string): Promise<void> {
+    const execution = await this.prisma.checklistExecution.findFirst({ where: { id: checklistExecutionId, tenantId } });
+    if (!execution) {
+      throw new NotFoundException('Checklist (checklistExecutionId) nao encontrado nesta empresa.');
     }
   }
 

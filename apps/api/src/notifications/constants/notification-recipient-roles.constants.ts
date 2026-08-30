@@ -41,6 +41,10 @@ export const NOTIFICATION_RECIPIENT_ROLES: Record<NotificationType, UserRole[]> 
   // Fase 98 -- renovacao de contrato e decisao comercial/gestao, mesmo
   // grupo de BILLING_PENDING/DRIVER_SUSPENDED (nunca OPERATOR/DISPATCHER).
   CONTRACT_EXPIRING: MANAGEMENT_ROLES,
+  // Fase 111 -- nao-conformidade critica de checklist e uma questao
+  // operacional/de seguranca imediata, mesmo grupo de TIRE_NEAR_REPLACEMENT/
+  // VEHICLE_MAINTENANCE (nunca restrito a gestao).
+  CHECKLIST_CRITICAL_NON_CONFORMITY: OPERATIONAL_ROLES,
 };
 
 // Todos os roles com PELO MENOS 1 tipo de notificacao elegivel -- usado

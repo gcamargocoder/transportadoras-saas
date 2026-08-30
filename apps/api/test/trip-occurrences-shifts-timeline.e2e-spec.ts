@@ -84,6 +84,15 @@ describe('Trip Occurrences, Driver Shifts e Timeline unificada (e2e)', () => {
     return { tenantId, adminAuth: `Bearer ${loginRes.body.data.accessToken as string}` };
   }
 
+  async function createCustomer(auth: string, name = 'Cliente Teste') {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/customers')
+      .set('Authorization', auth)
+      .send({ name })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   async function createVehicle(auth: string) {
     const res = await request(app.getHttpServer())
       .post('/api/v1/vehicles')
@@ -603,6 +612,71 @@ describe('Trip Occurrences, Driver Shifts e Timeline unificada (e2e)', () => {
         expect(page1.body.data.meta.totalPages).toBe(2);
       });
 
+      // Fase 104 -- "relatorio por cliente": filtro customerId (Trip.customerId,
+      // via relacao -- nunca uma coluna duplicada em TripOccurrence).
+      it('filtra por customerId (cliente da viagem)', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('DelOccByCustomer');
+        const customerA = await createCustomer(adminAuth, 'Cliente A');
+        const customerB = await createCustomer(adminAuth, 'Cliente B');
+
+        const originId = await createLocation(adminAuth, `Origem ${randomUUID()}`);
+        const destinationId = await createLocation(adminAuth, `Destino ${randomUUID()}`);
+
+        // Cada viagem precisa de seu proprio veiculo/motorista/composicao --
+        // reutilizar o mesmo par nas mesmas datas seria bloqueado (409,
+        // "motorista/composicao ja possui outra viagem planejada no mesmo periodo").
+        async function createTripForCustomer(customerId: string): Promise<string> {
+          const vehicleId = await createVehicle(adminAuth);
+          const driverId = await createDriver(adminAuth);
+          const compositionId = await createComposition(adminAuth, vehicleId);
+          const res = await request(app.getHttpServer())
+            .post('/api/v1/trips')
+            .set('Authorization', adminAuth)
+            .send({
+              driverId,
+              compositionId,
+              customerId,
+              originLocationId: originId,
+              destinationLocationId: destinationId,
+              plannedDeparture: '2026-09-01T08:00:00.000Z',
+              plannedArrival: '2026-09-02T18:00:00.000Z',
+            })
+            .expect(201);
+          return res.body.data.id as string;
+        }
+
+        const tripA = await createTripForCustomer(customerA);
+        const tripB = await createTripForCustomer(customerB);
+        const stopA = await createDeliveryStop(adminAuth, tripA);
+        const stopB = await createDeliveryStop(adminAuth, tripB);
+
+        const occA = await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripA}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'OTHER', description: 'ocorrencia cliente A', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopA })
+          .expect(201);
+        await request(app.getHttpServer())
+          .post(`/api/v1/trips/${tripB}/occurrences`)
+          .set('Authorization', adminAuth)
+          .send({ type: 'OTHER', description: 'ocorrencia cliente B', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopB })
+          .expect(201);
+
+        const byCustomerA = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences')
+          .query({ customerId: customerA })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(byCustomerA.body.data.items).toHaveLength(1);
+        expect(byCustomerA.body.data.items[0].id).toBe(occA.body.data.id);
+
+        const dashboardByCustomerB = await request(app.getHttpServer())
+          .get('/api/v1/delivery-occurrences/dashboard')
+          .query({ customerId: customerB })
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(dashboardByCustomerB.body.data.totalCount).toBe(1);
+      });
+
       it('acoes cross-trip: start/resolve/cancel funcionam sem precisar navegar ate a viagem', async () => {
         const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DelOccCrossActions');
         const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
@@ -767,6 +841,231 @@ describe('Trip Occurrences, Driver Shifts e Timeline unificada (e2e)', () => {
         expect(res.body.data.bySeverity.length).toBeGreaterThan(0);
         expect(res.body.data.byType.length).toBeGreaterThan(0);
       });
+    });
+  });
+
+  // ==========================================================================
+  // Fase 115 -- Gestao de Excecoes Operacionais: GET /trip-occurrences,
+  // visao CROSS-TRIP de TODAS as TripOccurrence (gerais + de entrega).
+  // Reaproveita integralmente TripOccurrencesService -- os mesmos cenarios
+  // de filtro/paginacao/customerId/RBAC/isolamento ja cobertos acima para
+  // /delivery-occurrences continuam validos aqui (mesmo buildOccurrenceWhere
+  // por baixo); esta suite cobre so o que e NOVO: a inclusao das ocorrencias
+  // gerais e as acoes/isolamento pela nova rota.
+  // ==========================================================================
+  describe('Fase 115 -- GET /trip-occurrences (todas as ocorrencias, cross-trip)', () => {
+    it('lista ocorrencias gerais E de entrega juntas; sequence null para as gerais', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AllOccList');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const linked = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'WRONG_ADDRESS', description: 'entrega', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+        .expect(201);
+      const general = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'BREAKDOWN', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/trip-occurrences')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(2);
+      const ids = res.body.data.items.map((i: { id: string }) => i.id);
+      expect(ids).toEqual(expect.arrayContaining([linked.body.data.id, general.body.data.id]));
+
+      const generalItem = res.body.data.items.find((i: { id: string }) => i.id === general.body.data.id);
+      expect(generalItem.tripDeliveryStopId).toBeNull();
+      expect(generalItem.tripDeliveryStopSequence).toBeNull();
+      const linkedItem = res.body.data.items.find((i: { id: string }) => i.id === linked.body.data.id);
+      expect(linkedItem.tripDeliveryStopId).toBe(stopId);
+      expect(linkedItem.tripDeliveryStopSequence).toBe(1);
+    });
+
+    it('GET /delivery-occurrences continua excluindo as gerais (regressao -- rota antiga inalterada)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AllOccRegression');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'ACCIDENT', description: 'Acidente', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+
+      const delivery = await request(app.getHttpServer())
+        .get('/api/v1/delivery-occurrences')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(delivery.body.data.items).toHaveLength(0);
+
+      const all = await request(app.getHttpServer())
+        .get('/api/v1/trip-occurrences')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(all.body.data.items).toHaveLength(1);
+    });
+
+    it('dashboard conta ocorrencias gerais e de entrega juntas', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AllOccDashboard');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'WRONG_ADDRESS', severity: 'HIGH', description: 'entrega', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'BREAKDOWN', severity: 'CRITICAL', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+
+      const allDashboard = await request(app.getHttpServer())
+        .get('/api/v1/trip-occurrences/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(allDashboard.body.data.totalCount).toBe(2);
+      expect(allDashboard.body.data.criticalOpenCount).toBe(1);
+
+      const deliveryDashboard = await request(app.getHttpServer())
+        .get('/api/v1/delivery-occurrences/dashboard')
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(deliveryDashboard.body.data.totalCount).toBe(1);
+    });
+
+    it('filtra por tripDeliveryStopId especifico mesmo sem exigir vinculo (nao quebra a especificidade do filtro)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AllOccStopFilter');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const stopId = await createDeliveryStop(adminAuth, tripId);
+
+      const linked = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'WRONG_ADDRESS', description: 'entrega', occurredAt: '2026-09-01T10:00:00.000Z', tripDeliveryStopId: stopId })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'BREAKDOWN', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/trip-occurrences')
+        .query({ tripDeliveryStopId: stopId })
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.items[0].id).toBe(linked.body.data.id);
+    });
+
+    it('acoes cross-trip (start/resolve/cancel) e consulta individual funcionam para ocorrencia geral', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AllOccActions');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'BREAKDOWN', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+      const occurrenceId = createRes.body.data.id as string;
+
+      const detail = await request(app.getHttpServer())
+        .get(`/api/v1/trip-occurrences/${occurrenceId}`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(detail.body.data.id).toBe(occurrenceId);
+
+      const started = await request(app.getHttpServer())
+        .patch(`/api/v1/trip-occurrences/${occurrenceId}/start`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(started.body.data.status).toBe('IN_PROGRESS');
+
+      const resolved = await request(app.getHttpServer())
+        .patch(`/api/v1/trip-occurrences/${occurrenceId}/resolve`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(resolved.body.data.status).toBe('RESOLVED');
+
+      const cancelled = await request(app.getHttpServer())
+        .patch(`/api/v1/trip-occurrences/${occurrenceId}/cancel`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(cancelled.body.data.status).toBe('CANCELLED');
+    });
+
+    it('isolamento multi-tenant: tenant B nunca ve/acessa ocorrencias do tenant A', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('AllOccIsolA');
+      const { tripId } = await setupDriverWithTrip(tenantA.adminAuth, tenantA.tenantId);
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', tenantA.adminAuth)
+        .send({ type: 'BREAKDOWN', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+      const occurrenceId = createRes.body.data.id as string;
+
+      const tenantB = await createTenantAndLoginAsAdmin('AllOccIsolB');
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/trip-occurrences')
+        .set('Authorization', tenantB.adminAuth)
+        .expect(200);
+      expect(list.body.data.items).toHaveLength(0);
+
+      await request(app.getHttpServer())
+        .get(`/api/v1/trip-occurrences/${occurrenceId}`)
+        .set('Authorization', tenantB.adminAuth)
+        .expect(404);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trip-occurrences/${occurrenceId}/resolve`)
+        .set('Authorization', tenantB.adminAuth)
+        .expect(404);
+    });
+
+    it('RBAC: DRIVER bloqueado (403); AUDITOR le mas nao resolve', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AllOccRbac');
+      const { tripId } = await setupDriverWithTrip(adminAuth, tenantId);
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', adminAuth)
+        .send({ type: 'BREAKDOWN', description: 'Pane geral', occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+      const occurrenceId = createRes.body.data.id as string;
+
+      const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+      const driverEmail = `driver-alloccrbac-${unique}@teste.com`;
+      await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Driver User', email: driverEmail, password: 'SenhaForte123!', role: 'DRIVER' })
+        .expect(201);
+      const driverLogin = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: driverEmail, password: 'SenhaForte123!' })
+        .expect(200);
+      const driverAuth = `Bearer ${driverLogin.body.data.accessToken as string}`;
+      await request(app.getHttpServer()).get('/api/v1/trip-occurrences').set('Authorization', driverAuth).expect(403);
+
+      const auditorEmail = `auditor-alloccrbac-${unique}@teste.com`;
+      await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Auditor User', email: auditorEmail, password: 'SenhaForte123!', role: 'AUDITOR' })
+        .expect(201);
+      const auditorLogin = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email: auditorEmail, password: 'SenhaForte123!' })
+        .expect(200);
+      const auditorAuth = `Bearer ${auditorLogin.body.data.accessToken as string}`;
+      await request(app.getHttpServer()).get('/api/v1/trip-occurrences').set('Authorization', auditorAuth).expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trip-occurrences/${occurrenceId}/resolve`)
+        .set('Authorization', auditorAuth)
+        .expect(403);
     });
   });
 

@@ -83,13 +83,21 @@ export class TripRoutingService {
       id: item.stopId,
       sequence: item.suggestedSequence,
     }));
-    await this.tripDeliveryStopsService.reorder(tenantId, tripId, { items }, actor, metadata);
 
-    // Reaproveita RouteVersion (Fase 23/26) -- ja documentado como o lugar
-    // certo para acumular "replanejamentos" de uma viagem (regra 3); nenhuma
-    // geometria e gravada aqui (nunca calculada nesta fase), so o marco
-    // historico de que a sequencia de paradas foi reordenada por sugestao.
+    // Fase 113 -- reordenar as paradas E registrar a nova RouteVersion sao a
+    // MESMA alteracao de planejamento (regra "operacoes criticas atomicas e
+    // seguras contra concorrencia") -- por isso ambas acontecem dentro de
+    // UMA UNICA transacao (passada a reorder() via `tx`), nunca duas
+    // transacoes separadas que poderiam deixar a sequencia alterada sem o
+    // marco historico correspondente (ou vice-versa) se algo falhar entre
+    // elas. Reaproveita RouteVersion (Fase 23/26) -- ja documentado como o
+    // lugar certo para acumular "replanejamentos" de uma viagem (regra 3);
+    // nenhuma geometria e gravada aqui (nunca calculada nesta fase), so o
+    // marco historico de que a sequencia de paradas foi reordenada por
+    // sugestao.
     const routeVersion = await this.prisma.$transaction(async (tx) => {
+      await this.tripDeliveryStopsService.reorder(tenantId, tripId, { items }, actor, metadata, tx);
+
       const last = await tx.routeVersion.findFirst({
         where: { tenantId, tripId },
         orderBy: { versionNumber: 'desc' },

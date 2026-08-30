@@ -5,6 +5,10 @@ import { FuelSupplyEntity } from '../entities/fuel-supply.entity';
 export type FuelSupplyWithRelations = FuelSupply & {
   vehicle: Vehicle;
   driver: Driver;
+  // Fase 107 -- so para exibir "origem -> destino" (tripLabel); nunca usado
+  // para derivar vehicleId/driverId (que continuam vindo de supply.vehicle/
+  // supply.driver diretamente, mesma regra de sempre).
+  trip: { origin: { name: string }; destination: { name: string } } | null;
   fuelStation: FuelStation | null;
   creator: UserAccount;
   updater: UserAccount | null;
@@ -19,6 +23,7 @@ export function toFuelSupplyEntity(supply: FuelSupplyWithRelations): FuelSupplyE
   entity.driverId = supply.driverId;
   entity.driverName = supply.driver.name;
   entity.tripId = supply.tripId;
+  entity.tripLabel = supply.trip ? `${supply.trip.origin.name} → ${supply.trip.destination.name}` : null;
   entity.fuelStationId = supply.fuelStationId;
   entity.fuelStationName = supply.fuelStation?.name ?? null;
   entity.attachmentId = supply.attachmentId;

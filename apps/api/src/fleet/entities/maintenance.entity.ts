@@ -6,6 +6,7 @@ import {
   VehicleMaintenanceType,
 } from '@prisma/client';
 import { MaintenancePartEntity } from './maintenance-part.entity';
+import { MaintenanceTireMovementEntity } from './maintenance-tire-movement.entity';
 
 export class MaintenanceEntity {
   @ApiProperty({ format: 'uuid' })
@@ -119,8 +120,22 @@ export class MaintenanceEntity {
   @ApiProperty({ format: 'uuid', nullable: true })
   maintenancePlanId!: string | null;
 
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description: 'Fase 111 -- execucao de checklist cuja nao-conformidade critica motivou esta OS, quando aplicavel.',
+  })
+  checklistExecutionId!: string | null;
+
   @ApiProperty({ type: [MaintenancePartEntity] })
   parts!: MaintenancePartEntity[];
+
+  // Fase 109 -- populado SOMENTE em GET /maintenances/:id (mesmo principio
+  // ja usado por TireEntity.lifecycle, Fase 64: nunca em findAll/listagem
+  // paginada, para nao introduzir N+1). Vazio quando nenhuma movimentacao
+  // de pneu foi vinculada a esta OS.
+  @ApiProperty({ type: [MaintenanceTireMovementEntity] })
+  tireMovements!: MaintenanceTireMovementEntity[];
 
   @ApiProperty()
   createdAt!: Date;

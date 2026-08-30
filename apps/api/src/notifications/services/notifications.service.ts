@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   AlertSeverity,
+  ChecklistExecutionStatus,
   ContractStatus,
   DriverStatus,
   FiscalDocumentStatus,
@@ -8,6 +9,7 @@ import {
   Notification,
   NotificationType,
   Prisma,
+  TireLocationType,
   TripBillingStatus,
   TripStatus,
   TripOccurrenceSeverity,
@@ -18,11 +20,15 @@ import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
+import { hasCriticalNonConformity } from '../../checklists/utils/checklist-non-conformity.util';
 import { compact } from '../../common/utils/compact.util';
+import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { detectOdometerRegression } from '../../common/utils/fuel-consumption.util';
 import { resolveDocumentExpiryStatus } from '../../fleet/utils/document-expiry.util';
+import { evaluateMaintenancePlan } from '../../fleet-operations/utils/maintenance-plan-status.util';
 import { PrismaService } from '../../prisma/prisma.service';
-import { NEAR_REPLACEMENT_THRESHOLD_MM } from '../../tires/services/tires.service';
+import { NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT, NEAR_REPLACEMENT_THRESHOLD_MM } from '../../tires/services/tires.service';
+import { computeTireDistanceLifespan } from '../../tires/utils/tire-lifecycle.util';
 import { FindNotificationsQueryDto } from '../dto/find-notifications-query.dto';
 import { NotificationEntity, PaginatedNotificationsEntity, UnreadNotificationCountEntity } from '../entities/notification.entity';
 import { toNotificationEntity } from '../mappers/notification.mapper';
@@ -38,6 +44,11 @@ const NON_TERMINAL_TRIP_STATUSES: TripStatus[] = [
   TripStatus.IN_PROGRESS,
   TripStatus.PAUSED,
 ];
+
+// Fase 111 -- ver collectChecklistCriticalNonConformity: janela deliberada
+// (distinta dos demais coletores de evento, sem limite de data) porque
+// ChecklistExecution cresce sem teto por viagem.
+const CHECKLIST_NOTIFICATION_WINDOW_DAYS = 7;
 
 const OPEN_MAINTENANCE_STATUSES_EXCLUDED: VehicleMaintenanceStatus[] = [
   VehicleMaintenanceStatus.COMPLETED,
@@ -292,12 +303,28 @@ export class NotificationsService {
     return groupRecipientsByType(users, types);
   }
 
+  // Fase 111 -- corrigido um bug real encontrado nesta auditoria: o array de
+  // nomes desestruturados do Promise.all abaixo estava desalinhado com a
+  // lista de coletores desde a Fase 110 (2 coletores adicionados ao
+  // Promise.all -- collectTireLifespanNearReplacement e
+  // collectChecklistCriticalNonConformity -- sem os 2 nomes correspondentes
+  // na desestruturacao). Resultado real: os 2 ULTIMOS coletores da lista
+  // (collectDeliveryProofProblem/collectContractsExpiring) tinham seu
+  // resultado silenciosamente descartado (posicoes do Promise.all alem da
+  // quantidade de nomes desestruturados nunca sao atribuidas a nada) --
+  // nenhuma notificacao desses 2 tipos era criada, sem nenhum erro visivel
+  // (JS/TS nao acusam desestruturacao de array com menos nomes que
+  // elementos). Cada nome agora corresponde 1:1, na MESMA ordem, ao
+  // respectivo coletor -- nunca mais confiar em contagem manual aqui.
   private async collectCandidates(tenantId: string): Promise<NotificationCandidate[]> {
     const [
       occurrences,
       unavailableVehicles,
       overdueMaintenances,
+      duePlanMaintenances,
       nearReplacementTires,
+      lifespanNearReplacementTires,
+      checklistCriticalNonConformities,
       odometerRegressions,
       fiscalProblems,
       delayedTrips,
@@ -311,7 +338,10 @@ export class NotificationsService {
       this.collectCriticalOccurrences(tenantId),
       this.collectVehicleUnavailable(tenantId),
       this.collectVehicleMaintenance(tenantId),
+      this.collectMaintenancePlansDue(tenantId),
       this.collectTireNearReplacement(tenantId),
+      this.collectTireLifespanNearReplacement(tenantId),
+      this.collectChecklistCriticalNonConformity(tenantId),
       this.collectFuelOdometerRegression(tenantId),
       this.collectFiscalDocumentProblems(tenantId),
       this.collectTripDelayed(tenantId),
@@ -327,7 +357,10 @@ export class NotificationsService {
       ...occurrences,
       ...unavailableVehicles,
       ...overdueMaintenances,
+      ...duePlanMaintenances,
       ...nearReplacementTires,
+      ...lifespanNearReplacementTires,
+      ...checklistCriticalNonConformities,
       ...odometerRegressions,
       ...fiscalProblems,
       ...delayedTrips,
@@ -487,6 +520,80 @@ export class NotificationsService {
     }));
   }
 
+  // Fase 108 -- fecha a lacuna real entre manutencao PREVENTIVA (MaintenancePlan,
+  // Fase 45) e o centro de notificacoes: ate aqui, collectVehicleMaintenance
+  // (acima) so reagia a uma VehicleMaintenance JA ABERTA com scheduledAt
+  // vencido -- um plano vencido/proximo por km ou data SEM nenhuma OS aberta
+  // ainda (o caso normal, ja que MaintenancePlan nunca gera VehicleMaintenance
+  // automaticamente) nunca virava notificacao, so aparecia no dashboard de
+  // frota (FleetOperationsMetricsService.computeMaintenancePlanStatus).
+  // Reaproveita INTEGRALMENTE a MESMA funcao pura (evaluateMaintenancePlan) e
+  // o MESMO padrao de 2 queries em lote (nunca 1 por plano) -- nenhuma
+  // segunda regra de vencimento. Mesmo NotificationType.VEHICLE_MAINTENANCE
+  // ja existente (nunca um enum novo); entityType='MaintenancePlan' distingue
+  // esta notificacao (chave de deduplicacao) da gerada por
+  // collectVehicleMaintenance (entityType='VehicleMaintenance').
+  private async collectMaintenancePlansDue(tenantId: string): Promise<NotificationCandidate[]> {
+    const activePlans = await this.prisma.maintenancePlan.findMany({
+      where: { tenantId, active: true },
+    });
+    if (activePlans.length === 0) return [];
+
+    const planIds = activePlans.map((p) => p.id);
+    const vehicleIds = [...new Set(activePlans.map((p) => p.vehicleId))];
+
+    const [lastCompletedRows, vehicles] = await Promise.all([
+      this.prisma.vehicleMaintenance.findMany({
+        where: { tenantId, maintenancePlanId: { in: planIds }, status: VehicleMaintenanceStatus.COMPLETED },
+        select: { maintenancePlanId: true, completedAt: true, odometerKm: true },
+        orderBy: { completedAt: 'desc' },
+      }),
+      this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true, odometerKm: true } }),
+    ]);
+
+    const lastByPlan = new Map<string, { completedAt: Date | null; odometerKm: number | null }>();
+    for (const row of lastCompletedRows) {
+      if (!row.maintenancePlanId || lastByPlan.has(row.maintenancePlanId)) continue;
+      lastByPlan.set(row.maintenancePlanId, { completedAt: row.completedAt, odometerKm: toNumberOrNull(row.odometerKm) });
+    }
+    const vehicleById = new Map(vehicles.map((v) => [v.id, { plate: v.plate, odometerKm: toNumberOrNull(v.odometerKm) }]));
+
+    const now = new Date();
+    const candidates: NotificationCandidate[] = [];
+    for (const plan of activePlans) {
+      const lastService = lastByPlan.get(plan.id) ?? null;
+      const vehicleInfo = vehicleById.get(plan.vehicleId);
+      const evaluation = evaluateMaintenancePlan(
+        { intervalKm: plan.intervalKm, intervalDays: plan.intervalDays, alertBeforeKm: plan.alertBeforeKm, alertBeforeDays: plan.alertBeforeDays },
+        lastService,
+        vehicleInfo?.odometerKm ?? null,
+        now,
+      );
+      if (evaluation.status !== 'OVERDUE' && evaluation.status !== 'DUE_SOON') continue;
+
+      const plate = vehicleInfo?.plate ?? '—';
+      const overdue = evaluation.status === 'OVERDUE';
+      const detail = overdue
+        ? evaluation.overdueByDays !== null
+          ? `há ${evaluation.overdueByDays} dia(s)`
+          : `há ${evaluation.overdueByKm} km`
+        : evaluation.dueDate !== null
+          ? `em ${evaluation.dueDate.toISOString().slice(0, 10)}`
+          : `aos ${evaluation.dueOdometerKm} km`;
+
+      candidates.push({
+        type: NotificationType.VEHICLE_MAINTENANCE,
+        severity: overdue ? AlertSeverity.HIGH : AlertSeverity.MEDIUM,
+        title: overdue ? `Manutenção preventiva vencida: ${plate}` : `Manutenção preventiva próxima: ${plate}`,
+        message: `${plan.name} (${plan.component}) do veículo ${plate} ${overdue ? 'está vencida' : 'vence'} ${detail}.`,
+        entityType: 'MaintenancePlan',
+        entityId: plan.id,
+        metadata: { vehicleId: plan.vehicleId },
+      });
+    }
+    return candidates;
+  }
+
   private async collectTireNearReplacement(tenantId: string): Promise<NotificationCandidate[]> {
     const rows = await this.prisma.tire.findMany({
       where: { tenantId, currentTreadDepthMm: { lte: NEAR_REPLACEMENT_THRESHOLD_MM }, vehicleId: { not: null } },
@@ -501,6 +608,123 @@ export class NotificationsService {
       entityId: row.id,
       metadata: { vehicleId: row.vehicleId },
     }));
+  }
+
+  // Fase 110 -- fecha a lacuna real entre o novo indicador de vida util por
+  // distancia (Tire.expectedLifespanKm vs km rodados desde a instalacao,
+  // TiresService.findOne/computeTireDistanceLifespan) e o centro de
+  // notificacoes: ate aqui, collectTireNearReplacement (acima) so reagia ao
+  // SULCO medido manualmente numa inspecao -- um pneu de composto duro que
+  // ainda tem sulco alto mas ja passou da distancia projetada nunca virava
+  // notificacao. Mesmo NotificationType.TIRE_NEAR_REPLACEMENT ja existente
+  // (nunca um enum novo); entityType='TireLifespan' distingue esta
+  // notificacao (chave de deduplicacao) da gerada por
+  // collectTireNearReplacement (entityType='Tire'). Reaproveita
+  // INTEGRALMENTE a MESMA formula (computeTireDistanceLifespan) usada por
+  // GET /tires/:id -- nenhuma segunda regra de calculo. 2 queries em lote
+  // (pneus + movimentacoes de instalacao mais recentes), nunca 1 por pneu.
+  private async collectTireLifespanNearReplacement(tenantId: string): Promise<NotificationCandidate[]> {
+    const tires = await this.prisma.tire.findMany({
+      where: {
+        tenantId,
+        locationType: TireLocationType.VEHICLE,
+        vehicleId: { not: null },
+        expectedLifespanKm: { not: null },
+      },
+      select: {
+        id: true,
+        fireNumber: true,
+        vehicleId: true,
+        expectedLifespanKm: true,
+        vehicle: { select: { plate: true, odometerKm: true } },
+      },
+    });
+    if (tires.length === 0) return [];
+
+    const tireIds = tires.map((t) => t.id);
+    const installMovements = await this.prisma.tireMovement.findMany({
+      where: { tenantId, tireId: { in: tireIds }, newLocationType: { not: TireLocationType.STOCK } },
+      select: { tireId: true, odometerKm: true, movementDate: true },
+      orderBy: { movementDate: 'desc' },
+    });
+    const installByTire = new Map<string, number | null>();
+    for (const movement of installMovements) {
+      if (installByTire.has(movement.tireId)) continue;
+      installByTire.set(movement.tireId, toNumberOrNull(movement.odometerKm));
+    }
+
+    const candidates: NotificationCandidate[] = [];
+    for (const tire of tires) {
+      const { remainingLifespanKm, lifespanUsedPercent } = computeTireDistanceLifespan({
+        currentLocationType: TireLocationType.VEHICLE,
+        expectedLifespanKm: toNumberOrNull(tire.expectedLifespanKm),
+        installedAtOdometerKm: installByTire.get(tire.id) ?? null,
+        currentOdometerKm: toNumberOrNull(tire.vehicle?.odometerKm ?? null),
+      });
+      if (lifespanUsedPercent === null || lifespanUsedPercent < NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT) continue;
+
+      const plate = tire.vehicle?.plate ?? '—';
+      const overdue = remainingLifespanKm !== null && remainingLifespanKm <= 0;
+      candidates.push({
+        type: NotificationType.TIRE_NEAR_REPLACEMENT,
+        severity: overdue ? AlertSeverity.HIGH : AlertSeverity.MEDIUM,
+        title: overdue ? `Pneu além da vida útil projetada: ${tire.fireNumber}` : `Pneu próximo da vida útil projetada: ${tire.fireNumber}`,
+        message: `Pneu ${tire.fireNumber} do veículo ${plate} já rodou ${lifespanUsedPercent.toFixed(0)}% da vida útil esperada.`,
+        entityType: 'TireLifespan',
+        entityId: tire.id,
+        metadata: { vehicleId: tire.vehicleId },
+      });
+    }
+    return candidates;
+  }
+
+  // Fase 111 -- fecha a lacuna real entre a nao-conformidade critica do
+  // checklist (hasCriticalNonConformity, ja calculada desde a Fase 38 mas
+  // ate aqui so exposta em GET/leitura, nunca notificada) e o Centro de
+  // Notificacoes. Mesma funcao pura (hasCriticalNonConformity) usada por
+  // ChecklistExecutionsService/TripsService.assertPreTripChecklistSatisfied
+  // -- nenhuma segunda regra de criticidade. entityType='ChecklistExecution',
+  // entityId=execution.id garante deduplicacao por execucao (mesma condicao
+  // reprocessada nunca gera uma segunda notificacao).
+  //
+  // Diferente dos demais coletores baseados em EVENTO (ex.:
+  // collectFuelOdometerRegression, que varre TODO o historico do tenant sem
+  // limite de data): ChecklistExecution e um log operacional que cresce sem
+  // teto (potencialmente 1+ por viagem, muito mais volume que abastecimento).
+  // Por isso este coletor limita a janela a
+  // CHECKLIST_NOTIFICATION_WINDOW_DAYS `completedAt` -- uma nao-conformidade
+  // critica de meses atras ja nao e "situacao que exige atencao agora"
+  // (seção 8 do pedido), e sem o limite a query cresceria indefinidamente a
+  // cada processamento. Decisao deliberada, documentada em
+  // docs/notifications.md.
+  private async collectChecklistCriticalNonConformity(tenantId: string): Promise<NotificationCandidate[]> {
+    const since = new Date(Date.now() - CHECKLIST_NOTIFICATION_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const executions = await this.prisma.checklistExecution.findMany({
+      where: { tenantId, status: ChecklistExecutionStatus.COMPLETED, completedAt: { gte: since } },
+      select: {
+        id: true,
+        vehicleId: true,
+        vehicle: { select: { plate: true } },
+        template: { select: { name: true } },
+        answers: { select: { booleanValue: true, item: { select: { type: true, required: true, critical: true } } } },
+      },
+    });
+
+    const candidates: NotificationCandidate[] = [];
+    for (const execution of executions) {
+      if (!hasCriticalNonConformity(execution.answers)) continue;
+      const plate = execution.vehicle?.plate ?? '—';
+      candidates.push({
+        type: NotificationType.CHECKLIST_CRITICAL_NON_CONFORMITY,
+        severity: AlertSeverity.HIGH,
+        title: `Checklist com item crítico: ${plate}`,
+        message: `Checklist "${execution.template.name}" do veículo ${plate} tem item crítico marcado como NÃO.`,
+        entityType: 'ChecklistExecution',
+        entityId: execution.id,
+        metadata: { vehicleId: execution.vehicleId },
+      });
+    }
+    return candidates;
   }
 
   // Mesma deteccao de ODOMETER_REGRESSION (detectOdometerRegression, ja

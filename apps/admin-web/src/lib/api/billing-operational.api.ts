@@ -1,6 +1,6 @@
 import type { Paginated, PaginationParams } from '../../types/api';
-import type { OperationalBillingDashboardEntity, TripBillingEntity } from '../../types/entities';
-import type { TripBillingStatus } from '../../types/enums';
+import type { EligibleTripForBillingEntity, OperationalBillingDashboardEntity, TripBillingEntity } from '../../types/entities';
+import type { TripBillingStatus, TripStatus } from '../../types/enums';
 import { api } from './http';
 
 export interface FindTripBillingsQuery extends PaginationParams {
@@ -15,6 +15,19 @@ export interface FindTripBillingsQuery extends PaginationParams {
 
 export function listTripBillings(query: FindTripBillingsQuery = {}, signal?: AbortSignal) {
   return api.get<Paginated<TripBillingEntity>>('/operational-billing', query, signal);
+}
+
+// Fase 103 -- "selecionar viagens elegiveis para faturamento".
+export interface FindEligibleTripsQuery extends PaginationParams {
+  customerId?: string | undefined;
+  fleetId?: string | undefined;
+  vehicleId?: string | undefined;
+  driverId?: string | undefined;
+  tripStatus?: TripStatus | undefined;
+}
+
+export function listEligibleTripsForBilling(query: FindEligibleTripsQuery = {}, signal?: AbortSignal) {
+  return api.get<Paginated<EligibleTripForBillingEntity>>('/operational-billing/eligible-trips', query, signal);
 }
 
 export function getBillingDashboard(query: FindTripBillingsQuery = {}, signal?: AbortSignal) {

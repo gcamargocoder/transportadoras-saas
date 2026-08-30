@@ -29,12 +29,25 @@ import {
   FISCAL_DOCUMENT_STATUS_TONE,
   FISCAL_DOCUMENT_TYPE_LABELS,
   FISCAL_ISSUE_CODE_LABELS,
+  PAYABLE_STATUS_LABELS,
+  PAYABLE_STATUS_TONE,
+  RECEIVABLE_STATUS_LABELS,
+  RECEIVABLE_STATUS_TONE,
   TRIP_OCCURRENCE_SEVERITY_LABELS,
   TRIP_OCCURRENCE_TYPE_LABELS,
 } from '../../lib/labels';
+import { CreatePayableModal } from '../payables/create-payable-modal';
+import { CreateReceivableModal } from '../receivables/create-receivable-modal';
 import type { FiscalDocumentEntity } from '../../types/entities';
-import type { FiscalDocumentStatus } from '../../types/enums';
-import { formatDate, formatDateTime } from '../../utils/format';
+import type { FiscalDocumentStatus, PayableStatus, ReceivableStatus } from '../../types/enums';
+import { formatCurrency, formatDate, formatDateTime } from '../../utils/format';
+
+// Fase Fiscal/XML -- data extraida do XML (dhEmi/dEmi) vem como
+// datetime ISO completo; inputs type="date" exigem "yyyy-MM-dd". So chamado
+// apos confirmar que o valor nao e nulo (nunca retorna undefined).
+function toDateInputValue(iso: string): string {
+  return iso.slice(0, 10);
+}
 
 const AUDIT_ACTION_LABELS: Record<string, string> = {
   'fiscal.document_uploaded': 'Documento enviado',
@@ -73,6 +86,8 @@ export function FiscalDocumentDetailDrawer({
   const [driverId, setDriverId] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [fileActionBusy, setFileActionBusy] = useState<'preview' | 'download' | null>(null);
+  const [payableModalOpen, setPayableModalOpen] = useState(false);
+  const [receivableModalOpen, setReceivableModalOpen] = useState(false);
 
   useEffect(() => {
     if (!document) return;
@@ -169,7 +184,19 @@ export function FiscalDocumentDetailDrawer({
     }
   }
 
+  // Fase Fiscal/XML -- so oferece "Gerar conta a pagar/receber" quando o
+  // parser realmente extraiu um valor do XML (metadata.amount, ver
+  // fiscal-xml.parser.ts) -- "relacao clara" e a existencia de um valor
+  // real, nunca uma lista fixa de tipos de documento. Nunca decide despesa
+  // vs. receita automaticamente: as duas opcoes ficam disponiveis, o
+  // usuario escolhe.
+  const extractedAmount = typeof document?.metadata?.amount === 'number' ? document.metadata.amount : null;
+  const defaultDescription = document
+    ? `${FISCAL_DOCUMENT_TYPE_LABELS[document.documentType]}${document.documentNumber ? ` ${document.documentNumber}` : ''}`
+    : '';
+
   return (
+    <>
     <Drawer open={document !== null} onClose={onClose} title="Documento fiscal">
       {document && (
         <div className="flex flex-col gap-5 p-4">
@@ -219,6 +246,46 @@ export function FiscalDocumentDetailDrawer({
                 </ul>
               )}
               <p className="mt-1.5 text-[11px] text-ink-subtle">Relação derivada das chaves manifestadas no XML — nunca inferida.</p>
+            </div>
+          )}
+
+          {(extractedAmount !== null || document.payable || document.receivable) && (
+            <div className="rounded-md bg-surface-muted p-2.5">
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-subtle">Aproveitamento financeiro</p>
+              <div className="flex flex-col gap-2">
+                {document.payable ? (
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-ink">Conta a pagar gerada · {formatCurrency(document.payable.originalAmount)}</span>
+                    <Badge tone={PAYABLE_STATUS_TONE[document.payable.status as PayableStatus]}>
+                      {PAYABLE_STATUS_LABELS[document.payable.status as PayableStatus]}
+                    </Badge>
+                  </div>
+                ) : (
+                  extractedAmount !== null && (
+                    <Button variant="outline" size="sm" onClick={() => setPayableModalOpen(true)}>
+                      Gerar conta a pagar
+                    </Button>
+                  )
+                )}
+                {document.receivable ? (
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-ink">Conta a receber gerada · {formatCurrency(document.receivable.originalAmount)}</span>
+                    <Badge tone={RECEIVABLE_STATUS_TONE[document.receivable.status as ReceivableStatus]}>
+                      {RECEIVABLE_STATUS_LABELS[document.receivable.status as ReceivableStatus]}
+                    </Badge>
+                  </div>
+                ) : (
+                  extractedAmount !== null && (
+                    <Button variant="outline" size="sm" onClick={() => setReceivableModalOpen(true)}>
+                      Gerar conta a receber
+                    </Button>
+                  )
+                )}
+              </div>
+              <p className="mt-1.5 text-[11px] text-ink-subtle">
+                Valor extraído do XML ({extractedAmount !== null ? formatCurrency(extractedAmount) : '—'}) usado como ponto de partida — revise antes de
+                confirmar. No máximo 1 conta a pagar e 1 conta a receber por documento.
+              </p>
             </div>
           )}
 
@@ -405,5 +472,33 @@ export function FiscalDocumentDetailDrawer({
         </div>
       )}
     </Drawer>
+    {document && (
+      <>
+        <CreatePayableModal
+          open={payableModalOpen}
+          onClose={() => setPayableModalOpen(false)}
+          fiscalDocumentId={document.id}
+          initialValues={{
+            ...(document.senderName ? { supplierName: document.senderName } : {}),
+            category: 'OTHER',
+            description: defaultDescription,
+            ...(extractedAmount !== null ? { originalAmount: extractedAmount } : {}),
+            ...(document.issueDate ? { issueDate: toDateInputValue(document.issueDate) } : {}),
+          }}
+        />
+        <CreateReceivableModal
+          open={receivableModalOpen}
+          onClose={() => setReceivableModalOpen(false)}
+          fiscalDocumentId={document.id}
+          initialValues={{
+            ...(document.customerId ? { customerId: document.customerId } : {}),
+            description: defaultDescription,
+            ...(extractedAmount !== null ? { originalAmount: extractedAmount } : {}),
+            ...(document.issueDate ? { issueDate: toDateInputValue(document.issueDate) } : {}),
+          }}
+        />
+      </>
+    )}
+    </>
   );
 }

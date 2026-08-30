@@ -59,4 +59,14 @@ export class CreateTireMovementDto {
   @IsOptional()
   @IsDateString({}, { message: 'movementDate deve ser uma data valida (ISO 8601).' })
   movementDate?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Fase 109 -- vinculo opcional com a OS (VehicleMaintenance) que motivou esta troca, quando ' +
+      'aplicavel. Mesmo padrao de MaintenancePartInputDto.partId: ausente = movimentacao avulsa.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'maintenanceId deve ser um UUID valido.' })
+  maintenanceId?: string;
 }

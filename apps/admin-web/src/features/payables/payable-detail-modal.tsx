@@ -64,11 +64,16 @@ export function PayableDetailModal({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-ink">{payable.description}</p>
-                <a href={`/trips/${payable.tripId}`} className="text-xs text-brand-700 hover:underline">
-                  {payable.tripLabel ?? payable.tripId}
-                </a>
+                {payable.tripId ? (
+                  <a href={`/trips/${payable.tripId}`} className="text-xs text-brand-700 hover:underline">
+                    {payable.tripLabel ?? payable.tripId}
+                  </a>
+                ) : (
+                  <span className="text-xs text-ink-subtle">Título manual — sem viagem vinculada</span>
+                )}
                 <p className="mt-0.5 text-xs text-ink-subtle">
                   {EXPENSE_CATEGORY_LABELS[payable.category]} · {payable.supplierName ?? 'Sem fornecedor informado'}
+                  {payable.installmentTotal ? ` · Parcela ${payable.installmentNumber}/${payable.installmentTotal}` : ''}
                 </p>
               </div>
               <Badge tone={PAYABLE_STATUS_TONE[payable.status]}>{PAYABLE_STATUS_LABELS[payable.status]}</Badge>
@@ -124,6 +129,13 @@ export function PayableDetailModal({
                         <span className="block text-xs text-ink-subtle">
                           {p.creatorName ?? '—'} em {formatDateTime(p.createdAt)}
                         </span>
+                        {(p.interestAmount || p.fineAmount || p.discountAmount) && (
+                          <span className="mt-0.5 block text-xs text-ink-subtle">
+                            {p.interestAmount ? `Juros ${formatCurrency(p.interestAmount)} ` : ''}
+                            {p.fineAmount ? `Multa ${formatCurrency(p.fineAmount)} ` : ''}
+                            {p.discountAmount ? `Desconto ${formatCurrency(p.discountAmount)}` : ''}
+                          </span>
+                        )}
                         {/* Fase 79 -- ja vem no MESMO payload (sem consulta extra); nulo so para
                             pagamentos anteriores a esta fase. */}
                         {p.financialAccountId ? (

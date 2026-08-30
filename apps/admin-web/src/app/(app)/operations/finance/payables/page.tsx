@@ -15,6 +15,7 @@ import { Pagination } from '../../../../../components/ui/pagination';
 import { Select } from '../../../../../components/ui/select';
 import { SkeletonCards } from '../../../../../components/ui/skeleton';
 import { StatCard } from '../../../../../components/ui/stat-card';
+import { CreatePayableModal } from '../../../../../features/payables/create-payable-modal';
 import { PayableDetailModal } from '../../../../../features/payables/payable-detail-modal';
 import { getPayablesDashboard, listPayables } from '../../../../../lib/api/payables.api';
 import { EXPENSE_CATEGORY_LABELS, PAYABLE_STATUS_LABELS, PAYABLE_STATUS_TONE } from '../../../../../lib/labels';
@@ -32,6 +33,7 @@ export default function PayablesPage(): JSX.Element {
   const [dueFrom, setDueFrom] = useState('');
   const [dueTo, setDueTo] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const filters = {
     category: category || undefined,
@@ -54,7 +56,7 @@ export default function PayablesPage(): JSX.Element {
   const columns: ColumnDef<PayableEntity, unknown>[] = [
     { header: 'Descrição', accessorFn: (row) => row.description },
     { header: 'Fornecedor', accessorFn: (row) => row.supplierName ?? '—' },
-    { header: 'Viagem', cell: ({ row }) => row.original.tripLabel ?? row.original.tripId },
+    { header: 'Viagem', cell: ({ row }) => row.original.tripLabel ?? row.original.tripId ?? 'Manual' },
     { header: 'Categoria', cell: ({ row }) => EXPENSE_CATEGORY_LABELS[row.original.category] },
     { header: 'Valor', cell: ({ row }) => formatCurrency(row.original.originalAmount) },
     { header: 'Pago', cell: ({ row }) => formatCurrency(row.original.paidAmount) },
@@ -78,7 +80,8 @@ export default function PayablesPage(): JSX.Element {
     <div>
       <PageHeader
         title="Contas a pagar"
-        description="Acompanhamento dos títulos gerados a partir das despesas aprovadas das viagens."
+        description="Acompanhamento dos títulos gerados a partir das despesas aprovadas das viagens, além de títulos manuais."
+        actions={<Button onClick={() => setCreateOpen(true)}>Nova conta a pagar</Button>}
       />
 
       {dashboardQuery.isLoading && <SkeletonCards count={4} />}
@@ -208,6 +211,7 @@ export default function PayablesPage(): JSX.Element {
       </div>
 
       <PayableDetailModal open={selectedId !== null} onClose={() => setSelectedId(null)} payableId={selectedId} />
+      <CreatePayableModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   );
 }

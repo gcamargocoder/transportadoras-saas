@@ -6,6 +6,7 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { FinancialPeriodGuardService } from '../../financial-periods/services/financial-period-guard.service';
 import { resolveTripFreightBestAmount } from '../../freight/utils/trip-freight-amount.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TripRevenuesService } from '../../trip-revenues/services/trip-revenues.service';
@@ -40,6 +41,7 @@ export class TripBillingService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly tripRevenuesService: TripRevenuesService,
+    private readonly periodGuard: FinancialPeriodGuardService,
   ) {}
 
   async getTripBilling(tenantId: string, tripId: string): Promise<TripBillingEntity> {
@@ -81,8 +83,17 @@ export class TripBillingService {
     metadata: RequestMetadata,
   ): Promise<TripBillingEntity> {
     const trip = await this.findTripContext(tenantId, tripId);
-    const freightContext = await this.getFreightContext(tenantId, tripId);
-    const billableAmount = resolveTripFreightBestAmount(freightContext);
+    const existing = await this.prisma.tripBilling.findFirst({ where: { tenantId, tripId } });
+
+    // Fase 103 -- snapshot: uma vez que o faturamento tem QUALQUER valor ja
+    // lancado (existing.billableAmount preenchido), o valor faturavel fica
+    // CONGELADO -- nunca mais recalculado de TripFreight, mesmo que
+    // PATCH /freight/trips/:tripId edite contractedAmount/finalAmount
+    // depois. So a PRIMEIRA chamada (nenhum TripBilling ainda) le o valor
+    // vigente em TripFreight -- exatamente o momento em que "a fonte pode
+    // sofrer alteracao posterior" deixa de importar para este faturamento.
+    const frozenBillableAmount = existing ? toNumberOrNull(existing.billableAmount) : null;
+    const billableAmount = frozenBillableAmount ?? resolveTripFreightBestAmount(await this.getFreightContext(tenantId, tripId));
 
     if (billableAmount === null) {
       throw new ConflictException(
@@ -90,7 +101,6 @@ export class TripBillingService {
       );
     }
 
-    const existing = await this.prisma.tripBilling.findFirst({ where: { tenantId, tripId } });
     if (existing && existing.status === TripBillingStatus.CANCELLED) {
       throw new ConflictException('Este faturamento foi cancelado -- nao e possivel faturar mais nada nele.');
     }
@@ -114,6 +124,14 @@ export class TripBillingService {
       throw new BadRequestException('amount deve ser maior que zero.');
     }
 
+    // Fase 76/79 -- mesma competencia (mes/ano) da receita gerada logo
+    // abaixo (receivedAt); bloqueia o faturamento quando esse periodo ja
+    // esta FECHADO, mesmo criterio ja aplicado por
+    // Receivables/Payables/FinancialTransactions a cada mutacao com data
+    // financeira.
+    const financialDate = new Date();
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, financialDate);
+
     const revenue = await this.tripRevenuesService.create(
       tenantId,
       {
@@ -123,7 +141,7 @@ export class TripBillingService {
           ? `Faturamento operacional da viagem -- ${dto.notes}`
           : 'Faturamento operacional da viagem',
         amount: resolution.amount,
-        receivedAt: new Date().toISOString(),
+        receivedAt: financialDate.toISOString(),
         ...(trip.customerId ? { customerId: trip.customerId } : {}),
       },
       actor,

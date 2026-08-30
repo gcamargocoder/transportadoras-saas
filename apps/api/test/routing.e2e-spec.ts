@@ -301,6 +301,55 @@ describe('Routing (e2e)', () => {
     };
   }
 
+  // Fase 112 -- reaproveitado pelos 2 describes novos abaixo (sync de
+  // metricas previstas + resumo de prontidao), mesmo formato de
+  // CalculatedRoute ja usado no resto deste arquivo.
+  function enqueueSimpleRoute(distanceMeters: number, durationSeconds: number, tollAmount: number | null) {
+    const { original } = makeRouteLines();
+    fakeProvider.enqueue([
+      {
+        originLabel: 'Catanduva/SP',
+        destinationLabel: 'Sao Paulo/SP',
+        originLatitude: original[0]!.latitude,
+        originLongitude: original[0]!.longitude,
+        destinationLatitude: original[40]!.latitude,
+        destinationLongitude: original[40]!.longitude,
+        distanceMeters,
+        durationSeconds,
+        encodedPolyline: encodePolyline(original),
+        providerRouteId: null,
+        hasTolls: tollAmount !== null,
+        estimatedTollAmount: tollAmount,
+        estimatedTollCurrency: 'BRL',
+      },
+    ]);
+  }
+
+  async function createFuelStation(auth: string) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/fuel-stations')
+      .set('Authorization', auth)
+      .send({ name: `Posto ${randomUUID()}`, city: 'Curitiba', state: 'pr' })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
+  async function createFuelSupply(
+    auth: string,
+    vehicleId: string,
+    driverId: string,
+    fuelStationId: string,
+    odometerKm: number,
+    liters: number,
+    pricePerLiter: number,
+  ) {
+    await request(app.getHttpServer())
+      .post('/api/v1/fuel-supplies')
+      .set('Authorization', auth)
+      .send({ vehicleId, driverId, fuelStationId, fuelType: 'DIESEL_S10', liters, pricePerLiter, odometerKm, supplyDate: '2026-08-20T10:00:00.000Z' })
+      .expect(201);
+  }
+
   it('round-trip do encoder de teste bate com o decoder real da aplicacao', () => {
     // Guard-rail: garante que o helper de teste (encodePolyline) e o
     // decodificador real da aplicacao (decodePolyline) sao inversos --
@@ -911,6 +960,293 @@ describe('Routing (e2e)', () => {
       expect(stop.axleCount).toBe(7); // nao 9 -- usa o real da transacao
       expect(stop.expectedAmount).toBe(105); // 15 * 7
       expect(stop.verdict).toBe('CORRECT');
+    });
+  });
+
+  // Fase 112 -- fecha o gap real "previsao de rota/distancia/tempo/pedagio/
+  // custo usando os motores ja existentes": TripMetrics.planned* era 100%
+  // manual ate esta fase, mesmo com RoutePlan/RoutePlanToll ja calculados
+  // para a mesma viagem.
+  describe('Fase 112 -- sincronizar metricas previstas a partir da rota', () => {
+    it('rejeita sincronizar sem nenhuma rota calculada (409)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Sync1');
+      const { tripId } = await setupTrip(adminAuth, 9);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/metrics/sync-from-route`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+      expect(res.body.message).toMatch(/calcule a rota/i);
+    });
+
+    it('sincroniza distancia/duracao/pedagio a partir da rota; combustivel/custo ficam null sem historico de abastecimento', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Sync2');
+      const { tripId } = await setupTrip(adminAuth, 9);
+      enqueueSimpleRoute(300_000, 10_800, 42.5);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/route-plan`).set('Authorization', adminAuth).expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/metrics/sync-from-route`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      expect(res.body.data.plannedDistanceKm).toBe(300);
+      expect(res.body.data.plannedDurationMin).toBe(180);
+      expect(res.body.data.plannedTollAmount).toBe(42.5);
+      expect(res.body.data.plannedFuelLiters).toBeNull();
+      expect(res.body.data.plannedTotalCost).toBe(42.5);
+    });
+
+    it('com historico de abastecimento do veiculo, tambem preenche combustivel/custo total previstos (nunca inventa consumo de mercado)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Sync3');
+      const { tripId, vehicleId, driverId } = await setupTrip(adminAuth, 9);
+      const fuelStationId = await createFuelStation(adminAuth);
+      await createFuelSupply(adminAuth, vehicleId, driverId, fuelStationId, 50_000, 100, 5);
+      await createFuelSupply(adminAuth, vehicleId, driverId, fuelStationId, 50_500, 150, 5);
+      // avgKmL = 500km / 150L = 3.333...; avgPricePerLiter = 5.
+      enqueueSimpleRoute(300_000, 10_800, 0);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/route-plan`).set('Authorization', adminAuth).expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/metrics/sync-from-route`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      const expectedFuelLiters = 300 / (500 / 150);
+      expect(res.body.data.plannedFuelLiters).toBeCloseTo(expectedFuelLiters, 2);
+      expect(res.body.data.plannedTotalCost).toBeCloseTo(0 + expectedFuelLiters * 5, 2);
+    });
+
+    it('reenviar (idempotente na pratica) reflete a rota MAIS RECENTE quando recalculada', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Sync4');
+      const { tripId } = await setupTrip(adminAuth, 9);
+      enqueueSimpleRoute(300_000, 10_800, 10);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/route-plan`).set('Authorization', adminAuth).expect(201);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/metrics/sync-from-route`).set('Authorization', adminAuth).expect(201);
+
+      enqueueSimpleRoute(400_000, 14_400, 20);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/route-plan/recalculate`).set('Authorization', adminAuth).expect(200);
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/metrics/sync-from-route`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      expect(res.body.data.plannedDistanceKm).toBe(400);
+      expect(res.body.data.plannedTollAmount).toBe(20);
+    });
+
+    it('rejeita sincronizar depois que a viagem ja iniciou (409, nunca reescreve a baseline prevista)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Sync5');
+      const { tripId, driverId } = await setupTrip(adminAuth, 9);
+      enqueueSimpleRoute(300_000, 10_800, 10);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/route-plan`).set('Authorization', adminAuth).expect(201);
+      const driverAuth = await setupDriverLogin(adminAuth, tenantId, driverId);
+      await request(app.getHttpServer()).post(`/api/v1/driver/trips/${tripId}/start`).set('Authorization', driverAuth).expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/metrics/sync-from-route`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+      expect(res.body.message).toMatch(/antes da viagem iniciar/i);
+    });
+  });
+
+  // Fase 112 -- GET /trips/:id/summary ganhou sinais de prontidao de
+  // planejamento (readyToStart, rota calculada, checklist, capacidade) --
+  // reaproveitando integralmente RoutingService/assertCanStart/
+  // TripFreight/Vehicle.cargoCapacityKg ja existentes.
+  describe('Fase 112 -- GET /trips/:id/summary (prontidao de planejamento)', () => {
+    it('sem rota calculada e sem composicao: readyToStart reflete assertCanStart, routePlanComputed=false', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ready1');
+      const { tripId } = await setupTrip(adminAuth, 9);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/trips/${tripId}/summary`).set('Authorization', adminAuth).expect(200);
+      expect(res.body.data.routePlanComputed).toBe(false);
+      expect(res.body.data.plannedMetricsSynced).toBe(false);
+      expect(res.body.data.hasComposition).toBe(true);
+      expect(res.body.data.readyToStart).toBe(true);
+      expect(res.body.data.notReadyReason).toBeNull();
+    });
+
+    it('motorista inativo: readyToStart=false com o mesmo motivo de assertCanStart', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ready2');
+      const { tripId, driverId } = await setupTrip(adminAuth, 9);
+      await request(app.getHttpServer()).patch(`/api/v1/drivers/${driverId}/status`).set('Authorization', adminAuth).send({ status: 'INACTIVE' }).expect(200);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/trips/${tripId}/summary`).set('Authorization', adminAuth).expect(200);
+      expect(res.body.data.readyToStart).toBe(false);
+      expect(res.body.data.notReadyReason).toMatch(/motorista inativo/i);
+    });
+
+    it('rota calculada e metricas sincronizadas: routePlanComputed/plannedMetricsSynced ficam true', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ready3');
+      const { tripId } = await setupTrip(adminAuth, 9);
+      enqueueSimpleRoute(300_000, 10_800, 10);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/route-plan`).set('Authorization', adminAuth).expect(201);
+      await request(app.getHttpServer()).post(`/api/v1/trips/${tripId}/metrics/sync-from-route`).set('Authorization', adminAuth).expect(201);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/trips/${tripId}/summary`).set('Authorization', adminAuth).expect(200);
+      expect(res.body.data.routePlanComputed).toBe(true);
+      expect(res.body.data.plannedMetricsSynced).toBe(true);
+    });
+
+    it('peso previsto (TripFreight) dentro/fora da capacidade do veiculo', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Ready4');
+      const vehicleRes = await request(app.getHttpServer())
+        .post('/api/v1/vehicles')
+        .set('Authorization', adminAuth)
+        .send({ plate: randomPlate(), brand: 'Volvo', model: 'FH 540', type: 'TRACTOR_UNIT', cargoCapacityKg: 10000 })
+        .expect(201);
+      const vehicleId = vehicleRes.body.data.id as string;
+      const driverId = await createDriver(adminAuth);
+      const compositionId = await createComposition(adminAuth, vehicleId, 9);
+      const originId = await createLocation(adminAuth, `Origem ${randomUUID()}`, 'Catanduva/SP');
+      const destinationId = await createLocation(adminAuth, `Destino ${randomUUID()}`, 'Sao Paulo/SP');
+      const tripRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', adminAuth)
+        .send({
+          driverId,
+          compositionId,
+          originLocationId: originId,
+          destinationLocationId: destinationId,
+          plannedDeparture: '2026-09-01T08:00:00.000Z',
+          plannedArrival: '2026-09-02T18:00:00.000Z',
+        })
+        .expect(201);
+      const tripId = tripRes.body.data.id as string;
+
+      await prisma.tripFreight.create({
+        data: {
+          tenantId,
+          tripId,
+          calculationInput: { weightKg: 12000 },
+          createdBy: (await prisma.userAccount.findFirstOrThrow({ where: { tenantId } })).id,
+        },
+      });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/trips/${tripId}/summary`).set('Authorization', adminAuth).expect(200);
+      expect(res.body.data.plannedWeightKg).toBe(12000);
+      expect(res.body.data.vehicleCapacityKg).toBe(10000);
+      expect(res.body.data.withinCapacity).toBe(false);
+    });
+
+    it('sem TripFreight nenhum: withinCapacity fica null (nunca inventa uma comparacao)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('Ready5');
+      const { tripId } = await setupTrip(adminAuth, 9);
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/trips/${tripId}/summary`).set('Authorization', adminAuth).expect(200);
+      expect(res.body.data.plannedWeightKg).toBeNull();
+      expect(res.body.data.withinCapacity).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // Fase 116 -- a rota vira historico assim que a viagem termina
+  // (COMPLETED/CANCELLED): nenhuma das 4 escritas (computar/alternativas/
+  // selecionar/recalcular) pode mais trocar a RotePlan atual -- preserva o
+  // que de fato foi usado. Leitura continua sempre permitida.
+  // ==========================================================================
+  describe('Fase 116 -- rota preservada como historico apos a viagem terminar', () => {
+    async function completeTrip(auth: string, tripId: string) {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DRIVER' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DEPARTURE' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'COMPLETED', finalOdometerKm: 1000 })
+        .expect(200);
+    }
+
+    it('bloqueia (409) computar/alternativas/selecionar/recalcular rota numa viagem COMPLETED', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('RouteClosed1');
+      const { tripId } = await setupTrip(adminAuth, 9);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      const computeRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      const routePlanId = computeRes.body.data.id as string;
+
+      await completeTrip(adminAuth, tripId);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan/alternatives`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan/select`)
+        .set('Authorization', adminAuth)
+        .send({ routePlanId })
+        .expect(409);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan/recalculate`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+
+      // Leitura continua sempre permitida (preserva o historico visivel).
+      const readRes = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(200);
+      expect(readRes.body.data.id).toBe(routePlanId);
+    });
+
+    it('bloqueia (409) computar/selecionar/recalcular rota numa viagem CANCELLED', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('RouteClosed2');
+      const { tripId } = await setupTrip(adminAuth, 9);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      const computeRes = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(201);
+      const routePlanId = computeRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', adminAuth)
+        .send({ status: 'CANCELLED' })
+        .expect(200);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan`)
+        .set('Authorization', adminAuth)
+        .expect(409);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan/select`)
+        .set('Authorization', adminAuth)
+        .send({ routePlanId })
+        .expect(409);
+
+      enqueueSimpleRoute(500_000, 6 * 3600, 120);
+      await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/route-plan/recalculate`)
+        .set('Authorization', adminAuth)
+        .expect(409);
     });
   });
 

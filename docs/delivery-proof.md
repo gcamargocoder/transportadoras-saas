@@ -86,8 +86,16 @@ corpo multipart — mesma rota, mesma idempotência, mesma validação de arquiv
 `customerId` continuam sempre derivados no servidor (nunca aceitos do cliente); `tripDeliveryStopId` é o
 único vínculo operacional que o app efetivamente escolhe, e mesmo assim validado no servidor contra a
 viagem do motorista autenticado. Os tipos/cliente HTTP do app (`driverTrips.types.ts`/`driverTrips.api.ts`)
-foram atualizados para refletir o campo — nenhuma tela nova foi construída (o fluxo completo de captura no
-app, conforme pedido, fica para fase futura).
+foram atualizados para refletir o campo desde esta fase — mas **nenhuma tela ainda coletava/enviava esse
+campo**, então na prática todo comprovante submetido pelo app ficava sem parada vinculada, e o modal
+"Comprovantes" da seção 5 sempre aparecia vazio.
+
+**[Fase 106]** Fechada essa lacuna: a nova tela `DeliveryStopsScreen` ("Entregas", ver
+`docs/trip-delivery-stops.md` seção 7) oferece "Anexar comprovante" por parada `COMPLETED`, navegando para
+`DeliveryProofScreen` já com `tripDeliveryStopId` preenchido; a tela repassa o campo até `submitOrQueue`
+(fila offline) e daí até este mesmo endpoint — nenhuma mudança de contrato HTTP foi necessária (o campo já
+existia desde a Fase 100). O fluxo genérico sem parada (botão "Comprovante de entrega" já existente na
+Home) continua funcionando exatamente como antes.
 
 ## 7. APIs alteradas (`apps/api/src/fiscal`, `apps/api/src/driver-trips`)
 
@@ -127,8 +135,8 @@ Nenhuma rota nova — todas já existiam desde as Fases 52/56.
 
 ## 10. Limitações reais (regra 10 das fases anteriores — documentadas, não inventadas)
 
-- **Sem fluxo completo no Driver App** — só a API (leitura/escrita) foi preparada, como pedido
-  explicitamente; nenhuma tela de captura/anexo de POD por parada foi construída nesta fase.
+- **Fluxo completo no Driver App implementado na Fase 106** — ver seção 6; até então só a API estava
+  preparada.
 - **Sem ocorrências nem Torre de Controle** — fora de escopo, como pedido; "problema" na entrega continua
   representado apenas pelo status `FAILED` de `TripDeliveryStop` (Fase 99), nunca um registro de
   ocorrência formal vinculado ao POD.

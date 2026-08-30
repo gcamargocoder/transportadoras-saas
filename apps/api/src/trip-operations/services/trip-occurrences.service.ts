@@ -238,7 +238,25 @@ export class TripOccurrencesService {
   // Paginacao sempre no banco; 1 unica query com include (JOIN), nunca 1
   // query por linha.
   async findAllDeliveryOccurrences(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Promise<PaginatedDeliveryOccurrencesEntity> {
-    const where = this.buildDeliveryOccurrenceWhere(tenantId, query);
+    return this.findAllOccurrencesWithWhere(this.buildDeliveryOccurrenceWhere(tenantId, query), query);
+  }
+
+  // Fase 115 -- GET /trip-occurrences: a MESMA visao cross-trip acima, mas
+  // sem a restricao a paradas -- cobre TAMBEM as ocorrencias GERAIS da
+  // viagem (quebra, acidente etc., sem tripDeliveryStopId), que ate aqui so
+  // eram visiveis viagem por viagem (GET /trips/:id/occurrences). Nenhuma
+  // segunda fonte/tabela/regra: mesmo buildOccurrenceWhere, mesmo include,
+  // mesmo mapper, mesma paginacao no banco de findAllDeliveryOccurrences
+  // acima -- so sem o filtro fixo de tripDeliveryStopId.
+  async findAllOccurrences(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Promise<PaginatedDeliveryOccurrencesEntity> {
+    const where = this.buildOccurrenceWhere(tenantId, query);
+    return this.findAllOccurrencesWithWhere(where, query);
+  }
+
+  private async findAllOccurrencesWithWhere(
+    where: Prisma.TripOccurrenceWhereInput,
+    query: FindDeliveryOccurrencesQueryDto,
+  ): Promise<PaginatedDeliveryOccurrencesEntity> {
     if (query.status) Object.assign(where, this.buildStatusWhere(query.status));
 
     const [rows, total] = await Promise.all([
@@ -258,7 +276,11 @@ export class TripOccurrencesService {
     return result;
   }
 
-  async findOneDeliveryOccurrence(tenantId: string, id: string): Promise<TripOccurrenceEntity> {
+  // Fase 115 -- reaproveitado tanto por GET /delivery-occurrences/:id quanto
+  // por GET /trip-occurrences/:id (nunca teve nada especifico de entrega:
+  // findOwnedOrThrow/toTripOccurrenceEntity ja sao genericos desde a
+  // Fase 67).
+  async findOneOccurrence(tenantId: string, id: string): Promise<TripOccurrenceEntity> {
     return toTripOccurrenceEntity(await this.findOwnedOrThrow(tenantId, id, null));
   }
 
@@ -267,8 +289,17 @@ export class TripOccurrencesService {
   // severity/type (colunas reais) + 1 contagem de alerta critico, tudo em
   // paralelo -- custo constante, independente do volume de ocorrencias.
   async getDeliveryOccurrencesDashboard(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Promise<DeliveryOccurrencesDashboardEntity> {
-    const where = this.buildDeliveryOccurrenceWhere(tenantId, query);
+    return this.buildDashboard(this.buildDeliveryOccurrenceWhere(tenantId, query));
+  }
 
+  // Fase 115 -- GET /trip-occurrences/dashboard: mesmos indicadores acima,
+  // agora sobre TODAS as ocorrencias (nao so as de entrega).
+  async getOccurrencesDashboard(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Promise<DeliveryOccurrencesDashboardEntity> {
+    const where = this.buildOccurrenceWhere(tenantId, query);
+    return this.buildDashboard(where);
+  }
+
+  private async buildDashboard(where: Prisma.TripOccurrenceWhereInput): Promise<DeliveryOccurrencesDashboardEntity> {
     const [total, openCount, inProgressCount, resolvedCount, cancelledCount, criticalOpenCount, severityRows, typeRows] = await Promise.all([
       this.prisma.tripOccurrence.count({ where }),
       this.prisma.tripOccurrence.count({ where: { ...where, ...OPEN_WHERE, inProgressAt: null } }),
@@ -396,7 +427,11 @@ export class TripOccurrencesService {
     return {};
   }
 
-  private buildDeliveryOccurrenceWhere(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Prisma.TripOccurrenceWhereInput {
+  // Fase 115 -- extraido de buildDeliveryOccurrenceWhere (Fase 101) para ser
+  // reaproveitado TAMBEM por GET /trip-occurrences (sem a restricao fixa a
+  // paradas). Nenhum filtro novo em relacao ao que ja existia -- so deixou
+  // de forcar tripDeliveryStopId != null por padrao.
+  private buildOccurrenceWhere(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Prisma.TripOccurrenceWhereInput {
     const occurredRange = compact({
       gte: query.occurredFrom ? new Date(query.occurredFrom) : undefined,
       lte: query.occurredTo ? new Date(`${query.occurredTo}T23:59:59.999Z`) : undefined,
@@ -404,21 +439,34 @@ export class TripOccurrencesService {
 
     return {
       tenantId,
-      // Regra fixa desta listagem (Fase 101): SEMPRE ocorrencias de entrega
-      // (vinculadas a uma parada). Nunca sobrescrito pelos filtros do
-      // usuario -- distingue esta rota de GET /trips/:id/occurrences.
-      tripDeliveryStopId: { not: null },
       ...compact({
         type: query.type,
         severity: query.severity,
         tripId: query.tripId,
         driverId: query.driverId,
         vehicleId: query.vehicleId,
+        tripDeliveryStopId: query.tripDeliveryStopId,
         occurredAt: Object.keys(occurredRange).length > 0 ? occurredRange : undefined,
       }),
-      ...(query.tripDeliveryStopId ? { tripDeliveryStopId: query.tripDeliveryStopId } : {}),
       ...(query.search ? { description: { contains: query.search, mode: 'insensitive' as const } } : {}),
+      // Fase 104 -- "relatorio por cliente": filtra pelo cliente da VIAGEM
+      // (relacao, nunca uma coluna duplicada em TripOccurrence).
+      ...(query.customerId ? { trip: { customerId: query.customerId } } : {}),
     };
+  }
+
+  // Regra fixa de GET /delivery-occurrences (Fase 101): SEMPRE ocorrencias
+  // de entrega (vinculadas a uma parada) -- distingue esta rota de
+  // GET /trips/:id/occurrences e da nova GET /trip-occurrences (Fase 115).
+  // Quando o usuario ja filtrou por um tripDeliveryStopId especifico
+  // (buildOccurrenceWhere ja aplicou), o "not null" e redundante e por isso
+  // omitido -- nunca sobrescreve o filtro mais especifico do usuario.
+  private buildDeliveryOccurrenceWhere(tenantId: string, query: FindDeliveryOccurrencesQueryDto): Prisma.TripOccurrenceWhereInput {
+    const where = this.buildOccurrenceWhere(tenantId, query);
+    if (!query.tripDeliveryStopId) {
+      where.tripDeliveryStopId = { not: null };
+    }
+    return where;
   }
 
   private async findActiveShiftId(tenantId: string, driverId: string): Promise<string | null> {

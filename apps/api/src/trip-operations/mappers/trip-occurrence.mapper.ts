@@ -75,10 +75,14 @@ export function toTripOccurrenceEntity(occurrence: TripOccurrence): TripOccurren
 // contexto (a query base sempre filtra tripDeliveryStopId != null) --
 // modelado como nao-nulo aqui de proposito, distinto da nulidade estrutural
 // de TripOccurrence.tripDeliveryStopId em geral.
+// Fase 115 -- tripDeliveryStopId/tripDeliveryStop agora opcionais: esta
+// mesma row/mapper passou a ser reaproveitada tambem por
+// TripOccurrencesService.findAllOccurrences (todas as ocorrencias, inclusive
+// gerais/sem parada) -- nunca uma segunda definicao de linha/mapper so
+// porque o escopo da consulta mudou.
 export type DeliveryOccurrenceListRow = TripOccurrence & {
-  tripDeliveryStopId: string;
   trip: Trip & { origin: Location; destination: Location };
-  tripDeliveryStop: { sequence: number };
+  tripDeliveryStop: { sequence: number } | null;
   driver: Driver | null;
   vehicle: Vehicle | null;
   creator: UserAccount;
@@ -93,7 +97,7 @@ export function toDeliveryOccurrenceListItemEntity(occurrence: DeliveryOccurrenc
   entity.tripOriginName = occurrence.trip.origin.name;
   entity.tripDestinationName = occurrence.trip.destination.name;
   entity.tripDeliveryStopId = occurrence.tripDeliveryStopId;
-  entity.tripDeliveryStopSequence = occurrence.tripDeliveryStop.sequence;
+  entity.tripDeliveryStopSequence = occurrence.tripDeliveryStop?.sequence ?? null;
   entity.driverId = occurrence.driverId;
   entity.driverName = occurrence.driver?.name ?? null;
   entity.vehicleId = occurrence.vehicleId;

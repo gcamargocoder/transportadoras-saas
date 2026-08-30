@@ -208,6 +208,23 @@ Ordenado por desgaste ascendente (mais gasto primeiro), indisponíveis por
 mesmo limiar já existente `NEAR_REPLACEMENT_THRESHOLD_MM = 3` (exportado
 de `TiresService`, não duplicado como número mágico novo).
 
+**Fase 110 — também reage a distância percorrida, não só a sulco**: um
+pneu `IN_USE` agora conta em `nearReplacementCount`/gera alerta
+`TIRE_NEAR_REPLACEMENT` também quando os km rodados desde a instalação
+(`Vehicle.odometerKm` atual − `odometerKm` da movimentação de instalação)
+atingem `NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT = 90`% de
+`Tire.expectedLifespanKm` (quando cadastrado) — mesma fórmula
+(`computeTireDistanceLifespan`, `tires/utils/tire-lifecycle.util.ts`)
+reaproveitada por `GET /tires/:id` (indicadores de vida útil, ver
+`docs/tire-management.md`) e pelo coletor de notificações
+(`collectTireLifespanNearReplacement`, ver `docs/notifications.md`). Um
+pneu que atende aos 2 critérios (sulco E distância) conta uma única vez;
+quando o sulco já disparou o alerta, o alerta por distância não é gerado
+para o mesmo pneu (nunca 2 alertas para o mesmo pneu). Sem
+`expectedLifespanKm` cadastrado ou sem as 2 leituras de odômetro
+necessárias, o critério por distância fica indisponível (nunca inventa um
+limite) — só o critério por sulco continua valendo.
+
 **`byFleet`/`topVehiclesByTireCost` — só `Tire.purchasePrice`, nunca
 recapagem**: ambos cobrem só pneus **atualmente montados** em veículo
 (`tire.vehicleId` setado); pneus em estoque já estão cobertos por

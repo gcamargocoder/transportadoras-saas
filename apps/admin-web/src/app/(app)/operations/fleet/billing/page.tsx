@@ -17,7 +17,9 @@ import { Pagination } from '../../../../../components/ui/pagination';
 import { Select } from '../../../../../components/ui/select';
 import { SkeletonCards } from '../../../../../components/ui/skeleton';
 import { StatCard } from '../../../../../components/ui/stat-card';
+import { Tabs } from '../../../../../components/ui/tabs';
 import { MonthlyChartCard } from '../../../../../features/dashboard/monthly-chart-card';
+import { EligibleTripsPanel } from '../../../../../features/billing-operational/eligible-trips-panel';
 import { listDrivers } from '../../../../../lib/api/drivers.api';
 import { listFleets, listVehicles } from '../../../../../lib/api/fleet.api';
 import { getBillingDashboard, listTripBillings } from '../../../../../lib/api/billing-operational.api';
@@ -30,6 +32,10 @@ import { formatCurrency, formatDate } from '../../../../../utils/format';
 const PAGE_SIZE = 20;
 
 export default function BillingPage(): JSX.Element {
+  // Fase 103 -- "faturamentos" (TripBilling ja iniciado, comportamento
+  // inalterado) vs. "viagens elegiveis" (novo: descoberta de candidatas
+  // ainda sem faturamento).
+  const [view, setView] = useState<'billings' | 'eligible'>('billings');
   const [page, setPage] = useState(1);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -64,11 +70,13 @@ export default function BillingPage(): JSX.Element {
   const dashboardQuery = useQuery({
     queryKey: ['billing', 'dashboard', filters],
     queryFn: ({ signal }) => getBillingDashboard(filters, signal),
+    enabled: view === 'billings',
   });
 
   const listQuery = useQuery({
     queryKey: ['billing', 'list', { page, ...filters }],
     queryFn: ({ signal }) => listTripBillings({ page, pageSize: PAGE_SIZE, ...filters }, signal),
+    enabled: view === 'billings',
   });
 
   const columns = useMemo<ColumnDef<TripBillingEntity, unknown>[]>(
@@ -98,10 +106,25 @@ export default function BillingPage(): JSX.Element {
         description="Conciliação comercial da viagem — contratado → calculado → faturado → recebido → saldo. Reaproveita o snapshot comercial da Fase 59, nunca recalcula viagens antigas."
       />
 
-      {dashboardQuery.isLoading && <SkeletonCards />}
-      {dashboardQuery.isError && <ErrorState onRetry={() => dashboardQuery.refetch()} />}
+      <Tabs
+        tabs={[
+          { value: 'billings', label: 'Faturamentos' },
+          { value: 'eligible', label: 'Viagens elegíveis' },
+        ]}
+        active={view}
+        onChange={(v) => setView(v as 'billings' | 'eligible')}
+      />
 
-      {dashboardQuery.data && (
+      {view === 'eligible' && (
+        <div className="mt-6">
+          <EligibleTripsPanel />
+        </div>
+      )}
+
+      {view === 'billings' && dashboardQuery.isLoading && <SkeletonCards />}
+      {view === 'billings' && dashboardQuery.isError && <ErrorState onRetry={() => dashboardQuery.refetch()} />}
+
+      {view === 'billings' && dashboardQuery.data && (
         <div className="flex flex-col gap-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard label="Total faturável" value={formatCurrency(dashboardQuery.data.totalBillable)} icon={Banknote} tone="brand" />
@@ -180,6 +203,7 @@ export default function BillingPage(): JSX.Element {
         </div>
       )}
 
+      {view === 'billings' && (
       <div className="mt-6">
         <FilterBar hasActiveFilters={hasActiveFilters} onClear={clearFilters}>
           <FormField label="De" htmlFor="billing-filter-from" className="w-full sm:w-40">
@@ -266,6 +290,7 @@ export default function BillingPage(): JSX.Element {
           {listQuery.data && <Pagination meta={listQuery.data.meta} onPageChange={setPage} />}
         </div>
       </div>
+      )}
     </div>
   );
 }

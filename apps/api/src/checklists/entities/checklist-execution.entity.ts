@@ -1,7 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ChecklistExecutionStatus } from '@prisma/client';
+import { ChecklistExecutionStatus, ChecklistType } from '@prisma/client';
 import { ChecklistAnswerEntity } from './checklist-answer.entity';
 import { ChecklistEvidenceEntity } from './checklist-evidence.entity';
+import { ChecklistExecutionMaintenanceEntity } from './checklist-execution-maintenance.entity';
 
 export class ChecklistExecutionEntity {
   @ApiProperty({ format: 'uuid' })
@@ -16,14 +17,32 @@ export class ChecklistExecutionEntity {
   @ApiProperty()
   templateVersion!: number;
 
+  // Fase 111 -- denormalizados do template/veiculo/motorista/viagem ja
+  // incluidos na query (nenhuma query nova) -- fecha o gap real de visao no
+  // admin-web (listagem/detalhe legiveis sem N+1 de lookups no cliente).
+  @ApiProperty()
+  templateName!: string;
+
+  @ApiProperty({ enum: ChecklistType })
+  templateType!: ChecklistType;
+
   @ApiProperty({ format: 'uuid', nullable: true })
   tripId!: string | null;
+
+  @ApiProperty({ nullable: true })
+  tripDestinationName!: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true })
   driverId!: string | null;
 
+  @ApiProperty({ nullable: true })
+  driverName!: string | null;
+
   @ApiProperty({ format: 'uuid', nullable: true })
   vehicleId!: string | null;
+
+  @ApiProperty({ nullable: true })
+  vehiclePlate!: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true })
   trailerId!: string | null;
@@ -67,6 +86,12 @@ export class ChecklistExecutionEntity {
 
   @ApiProperty({ type: [ChecklistEvidenceEntity] })
   evidence!: ChecklistEvidenceEntity[];
+
+  @ApiProperty({
+    type: [ChecklistExecutionMaintenanceEntity],
+    description: 'Fase 111 -- OS(s) abertas a partir deste checklist. So populado em GET /checklists/executions/:id (nunca na listagem).',
+  })
+  maintenances!: ChecklistExecutionMaintenanceEntity[];
 
   @ApiProperty()
   createdAt!: Date;

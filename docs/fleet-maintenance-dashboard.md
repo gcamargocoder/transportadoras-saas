@@ -146,6 +146,19 @@ sistema não rastreia horas de motor atuais em nenhum lugar (`Vehicle` só
 tem `odometerKm`). Documentado como limitação real, não uma
 funcionalidade quebrada.
 
+**Fase 108** — a mesma avaliação passou a ser devolvida também pelas
+rotas de CRUD `GET/POST/PATCH /maintenance/plans` (`MaintenancePlanEntity`
+ganhou `status`/`dueOdometerKm`/`dueDate`/`overdueByKm`/`overdueByDays`),
+não só pelo dashboard consolidado — reaproveitando `evaluateMaintenancePlan`
+e o MESMO padrão de 2 queries em lote (`MaintenancePlansService.
+evaluatePlansInBatch`), nunca uma segunda função de vencimento. Fecha a
+lacuna de "informação operacional relevante no veículo": a seção "Planos
+de manutenção preventiva" (`apps/admin-web/src/features/fleet-operations/
+maintenance-plans-section.tsx`) agora mostra um badge Vencida/Próxima/Em
+dia/Sem histórico por plano, e a mesma condição `OVERDUE`/`DUE_SOON`
+passou a gerar notificação no Centro de Alertas (`docs/notifications.md`,
+seção 13) — antes só aparecia neste dashboard.
+
 ## 9. Rankings e breakdowns novos
 
 `byComponent`, `topComponentsByCost`, `topComponentsByCount` (groupBy

@@ -35,6 +35,7 @@ import {
   MAINTENANCE_PRIORITY_LABELS,
   MAINTENANCE_STATUS_LABELS,
   MAINTENANCE_TYPE_LABELS,
+  TIRE_LOCATION_LABELS,
 } from '../../../../lib/labels';
 import type { VehicleMaintenanceStatus } from '../../../../types/enums';
 import { formatCurrency, formatDate, formatDateTime, formatNumber } from '../../../../utils/format';
@@ -312,6 +313,34 @@ export default function MaintenanceDetailPage(): JSX.Element {
                 )}
               </CardBody>
             </Card>
+
+            {m.tireMovements.length > 0 && (
+              <Card className="lg:col-span-2">
+                <CardHeader
+                  title="Pneus"
+                  description="Trocas/movimentações de pneu vinculadas a esta OS."
+                />
+                <CardBody>
+                  <ul className="flex flex-col gap-2">
+                    {m.tireMovements.map((movement) => (
+                      <li key={movement.id} className="flex items-center justify-between text-sm">
+                        <button
+                          type="button"
+                          className="text-brand-600 hover:underline"
+                          onClick={() => router.push(`/tires/${movement.tireId}`)}
+                        >
+                          {movement.tireFireNumber}
+                        </button>
+                        <span className="text-ink-subtle">
+                          {movement.previousPosition ?? '—'} → {movement.newPosition ?? TIRE_LOCATION_LABELS[movement.newLocationType]}
+                        </span>
+                        <span className="text-ink-subtle">{formatDateTime(movement.movementDate)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            )}
           </div>
         )}
 

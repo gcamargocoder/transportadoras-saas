@@ -648,6 +648,230 @@ describe('Trips (e2e)', () => {
     });
   });
 
+  // Fase 111 -- opt-in por tenant (TenantSettings.preferences.requirePreTripChecklist,
+  // default false). Fecha o gap real "bloqueio de inicio de viagem somente
+  // quando houver regra operacional realmente necessaria": nenhum tenant
+  // existente e afetado a menos que ative explicitamente.
+  describe('checklist pre-viagem obrigatorio (Fase 111, opt-in)', () => {
+    async function enableRequirePreTripChecklist(auth: string) {
+      await request(app.getHttpServer())
+        .patch('/api/v1/tenant-settings')
+        .set('Authorization', auth)
+        .send({ preferences: { requirePreTripChecklist: true } })
+        .expect(200);
+    }
+
+    async function linkDriverLogin(auth: string, tenantId: string, driverId: string) {
+      const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+      const email = `driver-${unique}@teste.com`;
+      const password = 'SenhaForte123!';
+      const userRes = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', auth)
+        .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/user-link`)
+        .set('Authorization', auth)
+        .send({ userAccountId: userRes.body.data.id })
+        .expect(200);
+      const loginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email, password })
+        .expect(200);
+      return `Bearer ${loginRes.body.data.accessToken as string}`;
+    }
+
+    // 1 item BOOLEAN critical+required ("cinto_seguranca") -- suficiente
+    // para exercitar hasCriticalNonConformity sem replicar o formulario
+    // inteiro (mesmo template reduzido ja usado em checklists.e2e-spec.ts).
+    async function createPublishedPreTripTemplate(auth: string) {
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/checklists/templates')
+        .set('Authorization', auth)
+        .send({
+          name: `Pre-Viagem ${randomUUID()}`,
+          type: 'PRE_TRIP',
+          sections: [
+            {
+              title: 'SEGURANCA',
+              order: 1,
+              items: [
+                {
+                  code: 'cinto_seguranca',
+                  label: 'Cinto de seguranca OK?',
+                  type: 'BOOLEAN',
+                  order: 1,
+                  required: true,
+                  critical: true,
+                },
+              ],
+            },
+          ],
+        })
+        .expect(201);
+      const templateId = createRes.body.data.id as string;
+      await request(app.getHttpServer())
+        .post(`/api/v1/checklists/templates/${templateId}/publish`)
+        .set('Authorization', auth)
+        .expect(200);
+      return templateId;
+    }
+
+    it('desligado (default): viagem inicia normalmente mesmo sem nenhum checklist', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistGateOff');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      await createPublishedPreTripTemplate(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${createRes.body.data.id}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+    });
+
+    it('ligado: bloqueia inicio quando nao ha nenhum checklist pre-viagem para a viagem', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistGateMissing');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      await createPublishedPreTripTemplate(auth);
+      await enableRequirePreTripChecklist(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${createRes.body.data.id}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(409);
+      expect(res.body.message).toMatch(/checklist pre-viagem/i);
+    });
+
+    it('ligado: bloqueia inicio quando o checklist pre-viagem foi iniciado mas nao concluido', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistGateIncomplete');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const templateId = await createPublishedPreTripTemplate(auth);
+      await enableRequirePreTripChecklist(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+      const tripId = createRes.body.data.id as string;
+
+      const driverAuth = await linkDriverLogin(auth, tenantId, prereqs.driverId);
+      await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, tripId })
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(409);
+      expect(res.body.message).toMatch(/checklist pre-viagem/i);
+    });
+
+    it('ligado: bloqueia inicio quando o checklist pre-viagem concluido tem nao-conformidade critica', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistGateCritical');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const templateId = await createPublishedPreTripTemplate(auth);
+      await enableRequirePreTripChecklist(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+      const tripId = createRes.body.data.id as string;
+
+      const driverAuth = await linkDriverLogin(auth, tenantId, prereqs.driverId);
+      const execRes = await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, tripId })
+        .expect(201);
+      const executionId = execRes.body.data.id as string;
+      const templateRes = await request(app.getHttpServer())
+        .get(`/api/v1/checklists/templates/${templateId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      const cintoItemId = templateRes.body.data.sections[0].items[0].id as string;
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/answers`)
+        .set('Authorization', driverAuth)
+        .send({ answers: [{ itemId: cintoItemId, booleanValue: false }] })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/complete`)
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(409);
+      expect(res.body.message).toMatch(/nao-conformidade critica/i);
+    });
+
+    it('ligado: permite inicio quando o checklist pre-viagem foi concluido sem nao-conformidade critica', async () => {
+      const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('ChecklistGateOk');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const templateId = await createPublishedPreTripTemplate(auth);
+      await enableRequirePreTripChecklist(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+      const tripId = createRes.body.data.id as string;
+
+      const driverAuth = await linkDriverLogin(auth, tenantId, prereqs.driverId);
+      const execRes = await request(app.getHttpServer())
+        .post('/api/v1/driver/checklists')
+        .set('Authorization', driverAuth)
+        .send({ deviceEventId: randomUUID(), templateId, tripId })
+        .expect(201);
+      const executionId = execRes.body.data.id as string;
+      const templateRes = await request(app.getHttpServer())
+        .get(`/api/v1/checklists/templates/${templateId}`)
+        .set('Authorization', auth)
+        .expect(200);
+      const cintoItemId = templateRes.body.data.sections[0].items[0].id as string;
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/answers`)
+        .set('Authorization', driverAuth)
+        .send({ answers: [{ itemId: cintoItemId, booleanValue: true }] })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/checklists/${executionId}/complete`)
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+    });
+  });
+
   describe('viagem ativa impede exclusao de motorista/veiculo', () => {
     it('bloqueia exclusao do motorista e do veiculo enquanto a viagem nao termina', async () => {
       const { adminAccessToken } = await createTenantAndLoginAsAdmin('BlockDeletion');
@@ -749,6 +973,315 @@ describe('Trips (e2e)', () => {
       expect(summary.plannedTotalCost).toBe(2500);
       expect(summary.tollTransactionsCount).toBe(0);
       expect(summary.tollTransactionsTotal).toBe(0);
+    });
+  });
+
+  // ==========================================================================
+  // Fase 116 -- Fechamento Operacional da Viagem
+  // ==========================================================================
+  describe('Fase 116 -- GET /trips/:id/summary (consolidacao do encerramento)', () => {
+    async function createDeliveryStop(auth: string, tripId: string) {
+      const locationRes = await request(app.getHttpServer())
+        .post('/api/v1/locations')
+        .set('Authorization', auth)
+        .send({ name: `Cliente ${randomUUID()}`, type: 'DISTRIBUTION_CENTER' })
+        .expect(201);
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/delivery-stops`)
+        .set('Authorization', auth)
+        .send({ locationId: locationRes.body.data.id })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    async function setDeliveryStopStatus(auth: string, tripId: string, stopId: string, status: string) {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/delivery-stops/${stopId}/status`)
+        .set('Authorization', auth)
+        .send(status === 'FAILED' ? { status, reason: 'Cliente fechado' } : { status })
+        .expect(200);
+    }
+
+    async function createOccurrence(auth: string, tripId: string, severity: string) {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/trips/${tripId}/occurrences`)
+        .set('Authorization', auth)
+        .send({ type: 'OTHER', severity, description: `Ocorrencia ${severity}`, occurredAt: '2026-09-01T10:00:00.000Z' })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    it('deliverySummary/openOccurrencesCount refletem o estado real das entregas/ocorrencias, inclusive apos concluir a viagem', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('Close01');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+      const tripId = createRes.body.data.id as string;
+
+      const pendingStop = await createDeliveryStop(auth, tripId);
+      const completedStop = await createDeliveryStop(auth, tripId);
+      const failedStop = await createDeliveryStop(auth, tripId);
+      void pendingStop;
+
+      const criticalOccurrence = await createOccurrence(auth, tripId, 'CRITICAL');
+      const resolvedOccurrence = await createOccurrence(auth, tripId, 'LOW');
+      void criticalOccurrence;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/occurrences/${resolvedOccurrence}/resolve`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DRIVER' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DEPARTURE' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+
+      await setDeliveryStopStatus(auth, tripId, completedStop, 'COMPLETED');
+      await setDeliveryStopStatus(auth, tripId, failedStop, 'FAILED');
+
+      const activeSummary = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/summary`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(activeSummary.body.data.deliverySummary).toEqual({
+        totalCount: 3,
+        pendingCount: 1,
+        inProgressCount: 0,
+        completedCount: 1,
+        failedCount: 1,
+        cancelledCount: 0,
+      });
+      expect(activeSummary.body.data.openOccurrencesCount).toBe(1);
+      expect(activeSummary.body.data.criticalOpenOccurrencesCount).toBe(1);
+
+      // A consolidacao do fechamento continua correta depois de concluir a
+      // viagem -- nunca omitida so porque a viagem terminou.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'COMPLETED', finalOdometerKm: 1000 })
+        .expect(200);
+
+      const closedSummary = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripId}/summary`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(closedSummary.body.data.deliverySummary.pendingCount).toBe(1);
+      expect(closedSummary.body.data.deliverySummary.completedCount).toBe(1);
+      expect(closedSummary.body.data.deliverySummary.failedCount).toBe(1);
+      expect(closedSummary.body.data.openOccurrencesCount).toBe(1);
+      expect(closedSummary.body.data.criticalOpenOccurrencesCount).toBe(1);
+    });
+
+    it('viagem sem entregas/ocorrencias: contagens zeradas, nunca omitidas', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('Close02');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${createRes.body.data.id}/summary`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(res.body.data.deliverySummary).toEqual({
+        totalCount: 0,
+        pendingCount: 0,
+        inProgressCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        cancelledCount: 0,
+      });
+      expect(res.body.data.openOccurrencesCount).toBe(0);
+      expect(res.body.data.criticalOpenOccurrencesCount).toBe(0);
+    });
+
+    // Bug real encontrado na auditoria da Fase 116: readyToStart/notReadyReason
+    // (Fase 112) chamava assertCanStart INCONDICIONALMENTE, mesmo para uma
+    // viagem que ja partiu -- podendo mostrar um motivo de bloqueio enganoso
+    // (o motorista foi despachado para OUTRA viagem depois desta ja ter
+    // partido). Corrigido: so avaliado enquanto a viagem ainda nao partiu.
+    it('readyToStart continua true (sem motivo enganoso) para uma viagem ja partida/concluida, mesmo com o motorista ocupado em outra viagem depois', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('Close03');
+      const auth = `Bearer ${adminAccessToken}`;
+      const driverRes = await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send({
+          name: 'Motorista Compartilhado',
+          cpf: randomValidCpf(),
+          cnhNumber: String(Math.floor(10000000000 + Math.random() * 89999999999)),
+          cnhCategory: 'AE',
+          cnhExpiresAt: '2027-06-30',
+        })
+        .expect(201);
+      const driverId = driverRes.body.data.id as string;
+
+      const vehicleAId = await createVehicle(auth);
+      const compositionAId = await createComposition(auth, vehicleAId);
+      const originId = await createLocation(auth, `Origem ${randomUUID()}`);
+      const destinationId = await createLocation(auth, `Destino ${randomUUID()}`);
+
+      const tripARes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(
+          buildTripPayload(
+            { driverId, compositionId: compositionAId, originId, destinationId },
+            { plannedDeparture: '2026-09-01T08:00:00.000Z', plannedArrival: '2026-09-02T08:00:00.000Z' },
+          ),
+        )
+        .expect(201);
+      const tripAId = tripARes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripAId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DRIVER' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripAId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DEPARTURE' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripAId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripAId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'COMPLETED', finalOdometerKm: 1000 })
+        .expect(200);
+
+      // Trip B, MESMO motorista, despachada e iniciada DEPOIS que a Trip A
+      // ja tinha terminado.
+      const vehicleBId = await createVehicle(auth);
+      const compositionBId = await createComposition(auth, vehicleBId);
+      const tripBRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(
+          buildTripPayload(
+            { driverId, compositionId: compositionBId, originId, destinationId },
+            { plannedDeparture: '2026-09-03T08:00:00.000Z', plannedArrival: '2026-09-04T08:00:00.000Z' },
+          ),
+        )
+        .expect(201);
+      const tripBId = tripBRes.body.data.id as string;
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripBId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DRIVER' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripBId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DEPARTURE' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripBId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+
+      // Antes da correcao: assertCanStart(tripA) encontraria o motorista
+      // "ja em outra viagem ativa" (a Trip B) e mostraria isso como motivo
+      // de bloqueio na Trip A, ja CONCLUIDA. Depois da correcao: a Trip A ja
+      // partiu, entao assertCanStart nem e chamado -- readyToStart=true.
+      const summaryA = await request(app.getHttpServer())
+        .get(`/api/v1/trips/${tripAId}/summary`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(summaryA.body.data.readyToStart).toBe(true);
+      expect(summaryA.body.data.notReadyReason).toBeNull();
+    });
+  });
+
+  describe('Fase 116 -- PATCH /trips/:id/metrics (previstos) preserva a baseline apos a partida', () => {
+    it('permite editar metricas previstas enquanto a viagem ainda nao partiu', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('MetricsGuard01');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+      const tripId = createRes.body.data.id as string;
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/metrics`)
+        .set('Authorization', auth)
+        .send({ distanceKm: 500, totalCost: 3000 })
+        .expect(200);
+      expect(res.body.data.plannedDistanceKm).toBe(500);
+      expect(res.body.data.plannedTotalCost).toBe(3000);
+    });
+
+    it('bloqueia (409) editar metricas previstas depois que a viagem partiu, e depois de concluida', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('MetricsGuard02');
+      const auth = `Bearer ${adminAccessToken}`;
+      const prereqs = await setupTripPrerequisites(auth);
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', auth)
+        .send(buildTripPayload(prereqs))
+        .expect(201);
+      const tripId = createRes.body.data.id as string;
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DRIVER' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'WAITING_DEPARTURE' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'IN_PROGRESS' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/metrics`)
+        .set('Authorization', auth)
+        .send({ distanceKm: 999 })
+        .expect(409);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/status`)
+        .set('Authorization', auth)
+        .send({ status: 'COMPLETED', finalOdometerKm: 1000 })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/trips/${tripId}/metrics`)
+        .set('Authorization', auth)
+        .send({ distanceKm: 999 })
+        .expect(409);
     });
   });
 

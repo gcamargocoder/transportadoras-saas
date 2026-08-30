@@ -97,16 +97,40 @@ futura (nenhuma tela/regra específica de `MAINTENANCE`/`SAFETY`/`ACCIDENT`/
 - Após `COMPLETED`, `submitAnswers` e `addEvidence` rejeitam qualquer
   mutação nova (`409`) — o histórico da execução é imutável.
 
-## 5. Não-conformidade crítica (nunca bloqueia)
+## 5. Não-conformidade crítica (nunca bloqueia a CONCLUSÃO do checklist)
 
 Um item pode ser marcado `critical: true`. Se um item `critical` +
 `required` for respondido `NÃO`, a execução ainda completa normalmente — a
 informação só é **preservada e exposta**:
 `ChecklistExecutionEntity.hasCriticalNonConformity` é **calculado em tempo
 de leitura** (função pura, sem Prisma) a partir das respostas — nunca
-armazenado como coluna. Nenhum bloqueio automático de viagem foi
-implementado. O Driver App mostra um aviso ("ATENÇÃO: existem itens
-marcados como NÃO") no resumo, mas nunca impede a conclusão.
+armazenado como coluna. O Driver App mostra um aviso ("ATENÇÃO: existem
+itens marcados como NÃO") no resumo, mas nunca impede a conclusão do
+checklist em si.
+
+**Fase 111 -- a informação passou a ser ACIONADA em 3 pontos** (a conclusão
+do checklist continua sempre permitida; o que mudou é o que acontece
+DEPOIS):
+
+1. **Início de viagem** -- opt-in por tenant, ver `docs/trip-management.md`
+   seção 2 (`assertPreTripChecklistSatisfied`).
+2. **Notificações** -- `NotificationType.CHECKLIST_CRITICAL_NON_CONFORMITY`
+   (novo), coletor `collectChecklistCriticalNonConformity`, ver
+   `docs/notifications.md` seção 14.
+3. **Manutenção/OS** -- `VehicleMaintenance.checklistExecutionId` (novo,
+   opcional), ação manual "Abrir OS a partir desta não conformidade" no
+   admin-web (`/checklists/:id`), ver seção 13 abaixo.
+
+Todos os 3 reaproveitam a MESMA `hasCriticalNonConformity` já existente
+desde a Fase 38 -- nenhuma segunda regra de criticidade em nenhum dos 3
+pontos.
+
+**Fase 112 -- 4º ponto de leitura (não de ação)**: `GET /trips/:id/summary`
+passou a expor `preTripChecklistStatus`/`preTripChecklistHasCriticalNonConformity`
+no resumo de prontidão do planejamento da viagem (mesma
+`hasCriticalNonConformity`, mesma `resolveRequirePreTripChecklist` da
+Fase 111) -- puramente informativo, sem gatilho novo. Ver
+`docs/trip-management.md` seção 18.
 
 ## 6. Evidência (foto/assinatura) — upload real (Fase 39)
 
@@ -192,22 +216,42 @@ renderizar uma imagem quebrada.
 | POST | `/checklists/templates/:id/publish` | admin (escrita) | DRAFT→PUBLISHED |
 | POST | `/checklists/templates/:id/versions` | admin (escrita) | nova versão DRAFT a partir de um PUBLISHED |
 | GET | `/checklists/executions` | admin (leitura) | paginado, filtro trip/vehicle/status |
-| GET | `/checklists/executions/:id` | admin (leitura) | com respostas+evidências |
-| GET | `driver/checklists/available` | motorista | só templates PUBLISHED do tenant |
+| GET | `/checklists/executions/:id` | admin (leitura) | com respostas+evidências; **Fase 111**: também `maintenances` (OS abertas a partir deste checklist) |
+| GET | `driver/checklists/available` | motorista | só templates PUBLISHED do tenant; **Fase 111**: `?tripId=` opcional filtra por `vehicleType`/`trailerType` da composição daquela viagem |
 | POST | `driver/checklists` | motorista | inicia execução, `deviceEventId` obrigatório, sempre ONLINE |
 | GET | `driver/checklists/:id` | motorista | só a própria execução |
 | POST | `driver/checklists/:id/answers` | motorista | lote, upsert por item |
 | POST | `driver/checklists/:id/evidence` | motorista | **Fase 39** — multipart, idempotente por deviceEventId |
 | POST | `driver/checklists/:id/complete` | motorista | idempotente, valida required + requiresPhoto |
 
+**Fase 111** — `ChecklistExecutionEntity`/`ChecklistAnswerEntity` ganharam
+campos denormalizados (`templateName`/`templateType`/`vehiclePlate`/
+`driverName`/`tripDestinationName` na execução; `itemCode`/`itemLabel`/
+`itemType`/`itemRequired`/`itemCritical` na resposta) — **nenhuma query
+nova**, os relacionamentos já estavam incluídos na mesma consulta
+(`EXECUTION_INCLUDE`), só não eram mapeados na entidade. Fecha o gap real
+de o admin-web não ter como exibir uma execução legível sem N+1 de lookups
+no cliente.
+
 ## 9. Driver App — fluxo pré/pós-viagem
 
 Entrada a partir da `HomeScreen` (`apps/driver-app/src/screens/HomeScreen.tsx`):
 botão "Checklist pré-viagem" no card de viagem despachada (antes de
 `INICIAR VIAGEM`) e "Checklist pós-viagem" no card em andamento/pausada.
-**Nenhum dos dois bloqueia** `START`/`PAUSE`/`RESUME`/`COMPLETE` de `Trip`
-— bloqueio automático fica para uma fase futura, mediante decisão
-explícita (seção 22/44 do pedido da Fase 39).
+
+**Até a Fase 110**: nenhum dos dois bloqueava `START`/`PAUSE`/`RESUME`/
+`COMPLETE` de `Trip`. **Fase 111**: `START` passou a poder ser bloqueado
+pelo backend (`409`, mesma resposta tratada pela tela já existente de
+início de viagem) quando o tenant ativa
+`requirePreTripChecklist` — ver `docs/trip-management.md` seção 2. Opt-in,
+default desligado: o fluxo do Driver App em si **não mudou nenhuma tela**
+-- o motorista continua preenchendo o checklist do mesmo jeito; a única
+diferença é que, com a regra ativada, `INICIAR VIAGEM` pode devolver erro
+se o checklist pré-viagem não tiver sido concluído (ou tiver não-
+conformidade crítica) antes. `GET driver/checklists/available` também
+passou a filtrar por `vehicleType`/`trailerType` quando chamado com
+`?tripId=` (`ChecklistScreen` já tinha o `tripId` disponível via
+parâmetro de navegação -- nenhuma tela nova, só o parâmetro repassado).
 
 ```
 HomeScreen
@@ -286,12 +330,26 @@ automaticamente") quando qualquer ação cai na fila.
 - `TEXT`/`NUMBER`/`SELECT` têm suporte básico real (campo de texto/numérico
   simples) — sem UI de seleção estruturada para `SELECT` (o contrato ainda
   não define um formato de "opções").
-- Sem bloqueio automático de `START`/`COMPLETE` de viagem por checklist
-  pendente (fase futura).
-- Sem dashboard/relatório de checklist no admin-web.
+- ~~Sem bloqueio automático de `START`/`COMPLETE` de viagem por checklist
+  pendente~~ -- **`START` fechado na Fase 111** (opt-in por tenant, ver
+  `docs/trip-management.md` seção 2). `COMPLETE` de `Trip` continua sem
+  nenhum bloqueio por checklist -- não há requisito de negócio para isso
+  (a viagem pode legitimamente terminar mesmo com um checklist pós-viagem
+  ainda pendente de preenchimento; travar a conclusão da viagem por isso
+  seria inventar uma regra sem pedido explícito).
+- ~~Sem dashboard/relatório de checklist no admin-web~~ -- **fechado na
+  Fase 111**: `/checklists` (listagem) e `/checklists/:id` (detalhe com
+  respostas/evidências/OS vinculada), ver seção 13.
 - Sem OCR de odômetro, sem IA de análise de fotos, sem reconhecimento de
   placa — a foto é só evidência armazenada, o valor declarado pelo
   motorista continua sendo a fonte.
+- **Fase 111** -- autoria de template (criar/editar/publicar/versionar)
+  continua **sem nenhuma tela no admin-web** (só os contratos de API, ver
+  seção 8) -- decisão deliberada: um construtor de formulário dinâmico
+  (sections/items/tipos/opções) é uma frente de conteúdo separada do
+  "consolidar o checklist operacional pré/pós-viagem" pedido nesta fase,
+  que é sobre a operação (execução, resultado, integração), não sobre
+  autoria. Templates continuam criados via API diretamente.
 
 ## 12. Testes
 
@@ -311,3 +369,87 @@ automaticamente") quando qualquer ação cai na fila.
   câmera/WebView real em teste), resumo com não-conformidade, conclusão,
   modo somente-leitura após `COMPLETED`, e abertura offline (sem GET
   bem-sucedido no mount).
+
+## 13. Fase 111 — Checklist Operacional da Frota (consolidação)
+
+Auditoria prévia confirmou que o módulo (Fase 38/39) já era muito maduro:
+template versionado, execução idempotente/imutável, evidência real,
+offline-first completo. Os gaps reais fechados nesta fase, todos já
+listados na seção 11 (limitações conhecidas desde a Fase 39) mais 3 gaps
+adicionais encontrados por auditoria de código (não documentados antes
+porque nunca haviam sido verificados linha a linha até esta fase):
+
+1. **`ChecklistTemplate.vehicleType`/`trailerType` nunca filtravam nada**
+   (existiam desde a Fase 38, só armazenados) — `findPublishedForDriver`
+   agora aceita `tripId` opcional e filtra pelo tipo do veículo/carretas da
+   composição daquela viagem (seção 8/9).
+2. **Bloqueio de início de viagem** (opt-in por tenant), ver
+   `docs/trip-management.md` seção 2.
+3. **Integração com manutenção/OS**: `VehicleMaintenance.checklistExecutionId`
+   (novo, opcional, migration aditiva — coluna nullable + índice + FK
+   `ON DELETE SET NULL`, `20260910000000_vehicle_maintenance_checklist_link`)
+   — mesma decisão de modelagem já usada por `TireMovement.maintenanceId`
+   (Fase 109): vínculo manual, nunca uma OS criada automaticamente. Ação
+   "Abrir OS a partir desta não conformidade" em `/checklists/:id`
+   (admin-web), habilitada só quando `hasCriticalNonConformity=true` e o
+   checklist tem `vehicleId`; pré-preenche veículo/descrição/prioridade no
+   mesmo `CreateMaintenanceModal` já existente (Fase 13, estendido com
+   `checklistExecutionId`/`priority`, nunca um modal novo).
+   `ChecklistExecutionEntity.maintenances` (novo, só em `findOne`, mesmo
+   princípio de N+1 de `MaintenanceEntity.tireMovements`, Fase 109) lista
+   as OS já abertas a partir daquele checklist.
+4. **Notificações**: `NotificationType.CHECKLIST_CRITICAL_NON_CONFORMITY`
+   (novo, enum aditivo), ver `docs/notifications.md` seção 14.
+5. **Torre de Controle**: `TripOperationEntity.preTripChecklistStatus`/
+   `preTripChecklistHasCriticalNonConformity`, ver `docs/control-tower.md`.
+6. **Admin-web**: `/checklists` (listagem paginada, filtro veículo/status)
+   e `/checklists/:id` (detalhe: identificação, respostas com item
+   crítico destacado, evidências, OS vinculadas, ação "Abrir OS"). Linhas
+   de checklist na aba "Operação" da viagem (`/trips/:id`, Fase 66) e na
+   nova aba "Checklists" de `/vehicles/:id` agora navegam para o detalhe
+   (antes, sem nenhuma tela de destino). Item de menu "Checklists" novo no
+   grupo "Frota" (`nav-config.ts`, `TenantModule.CHECKLIST` — enum já
+   existia, nunca usado por nenhum item de menu até agora).
+
+**Nenhuma migration para o enum `NotificationType`**: durante a auditoria
+desta fase foi encontrado que o valor `CHECKLIST_CRITICAL_NON_CONFORMITY`
+já existia no banco (`ALTER TYPE` não é reversível em Postgres sem recriar
+o tipo) — resíduo do incidente de um agente em background que executou
+trabalho não solicitado numa fase anterior e foi revertido a nível de
+código/migrations, mas não pôde reverter o `ADD VALUE` já aplicado ao
+enum. Como o nome coincide exatamente com o que esta fase precisava, o
+valor foi conscientemente reaproveitado (documentado aqui por
+transparência) em vez de recriar o tipo só para "limpar" um valor inerte
+que nunca tinha sido referenciado por nenhum código até esta fase.
+
+**Bug real corrigido nesta fase (não introduzido por ela)**: o array de
+nomes desestruturados do `Promise.all` em
+`NotificationsService.collectCandidates` estava desalinhado com a lista de
+coletores desde a Fase 110 (2 coletores adicionados sem os 2 nomes
+correspondentes) — as notificações dos 2 últimos coletores da lista
+(`collectDeliveryProofProblem`/`collectContractsExpiring`) eram
+silenciosamente descartadas. Corrigido junto com a adição do coletor desta
+fase; ver `docs/notifications.md` seção 15 para o detalhe completo e o
+teste novo de `CONTRACT_EXPIRING` que fecha a lacuna de cobertura que
+deixou o bug passar despercebido. Um segundo bug pré-existente e não
+relacionado também foi encontrado e corrigido na mesma auditoria (mock
+desatualizado em `notifications.service.spec.ts`, quebrando os 13 testes
+unitários da suite desde a Fase 108) -- mesma seção.
+
+- **Unit (API)**: `trips/utils/trip-preferences.util.spec.ts` (5 casos,
+  função pura de leitura de `TenantSettings.preferences`).
+- **E2E (API)**: `checklists.e2e-spec.ts` (+2: filtro por vehicleType/
+  trailerType), `trips.e2e-spec.ts` (+5: gate desligado/ligado × ausente/
+  incompleto/crítico/ok), `maintenances.e2e-spec.ts` (+3: cria com
+  checklistExecutionId, rejeita inexistente, regressão sem vínculo),
+  `notifications.e2e-spec.ts` (+3 do checklist crítico, +2 de
+  `CONTRACT_EXPIRING` fechando a lacuna de cobertura do bug acima),
+  `trip-operations-monitor.e2e-spec.ts` (+4: status/criticidade do
+  checklist pré-viagem na Torre de Controle) — `trip-operations-load.e2e-spec.ts`
+  reconfirmado sem N+1 (11 queries fixas, antes 10).
+- **Frontend**: `checklists/[id]/page.test.tsx` (novo, 4 testes),
+  `checklists/page.test.tsx` (novo, 3 testes), `operations/control-tower/page.test.tsx`
+  (+2: badge de checklist crítico/concluído, contagem em "Exigem
+  intervenção").
+- **Driver App**: `ChecklistScreen.test.tsx` (+1: `tripId` repassado a
+  `getAvailableChecklists`).

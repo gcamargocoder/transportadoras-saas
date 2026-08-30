@@ -16,6 +16,11 @@ export function resolveNotificationLink(notification: NotificationEntity): strin
       return `/vehicles/${notification.entityId}`;
     case 'VehicleMaintenance':
       return vehicleId ? `/vehicles/${vehicleId}` : null;
+    // Fase 108 -- manutencao preventiva vencida/proxima (MaintenancePlan),
+    // sem OS aberta ainda: mesma pagina de destino de VehicleMaintenance
+    // (sem tela dedicada de plano isolado), nunca uma rota inventada.
+    case 'MaintenancePlan':
+      return vehicleId ? `/vehicles/${vehicleId}` : null;
     case 'Tire':
       return `/tires/${notification.entityId}`;
     case 'FuelSupply':

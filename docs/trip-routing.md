@@ -160,3 +160,61 @@ chamado, no-op idempotente sem nova versão, bloqueio por status da viagem (part
 isolamento multi-tenant, RBAC de leitura/escrita e ausência de N+1. Suítes
 `trips.e2e-spec.ts`, `driver-trips.e2e-spec.ts`, `routing.e2e-spec.ts` e
 `trip-delivery-stops.e2e-spec.ts` reexecutadas e continuam passando sem alteração.
+
+## 12. Fase 113 — Múltiplas Entregas e Otimização da Rota (auditoria + 1 correção real)
+
+Objetivo da fase: consolidar o planejamento de viagens multi-entrega, reaproveitando
+integralmente `TripDeliveryStopsService`, `RoutingService`, `RouteVersion`/`RoutePlan` e
+`TripMetrics` — sem criar um segundo motor de roteirização/otimização.
+
+### Conclusão da auditoria: escopo já coberto pelas Fases 88/89/91/99/105/111/112
+
+Cada item pedido pela Fase 113 já tinha uma implementação real, auditada e testada:
+
+| Item pedido | Já coberto por |
+|---|---|
+| Ordenação operacional das entregas | `TripDeliveryStop.sequence` (Fase 88) + reordenação manual (`PUT .../reorder`) |
+| Otimização/reordenação com dados reais | `TripRoutingService.suggest`/`apply` (Fase 89) — ordena por `plannedArrival`, o único dado real e não inventado disponível (ver seção 2) |
+| Recálculo da rota após resequenciamento | N/A por desenho: `RoutePlan` é sempre o trecho único origem→destino da `Trip` (nunca depende da ordem das paradas intermediárias) — recalcular geometria a cada resequenciamento inventaria um dado que a rota não usa. O marco de replanejamento é o `RouteVersion` (`STOP_RESEQUENCE`), não uma nova geometria |
+| Preservação do histórico/versionamento | `RouteVersion` imutável, versionado, nunca reescrito (Fase 89) |
+| Impacto em distância/duração/pedágio/métricas previstas | Nenhum: como a `RoutePlan` não depende da ordem das paradas, nada muda nela nem em `TripMetrics.planned*` (Fase 112) quando a sequência é alterada — `plannedMetricsSynced` continua correto sem nenhuma ação adicional |
+| Bloqueio após início/estado terminal | `assertTripPlanningAllowed` (Fase 88/89), reaproveitado por `TripDeliveryStopsService` e `TripRoutingService` |
+| Visão no admin-web | `delivery-stops-tab.tsx` — cartão "Roteirização" (sugestão/aplicar) + reordenação manual (subir/descer) + cartão de ETA (Fase 89/91) |
+| Atualização para o Driver App | Nenhuma mudança necessária — `GET /driver/trips/:id/delivery-stops` (Fase 88) já devolve `sequence` ordenado; aplicar uma sugestão é indistinguível de uma reordenação manual para o app |
+| Integração com ETA sem duplicação | `TripEtaService.compute` (Fase 91) já deriva `nextStopId` **ao vivo** a partir de `TripDeliveryStop.sequence`/`status` — nunca cacheia, então reflete qualquer reordenação automaticamente, sem nenhum código novo |
+| Integração com Torre de Controle sem duplicação | `TripOperationEntity.deliverySummary` (Fase 105) já resume entregas pendentes/em andamento/concluídas/com falha por viagem, com link direto para a aba de entregas |
+
+Confirmado também que nenhuma coordenada geográfica de `Location` passou a existir desde a Fase 89
+(`CreateLocationDto` continua sem expor `geoPoint`) — a limitação documentada na seção 10 continua
+válida; nenhum motor de otimização geográfica foi criado (regra "não inventar algoritmo/distância
+que os dados atuais não sustentem").
+
+### A única lacuna real encontrada: atomicidade de `apply()`
+
+`TripRoutingService.apply()` reordenava as paradas (`TripDeliveryStopsService.reorder`, sua
+própria transação) e **depois**, numa **segunda transação separada**, criava o `RouteVersion`
+correspondente. As duas escritas formam uma única alteração de planejamento (regra explícita da
+Fase 113: "operações críticas atômicas e seguras contra concorrência") — se o processo falhasse
+entre as duas chamadas, a sequência ficaria alterada sem o marco histórico correspondente.
+
+**Correção**: `TripDeliveryStopsService.reorder` passou a aceitar um `Prisma.TransactionClient`
+opcional (mesmo padrão já usado em `TiresService.assertPositionAvailable`) — quando fornecido, usa
+essa transação em vez de abrir a própria; quando omitido (endpoint de reordenação manual, Fase 88),
+comportamento idêntico a antes. `TripRoutingService.apply` agora abre **uma única** transação que
+contém a reordenação e a criação do `RouteVersion`. Nenhuma mudança de contrato de API, nenhuma
+mudança de comportamento observável — os 12 testes de `trip-routing.e2e-spec.ts` (incluindo o
+cenário de aplicação com `RouteVersion`) continuam passando sem alteração de asserção.
+
+A reordenação **manual** (`PUT .../delivery-stops/reorder`) continua, por desenho intencional já
+documentado na Fase 89 (ver comentário em `TripsController`), **sem** criar `RouteVersion` a cada
+chamada — versionar todo clique de "subir/descer" durante o ajuste fino do planejamento poluiria o
+histórico sem necessidade; o marco de replanejamento formal continua sendo a ação deliberada
+"Aplicar sugestão".
+
+### Testes (Fase 113)
+
+Regressão completa executada, sem alteração de asserções: `trip-routing.e2e-spec.ts` (12),
+`trip-delivery-stops.e2e-spec.ts`, `trips.e2e-spec.ts`, `routing.e2e-spec.ts`,
+`driver-trips.e2e-spec.ts`, `trip-eta.e2e-spec.ts`, `trip-operations-monitor.e2e-spec.ts`,
+`trip-operations-load.e2e-spec.ts` (N+1 da Torre de Controle), `fleet.e2e-spec.ts`,
+`fleet-availability.e2e-spec.ts`, `fleet-maintenance.e2e-spec.ts`.

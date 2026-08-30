@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Plus, Trash2 } from 'lucide-react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../../components/ui/badge';
 import { Button } from '../../../../components/ui/button';
@@ -41,6 +41,7 @@ type TabValue = 'overview' | 'history' | 'movements' | 'retreads' | 'inspections
 export default function TireDetailPage(): JSX.Element {
   const params = useParams<{ id: string }>();
   const tireId = params.id;
+  const router = useRouter();
   const { user } = useAuth();
   const [tab, setTab] = useState<TabValue>('overview');
   const [movementOpen, setMovementOpen] = useState(false);
@@ -79,9 +80,27 @@ export default function TireDetailPage(): JSX.Element {
       },
       { header: 'Destino', accessorFn: (row) => TIRE_LOCATION_LABELS[row.newLocationType] },
       { header: 'Posição', accessorFn: (row) => row.newPosition ?? '-' },
+      {
+        header: 'OS',
+        cell: ({ row }) =>
+          row.original.maintenanceId ? (
+            <button
+              type="button"
+              className="text-brand-600 hover:underline"
+              onClick={(e) => {
+                e.stopPropagation();
+                router.push(`/maintenances/${row.original.maintenanceId}`);
+              }}
+            >
+              {row.original.maintenanceServiceOrderNumber ?? 'Ver OS'}
+            </button>
+          ) : (
+            '-'
+          ),
+      },
       { header: 'Responsável', accessorFn: (row) => row.creatorName ?? '-' },
     ],
-    [],
+    [router],
   );
 
   const retreadColumns = useMemo<ColumnDef<TireRetreadEntity, unknown>[]>(
@@ -184,6 +203,30 @@ export default function TireDetailPage(): JSX.Element {
                   tire.lifecycle.costPerKm.available && tire.lifecycle.costPerKm.value !== null
                     ? `${formatCurrency(tire.lifecycle.costPerKm.value)}/km`
                     : 'Indisponível (odômetro insuficiente)'
+                }
+              />
+              <Field
+                label="Km rodados desde a instalação"
+                value={
+                  tire.lifecycle.distanceTraveledSinceInstallKm !== null
+                    ? `${formatNumber(tire.lifecycle.distanceTraveledSinceInstallKm)} km`
+                    : 'Indisponível'
+                }
+              />
+              <Field
+                label="Vida útil restante"
+                value={
+                  tire.lifecycle.remainingLifespanKm !== null
+                    ? `${formatNumber(tire.lifecycle.remainingLifespanKm)} km`
+                    : 'Indisponível'
+                }
+              />
+              <Field
+                label="% da vida útil utilizada"
+                value={
+                  tire.lifecycle.lifespanUsedPercent !== null
+                    ? `${formatNumber(tire.lifecycle.lifespanUsedPercent, 1)}%`
+                    : 'Indisponível'
                 }
               />
             </div>

@@ -382,3 +382,160 @@ módulo Fiscal exclui `DRIVER`). Fluxo de captura/offline/`syncQueue`/
 ### 11.8 Pendências reais (Fase 68)
 
 Nenhuma pendência de escopo desta fase.
+
+## 12. Fase 115 — Gestão de Exceções Operacionais
+
+### 12.1 Auditoria prévia — o que já existia
+
+Antes de qualquer código, foi auditado tudo que já lida com exceções/alertas
+operacionais: Torre de Controle (`GET /trips/operations/active`, Fase 105/114),
+`NotificationsService` (16 coletores, incluindo `collectCriticalOccurrences`),
+`TripOccurrence` (este documento, Fase 67/68/101), ETA (Fase 91), checklist
+crítico (Fase 111), POD/documentos (Fase 56/68/100), manutenção (Fase 45/114),
+veículo/motorista (Fase 14/90), rota (Fase 26/89) e o dashboard estatístico
+`/operations/fleet/occurrences` (Fase 68, seção 11.1).
+
+Conclusão: **`TripOccurrence` já é, desde a Fase 67, a entidade de exceção
+operacional do sistema** — tipo (origem), severidade, status derivado
+(`OPEN`/`IN_PROGRESS`/`RESOLVED`/`CANCELLED`), resolução com autor/data,
+auditoria. `collectCriticalOccurrences` já a integra às notificações (sem
+nenhuma segunda regra de criticidade — `severity=CRITICAL` + aberta). A
+Torre de Controle já mostra, por viagem, contadores derivados dela
+(`openOccurrencesCount`/`criticalOpenOccurrencesCount`, Fase 105) e a Fase
+101 já provou o padrão de visão CROSS-TRIP acionável (listar + filtrar +
+tratar entre viagens) com `GET /delivery-occurrences` — **restrito, por
+desenho deliberado daquela fase, às ocorrências vinculadas a uma parada de
+entrega**.
+
+### 12.2 O único gap real encontrado
+
+Ocorrências **gerais** da viagem (`ACCIDENT`/`BREAKDOWN`/`DELAY`/
+`ROUTE_DEVIATION`/`VEHICLE_PROBLEM`/`FUEL_PROBLEM`/`TIRE_PROBLEM`/`OTHER`/
+`DOCUMENT_PROBLEM`, sem `tripDeliveryStopId`) nunca tiveram uma visão
+cross-trip: só apareciam viagem por viagem (`GET /trips/:id/occurrences`).
+Um dispatcher que precisasse triar "todas as exceções abertas agora,
+qualquer viagem, qualquer origem" não tinha como — só via delivery, ou
+entrando em cada viagem uma a uma. Essa é a única lacuna real da fase.
+
+O dashboard `/operations/fleet/occurrences` (Fase 68) **não fecha** essa
+lacuna: é uma visão estatística/histórica (contagem por tipo/severidade,
+tendência mensal, ranking por veículo/motorista) — nunca uma lista de itens
+individuais com drill-down e ação de tratar/resolver.
+
+### 12.3 O que foi implementado
+
+**Backend** — reaproveita 100% de `TripOccurrencesService`/`TripOccurrence`/
+`AuditService`; nenhuma tabela, coluna, service ou regra de negócio nova;
+nenhuma migration:
+
+- `buildDeliveryOccurrenceWhere` (Fase 101) foi dividido em
+  `buildOccurrenceWhere` (filtros comuns, sem a restrição a paradas) +
+  `buildDeliveryOccurrenceWhere` (o mesmo, com a restrição de sempre —
+  comportamento de `GET /delivery-occurrences` **inalterado**, mesmos
+  testes, mesmas asserções).
+- `GET /trip-occurrences` (novo controller `TripOccurrencesController`,
+  mesmo módulo `trip-operations`) — mesma listagem CROSS-TRIP de
+  `GET /delivery-occurrences`, mesmo DTO (`FindDeliveryOccurrencesQueryDto`,
+  reaproveitado tal como está — nenhum campo é específico de entrega),
+  mesma entidade de linha (`DeliveryOccurrenceListItemEntity`,
+  `tripDeliveryStopId`/`tripDeliveryStopSequence` passaram a `nullable` —
+  ampliação de tipo, nunca uma remoção de garantia para quem já consome
+  `/delivery-occurrences`), mesmo mapper, mesma paginação no banco — **sem**
+  a restrição a `tripDeliveryStopId != null`. Cobre as ocorrências gerais E
+  as de entrega juntas (união, não substituição).
+- `GET /trip-occurrences/dashboard` — os mesmos indicadores de
+  `GET /delivery-occurrences/dashboard`, sobre o conjunto completo.
+- `GET /trip-occurrences/:id`, `PATCH /trip-occurrences/:id/start|resolve|
+  cancel` — **tratamento/acknowledge reaproveitando literalmente os mesmos
+  3 métodos de transição de status já usados por `DeliveryOccurrencesController`**
+  (`markInProgressByOccurrenceId`/`resolveByOccurrenceId`/
+  `cancelByOccurrenceId`, já genéricos desde a Fase 101, nenhum "acknowledge"
+  novo foi inventado). `findOneDeliveryOccurrence` foi renomeado para
+  `findOneOccurrence` (já era 100% genérico) e passou a ser usado pelos 2
+  controllers.
+- Filtro `tripDeliveryStopId=<uuid>` continua funcionando em
+  `GET /trip-occurrences` exatamente como sempre funcionou em
+  `/delivery-occurrences` — a busca por uma parada específica não exige mais
+  implicitamente "é uma ocorrência de entrega", só filtra por esse campo.
+
+**Por que não uma segunda Torre de Controle**: o escopo de
+`GET /trip-occurrences` é um único tipo de entidade (`TripOccurrence`), não
+um agregado multi-fonte por viagem (alertas + desvio + checklist + entrega +
+manutenção), que continua sendo exclusivamente o papel de
+`GET /trips/operations/active`. As duas telas nunca competem: a Torre de
+Controle responde "quais viagens exigem atenção agora"; esta tela responde
+"quais exceções (de qualquer origem/tipo) estão abertas, para tratar uma a
+uma".
+
+**Frontend (`admin-web`)** — reaproveita integralmente os componentes já
+usados por `/operations/delivery-occurrences` (Fase 101):
+
+- Nova página `/operations/occurrences` ("Ocorrências Operacionais"),
+  clone estrutural de `delivery-occurrences/page.tsx` (mesmos
+  `FilterBar`/`StatCard`/`DataTable`/`Dropdown`/`Pagination`), com 2
+  diferenças de conteúdo: coluna "Viagem" mostra "Parada #N" ou "Ocorrência
+  geral da viagem" conforme o caso, e uma coluna "Motorista/Veículo" com
+  link direto para `/drivers/:id`/`/vehicles/:id` (drill-down para a
+  entidade que originou a exceção, além da viagem).
+  `/operations/delivery-occurrences` **não foi alterada** — continua
+  restrita às ocorrências de entrega, mesma URL, mesmo comportamento.
+- Item de navegação "Ocorrências Operacionais" adicionado ao grupo
+  "Operação" (mesmas roles/módulo de "Ocorrências de Entrega").
+
+### 12.4 Regras seguidas (explícitas do pedido)
+
+- Nenhum SLA/prioridade/risco/severidade/estado inventado — `type`/
+  `severity`/status derivado são exatamente os já existentes desde a Fase
+  67/101.
+- Nenhuma notificação foi transformada em exceção — a tela lê diretamente
+  `TripOccurrence`, nunca `Notification` (que continua sendo o inbox pessoal
+  por `recipientId`, um conceito distinto e não tocado nesta fase).
+- Nenhum coletor de notificação duplicado — `collectCriticalOccurrences`
+  não foi alterado; continua a única fonte de `CRITICAL_OCCURRENCE`.
+- Nenhum mecanismo de push/tempo real novo — leitura sob demanda (React
+  Query), mesmo padrão de `/operations/delivery-occurrences` (sem polling).
+- RBAC (`TRIP_READ_ROLES`/`TRIP_WRITE_ROLES`, idênticos aos de
+  `/delivery-occurrences`), multi-tenant (`tenantId` em toda query) e
+  ausência de N+1 (mesmas 2 queries em paralelo — `findMany` + `count` —
+  independente do volume, testado com paginação) preservados.
+- Ausência de exceções duplicadas para o mesmo evento: `/trip-occurrences`
+  é uma leitura da MESMA linha de `TripOccurrence` que já aparece na aba
+  "Ocorrências" da viagem e, quando vinculada a uma parada, também em
+  `/delivery-occurrences` — são visões filtradas do mesmo registro, nunca
+  uma segunda linha/gravação (mesmo princípio já estabelecido entre a aba
+  por viagem e `/delivery-occurrences` desde a Fase 101).
+- APIs existentes preservadas: `GET /delivery-occurrences` e
+  `GET /trips/:id/occurrences` continuam com contrato e comportamento
+  idênticos — só rotas/campos foram adicionados.
+- Driver App: auditado, **nenhuma alteração** — a criação de ocorrências
+  pelo motorista (`POST /driver/trips/:id/occurrences`, Fase 67) já cobre o
+  único ponto de ação do motorista sobre este domínio; `/trip-occurrences`
+  é uma ferramenta de triagem exclusivamente administrativa (mesmo RBAC que
+  já bloqueia `DRIVER` em `/delivery-occurrences`).
+
+### 12.5 Testes (Fase 115)
+
+`test/trip-occurrences-shifts-timeline.e2e-spec.ts`, novo describe "Fase 115
+-- GET /trip-occurrences" (7 testes): lista ocorrências gerais e de entrega
+juntas com `tripDeliveryStopSequence: null` para as gerais; confirma que
+`GET /delivery-occurrences` continua excluindo as gerais (regressão
+explícita da rota antiga); dashboard soma os dois conjuntos;
+`tripDeliveryStopId` filtra corretamente sem a restrição fixa; ações
+start/resolve/cancel e consulta individual funcionam para uma ocorrência
+geral; isolamento multi-tenant; RBAC (`DRIVER` bloqueado,
+`AUDITOR` só leitura). Suíte completa (35 testes) reexecutada e verde, sem
+alteração de nenhuma asserção pré-existente. Regressão confirmada:
+`trips.e2e-spec.ts`, `trip-operations-monitor.e2e-spec.ts`,
+`notifications.e2e-spec.ts` (o coletor `collectCriticalOccurrences`
+continua gerando `CRITICAL_OCCURRENCE` normalmente).
+
+### 12.6 Limitações reais (Fase 115)
+
+- `/trip-occurrences` reaproveita o MESMO DTO de filtros de
+  `/delivery-occurrences` (`FindDeliveryOccurrencesQueryDto`) — o nome da
+  classe (e da rota antiga) menciona "delivery" por herança histórica da
+  Fase 101, mas nenhum campo ali é específico de entrega; renomear a classe
+  ampliaria o diff sem nenhum ganho funcional, avaliado e descartado.
+- Sem "priorização" além dos filtros/badges de severidade já existentes
+  (mesmo critério de `type`/`severity` já usado em toda a listagem) — não
+  foi inventado um score de prioridade sem base em dado real.

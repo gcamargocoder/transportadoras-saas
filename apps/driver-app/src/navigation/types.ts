@@ -8,8 +8,14 @@ export type RootStackParamList = {
   Fuel: { tripId: string };
   Toll: { tripId: string };
   Stops: { tripId: string };
-  // Fase 56 -- comprovante de entrega.
-  DeliveryProof: { tripId: string };
+  // Fase 106 -- paradas/entregas PLANEJADAS (TripDeliveryStop, Fase 88),
+  // distinta de Stops acima (paradas OPERACIONAIS detectadas pelo app).
+  DeliveryStops: { tripId: string };
+  // Fase 56 -- comprovante de entrega. Fase 106 -- tripDeliveryStopId/
+  // stopLabel opcionais: quando vem da tela DeliveryStops (vinculado a uma
+  // parada especifica ja COMPLETED); ausente = comprovante generico da
+  // viagem (comportamento original, inalterado).
+  DeliveryProof: { tripId: string; tripDeliveryStopId?: string; stopLabel?: string };
   // Fase 67 -- ocorrencias e jornada do motorista.
   Occurrence: { tripId: string };
   Shift: { tripId: string };

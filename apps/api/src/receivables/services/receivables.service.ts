@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { FinancialTransactionType, Prisma, ReceivableStatus, TripBillingStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
@@ -6,16 +7,18 @@ import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { buildInstallmentPlan } from '../../common/utils/installment-plan.util';
 import { FinancialAccountsService } from '../../finance-accounts/services/financial-accounts.service';
 import { FinancialPeriodGuardService } from '../../financial-periods/services/financial-period-guard.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CreateReceivableDto } from '../dto/create-receivable.dto';
 import { FindReceivablesQueryDto } from '../dto/find-receivables-query.dto';
 import { GenerateReceivableDto } from '../dto/generate-receivable.dto';
 import { RegisterReceivablePaymentDto } from '../dto/register-receivable-payment.dto';
 import { PaginatedReceivablesEntity } from '../entities/paginated-receivables.entity';
 import { ReceivableEntity } from '../entities/receivable.entity';
 import { toReceivableEntity, ReceivableWithRelations } from '../mappers/receivable.mapper';
-import { buildReceivableStatusWhere, computeBalance, computeWrittenStatus } from '../utils/receivable-status.util';
+import { buildReceivableStatusWhere, computeBalance, computeWrittenStatus, round2 } from '../utils/receivable-status.util';
 
 const DETAIL_INCLUDE = {
   customer: { select: { name: true } },
@@ -129,6 +132,83 @@ export class ReceivablesService {
     return toReceivableEntity(created as unknown as ReceivableWithRelations);
   }
 
+  // POST /receivables -- titulo MANUAL (Fase Financeiro CP/CR), sem
+  // TripBilling de origem (tripId/billingId ficam nulos). Suporta
+  // parcelamento (installments > 1): gera N Receivables numa unica
+  // transacao, todos com o mesmo installmentGroupId. Nao reaproveita
+  // generateFromBilling pois nao ha faturamento nenhum para validar/copiar.
+  async create(tenantId: string, dto: CreateReceivableDto, actor: AuditActor, metadata: RequestMetadata): Promise<ReceivableEntity[]> {
+    const firstDueDate = new Date(dto.dueDate);
+    const issueDate = new Date(dto.issueDate);
+
+    // Fase 76, secao 9/10 -- competencia do titulo = issueDate, igual ao
+    // fluxo derivado de faturamento.
+    await this.periodGuard.assertPeriodOpenForDate(tenantId, issueDate);
+
+    // Fase Fiscal/XML -- um documento fiscal gera exatamente 1 titulo, nunca
+    // parcelas (ver comentario de Receivable.fiscalDocumentId no schema).
+    if (dto.fiscalDocumentId && (dto.installments ?? 1) > 1) {
+      throw new BadRequestException('Nao e possivel parcelar um titulo gerado a partir de um documento fiscal.');
+    }
+    if (dto.fiscalDocumentId) {
+      await this.assertFiscalDocumentLinkable(tenantId, dto.fiscalDocumentId);
+    }
+
+    const plan = buildInstallmentPlan(dto.originalAmount, firstDueDate, dto.installments ?? 1);
+    const installmentGroupId = plan.length > 1 ? randomUUID() : null;
+
+    const createdIds = await this.prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const [i, entry] of plan.entries()) {
+        const status = computeWrittenStatus(entry.amount, 0, null);
+        const description = plan.length > 1 ? `${dto.description} (${i + 1}/${plan.length})` : dto.description;
+        const created = await tx.receivable.create({
+          data: {
+            tenantId,
+            customerId: dto.customerId,
+            description,
+            originalAmount: entry.amount,
+            receivedAmount: 0,
+            issueDate,
+            dueDate: entry.dueDate,
+            status,
+            ...(installmentGroupId
+              ? { installmentGroupId, installmentNumber: i + 1, installmentTotal: plan.length }
+              : {}),
+            ...(dto.fiscalDocumentId ? { fiscalDocumentId: dto.fiscalDocumentId } : {}),
+            createdBy: actor.userId,
+          },
+        });
+        ids.push(created.id);
+      }
+      return ids;
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'receivable.created',
+      entityName: 'Receivable',
+      entityId: createdIds[0] ?? '',
+      newValue: toJsonSafe({
+        manual: true,
+        customerId: dto.customerId,
+        installments: plan.length,
+        installmentGroupId,
+        fiscalDocumentId: dto.fiscalDocumentId ?? null,
+        originalAmount: dto.originalAmount,
+        dueDate: firstDueDate,
+        receivableIds: createdIds,
+      }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    const rows = await this.prisma.receivable.findMany({ where: { id: { in: createdIds }, tenantId }, include: DETAIL_INCLUDE });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return createdIds.map((id) => toReceivableEntity(byId.get(id) as unknown as ReceivableWithRelations));
+  }
+
   async findAll(tenantId: string, query: FindReceivablesQueryDto): Promise<PaginatedReceivablesEntity> {
     const now = new Date();
     const where: Prisma.ReceivableWhereInput = {
@@ -213,11 +293,20 @@ export class ReceivablesService {
     if (balance <= 0) {
       throw new ConflictException('Este titulo ja esta totalmente recebido -- nenhum saldo restante.');
     }
-    if (dto.amount > balance) {
+    // Fase Financeiro CP/CR -- discountAmount ABATE o saldo junto com
+    // amount (quita o titulo), interestAmount/fineAmount NAO (sao cobranca
+    // adicional, nunca reduzem originalAmount). Ver comentario do model
+    // ReceivablePayment no schema.
+    const discountAmount = dto.discountAmount ?? 0;
+    const interestAmount = dto.interestAmount ?? 0;
+    const fineAmount = dto.fineAmount ?? 0;
+    const settledAmount = round2(dto.amount + discountAmount);
+    if (settledAmount > balance) {
       throw new BadRequestException(
-        `O valor informado (${dto.amount}) ultrapassa o saldo em aberto (${balance}) -- nunca permitido.`,
+        `O valor informado (${dto.amount} + desconto ${discountAmount} = ${settledAmount}) ultrapassa o saldo em aberto (${balance}) -- nunca permitido.`,
       );
     }
+    const cashAmount = round2(dto.amount + interestAmount + fineAmount);
 
     // Fase 76, secao 9/10 -- competencia do recebimento = paymentDate (data
     // informada pelo usuario, secao 10 do pedido). Fase 79, secao 10 --
@@ -225,7 +314,7 @@ export class ReceivablesService {
     const paymentDate = new Date(dto.paymentDate);
     await this.periodGuard.assertPeriodOpenForDate(tenantId, paymentDate);
 
-    const newReceivedAmount = receivedAmount + dto.amount;
+    const newReceivedAmount = round2(receivedAmount + settledAmount);
     const newStatus = computeWrittenStatus(originalAmount, newReceivedAmount, null);
 
     const { paymentId, transactionId } = await this.prisma.$transaction(async (tx) => {
@@ -256,6 +345,9 @@ export class ReceivablesService {
           createdBy: actor.userId,
           ...(dto.reference ? { reference: dto.reference } : {}),
           ...(dto.notes ? { notes: dto.notes } : {}),
+          ...(dto.interestAmount != null ? { interestAmount: dto.interestAmount } : {}),
+          ...(dto.fineAmount != null ? { fineAmount: dto.fineAmount } : {}),
+          ...(dto.discountAmount != null ? { discountAmount: dto.discountAmount } : {}),
         },
       });
 
@@ -269,7 +361,7 @@ export class ReceivablesService {
           tenantId,
           accountId: dto.financialAccountId,
           type: FinancialTransactionType.CREDIT,
-          amount: dto.amount,
+          amount: cashAmount,
           transactionDate: paymentDate,
           description: `Recebimento -- ${receivable.description}`,
           referenceType: 'ReceivablePayment',
@@ -295,6 +387,10 @@ export class ReceivablesService {
       newValue: toJsonSafe({
         receivableId: id,
         amount: dto.amount,
+        interestAmount,
+        fineAmount,
+        discountAmount,
+        cashAmount,
         paymentDate,
         paymentMethod: dto.paymentMethod,
         newReceivedAmount,
@@ -344,6 +440,20 @@ export class ReceivablesService {
     });
 
     return this.findById(tenantId, id);
+  }
+
+  // Fase Fiscal/XML -- POST /receivables com fiscalDocumentId: garante que o
+  // documento existe neste tenant e que nenhum outro Receivable ja o
+  // referencia (mensagem amigavel antes da constraint @unique do banco).
+  private async assertFiscalDocumentLinkable(tenantId: string, fiscalDocumentId: string): Promise<void> {
+    const document = await this.prisma.fiscalDocument.findFirst({ where: { id: fiscalDocumentId, tenantId } });
+    if (!document) {
+      throw new NotFoundException('Documento fiscal (fiscalDocumentId) nao encontrado nesta empresa.');
+    }
+    const existing = await this.prisma.receivable.findFirst({ where: { tenantId, fiscalDocumentId } });
+    if (existing) {
+      throw new ConflictException('Ja existe uma conta a receber gerada a partir deste documento fiscal.');
+    }
   }
 
   private async findOrThrow<T extends Prisma.ReceivableInclude>(

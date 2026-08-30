@@ -170,6 +170,14 @@ export class CreateMaintenanceDto {
   maintenancePlanId?: string;
 
   @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Fase 111 -- execucao de checklist (pre/pos-viagem) cuja nao-conformidade critica motivou esta OS.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'checklistExecutionId deve ser um UUID valido.' })
+  checklistExecutionId?: string;
+
+  @ApiPropertyOptional({
     type: [MaintenancePartInputDto],
     description: 'Pecas itemizadas. Quando informado, substitui a lista inteira e recalcula partsCost como a soma.',
   })

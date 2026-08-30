@@ -1,13 +1,19 @@
-# Contas a pagar (Fase 73)
+# Contas a pagar (Fase 73 + Fase Financeiro CP/CR)
 
 ## Objetivo
 
 Espelhar, para o lado da despesa, o que a Fase 72 fez para o lado da
 receita: transformar as despesas já existentes (`TripExpense`) em uma
 visão de **pagamento e acompanhamento** — quanto está em aberto, vencido,
-a vencer, pago — por título e por categoria. `Payable` é gerado **a
-partir de** uma `TripExpense` existente, nunca uma fonte de verdade
-paralela de despesas.
+a vencer, pago — por título e por categoria. Na Fase 73, `Payable` só
+podia ser gerado **a partir de** uma `TripExpense` existente. A fase
+"Financeiro CP/CR" (auditoria/consolidação do módulo, ver seção abaixo)
+adicionou uma segunda origem: **criação manual**, para custos
+administrativos da transportadora sem vínculo com uma viagem (aluguel,
+seguro, fornecedor não-operacional). `TripExpense` continua sendo a única
+fonte de verdade do custo **operacional** da viagem — a criação manual
+nunca duplica nem substitui isso, só cobre o que nunca teve uma
+`TripExpense` correspondente.
 
 ## Auditoria (o que já existia antes desta fase)
 
@@ -76,6 +82,69 @@ Ledger **imutável**, mesmo espírito de `ReceivablePayment` (Fase 72) e
 `paymentMethod` reaproveita `ExpensePaymentMethod` (já usado em
 `TripExpense`) — nenhum enum paralelo.
 
+## Origem em documento fiscal (Fase Fiscal/XML)
+
+`POST /payables` também aceita `fiscalDocumentId` opcional — vincula o
+título ao `FiscalDocument` (NF-e/CT-e importado, `docs/fiscal-documents.md`
+seção 18) que originou os dados, permitindo autopreenchimento (fornecedor/
+valor/data extraídos do XML) e evitando digitação duplicada. `@unique` em
+`Payable.fiscalDocumentId` garante no máximo 1 título por documento fiscal
+(mesma idempotência de `expenseId`/`billingId`). Mutuamente exclusivo com
+`installments > 1` (ver seção 18.2 do doc fiscal). Sempre uma ação
+explícita do usuário no drawer do documento fiscal — nunca gerado
+automaticamente na importação do XML.
+
+## Título manual e parcelamento (Fase Financeiro CP/CR)
+
+`POST /payables` cria um título **sem** `TripExpense` de origem —
+`tripId`/`expenseId` ficam `null` (ambos os campos passaram a ser
+opcionais no schema; `expenseId` continua `@unique`, então a garantia
+"no máximo um título por despesa" se mantém intacta para os títulos
+derivados — Postgres permite múltiplos `NULL` sob uma coluna `@unique`).
+Campos exigidos: `category` (reaproveita `ExpenseCategory`, nenhuma
+categoria nova foi criada — `OTHER` é o valor recomendado para custos
+administrativos), `description`, `originalAmount`, `issueDate`,
+`dueDate`. `supplierName` continua texto livre, opcional.
+
+**Parcelamento** (`installments`, 1-360) existe **somente** neste fluxo
+manual — nunca em `POST /payables/from-expense/:expenseId`, porque ali
+`expenseId` é `@unique` e gerar N títulos para uma única despesa violaria
+essa garantia. `originalAmount` é dividido igualmente entre as parcelas
+(`common/utils/installment-plan.util.ts`, compartilhado com
+`ReceivablesService`); a última parcela absorve o resto do arredondamento
+para que a soma seja sempre exatamente `originalAmount`. Vencimentos:
+mensal a partir de `dueDate`, com o dia clampado ao último dia do mês
+quando o mês de origem não existe no destino (ex.: 31/jan + 1 mês =
+28/fev). Todas as parcelas de um mesmo lançamento compartilham
+`installmentGroupId` (gerado uma vez, nunca reaproveitado) e têm
+`installmentNumber`/`installmentTotal` preenchidos; títulos não
+parcelados (incluindo todos os derivados de despesa) têm os três campos
+`null`. As N linhas são criadas numa única transação Prisma.
+
+## Juros, multa e desconto no pagamento
+
+`POST /payables/:id/payments` aceita três campos opcionais em
+`PayablePayment`: `interestAmount`, `fineAmount`, `discountAmount`.
+Sempre digitados manualmente pelo usuário — o projeto não modela nenhuma
+regra de taxa/juros automática, então nada aqui é calculado a partir de
+uma alíquota. Semântica:
+
+- `amount + discountAmount` é o que **quita o título** — soma em
+  `paidAmount` junto com `amount`. `discountAmount` nunca gera
+  movimentação financeira real (é um abatimento, não dinheiro que saiu do
+  caixa).
+- `amount + interestAmount + fineAmount` é o valor **real** movimentado
+  na `FinancialTransaction` (DEBIT) vinculada ao pagamento — juros/multa
+  são cobrança adicional que não abate `originalAmount`/saldo do título.
+
+O gate de saldo (`amount + discountAmount` nunca pode ultrapassar o saldo
+em aberto, `400` se exceder) e o CAS de concorrência (Fase 79, seção 20)
+continuam exatamente os mesmos — nenhuma mudança em
+`balance-status.util.ts`: `discountAmount` é somado ao mesmo acumulador
+que `amount` antes de chegar na função de status, então a fórmula
+existente (`originalAmount`/`paidAmount`/`cancelledAt`) nunca precisou
+mudar.
+
 ## Reuso de código entre Fase 72 e Fase 73
 
 A regra de status/saldo/vencimento é **idêntica** entre `Receivable` e
@@ -140,7 +209,9 @@ por estar fora do escopo desta fase de consolidação.
 ## Idempotência (seção 22)
 
 - **Uma despesa → um título**: `Payable.expenseId` é `@unique` no banco
-  (constraint real) + checagem explícita antes do `create`.
+  (constraint real, agora nullable — múltiplos `NULL` não violam a
+  constraint, então títulos manuais nunca esbarram nela) + checagem
+  explícita antes do `create` no fluxo derivado.
 - **Um pagamento não é processado duas vezes**: cada `POST
   /payables/:id/payments` cria uma linha nova; mesma limitação já aceita
   em `ReceivablesService`/`TripBillingService` (sem idempotency key contra
@@ -170,7 +241,8 @@ lado a lado, em seções claramente separadas: "Resultado financeiro" (Fase
 
 - `/operations/finance/payables` — dashboard + tabela + modal de detalhe/
   pagamento/cancelamento (mesmo padrão de `/operations/finance/receivables`,
-  Fase 72).
+  Fase 72) + botão "Nova conta a pagar" (título manual, com parcelamento
+  opcional).
 - Aba "Despesas" da viagem (`ExpensesTab`) — ação "Gerar conta a pagar"
   para despesas `APPROVED`.
 - Aba "Financeiro" da viagem (`FinancialTab`) — novo card "Contas a pagar"
@@ -194,6 +266,11 @@ lado a lado, em seções claramente separadas: "Resultado financeiro" (Fase
    editado depois de o título já ter sido gerado, o título **não** é
    atualizado automaticamente (mesmo comportamento de `Receivable` em
    relação a `TripBilling`, Fase 72).
+7. **Parcelamento só no título manual** — `POST /payables/from-expense`
+   continua gerando sempre 1 título (ver "Título manual e parcelamento"
+   acima, motivo: `expenseId` `@unique`).
+8. **Juros/multa/desconto sempre manuais** — nenhuma taxa/regra
+   automática de mora é calculada (ver "Juros, multa e desconto").
 
 ## Fora do escopo desta fase
 

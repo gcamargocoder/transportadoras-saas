@@ -14,14 +14,16 @@ import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { createMaintenance, listVehicles } from '../../lib/api/fleet.api';
 import { listMaintenanceProviders } from '../../lib/api/maintenance-providers.api';
-import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_TYPE_LABELS } from '../../lib/labels';
-import type { MaintenanceComponent } from '../../types/enums';
+import { MAINTENANCE_COMPONENT_LABELS, MAINTENANCE_PRIORITY_LABELS, MAINTENANCE_TYPE_LABELS } from '../../lib/labels';
+import type { MaintenanceComponent, VehicleMaintenancePriority } from '../../types/enums';
 
 const COMPONENT_VALUES = Object.keys(MAINTENANCE_COMPONENT_LABELS) as [string, ...string[]];
+const PRIORITY_VALUES = Object.keys(MAINTENANCE_PRIORITY_LABELS) as [string, ...string[]];
 
 const schema = z.object({
   vehicleId: z.string().uuid('Selecione o veículo.'),
   type: z.enum(['PREVENTIVE', 'CORRECTIVE', 'INSPECTION', 'EMERGENCY', 'OTHER']),
+  priority: z.enum(PRIORITY_VALUES).optional().or(z.literal('')),
   component: z.enum(COMPONENT_VALUES).optional().or(z.literal('')),
   workshop: z.string().optional(),
   workshopId: z.string().uuid().optional().or(z.literal('')),
@@ -36,9 +38,20 @@ type FormValues = z.infer<typeof schema>;
 export function CreateMaintenanceModal({
   open,
   onClose,
+  defaultVehicleId,
+  defaultDescription,
+  defaultPriority,
+  checklistExecutionId,
 }: {
   open: boolean;
   onClose: () => void;
+  // Fase 111 -- pre-preenchimento ao abrir "Abrir OS" a partir de um
+  // checklist com nao-conformidade critica (mesmo padrao de defaultTripId
+  // em CreateFuelSupplyModal, Fase 107).
+  defaultVehicleId?: string;
+  defaultDescription?: string;
+  defaultPriority?: VehicleMaintenancePriority;
+  checklistExecutionId?: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -48,19 +61,32 @@ export function CreateMaintenanceModal({
     control,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { type: 'PREVENTIVE' } });
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: {
+      type: checklistExecutionId ? 'CORRECTIVE' : 'PREVENTIVE',
+      vehicleId: defaultVehicleId ?? '',
+      description: defaultDescription,
+      priority: defaultPriority,
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: (values: FormValues) =>
       createMaintenance({
         ...values,
+        priority: values.priority ? (values.priority as VehicleMaintenancePriority) : undefined,
         component: values.component ? (values.component as MaintenanceComponent) : undefined,
         workshopId: values.workshopId || undefined,
         supplierId: values.supplierId || undefined,
+        checklistExecutionId,
       }),
     onSuccess: () => {
       toast.success('Manutenção registrada com sucesso.');
       queryClient.invalidateQueries({ queryKey: ['maintenances'] });
+      if (checklistExecutionId) {
+        queryClient.invalidateQueries({ queryKey: ['checklists', 'executions', checklistExecutionId] });
+      }
       reset();
       onClose();
     },
@@ -121,6 +147,16 @@ export function CreateMaintenanceModal({
         <FormField label="Tipo" htmlFor="type" required>
           <Select id="type" {...register('type')}>
             {Object.entries(MAINTENANCE_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <FormField label="Prioridade" htmlFor="priority" hint="Opcional">
+          <Select id="priority" {...register('priority')}>
+            <option value="">Não informada</option>
+            {Object.entries(MAINTENANCE_PRIORITY_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>

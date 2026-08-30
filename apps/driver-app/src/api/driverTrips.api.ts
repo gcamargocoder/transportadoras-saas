@@ -18,6 +18,7 @@ import {
   TrackingPointInput,
   TrackingPointsSyncResult,
   TripDeliveryStop,
+  TripDeliveryStopStatus,
   TripEtaResult,
   TripLoadStatus,
   TripOccurrence,
@@ -151,6 +152,21 @@ export function getDeliveryStops(tripId: string): Promise<TripDeliveryStop[]> {
 // sempre calculada sob demanda pelo backend (nunca persistida).
 export function getEta(tripId: string): Promise<TripEtaResult> {
   return apiRequest<TripEtaResult>(`/driver/trips/${tripId}/delivery-stops/eta`);
+}
+
+// Fase 106 -- transicao de status pelo motorista (mesma regra/servico do
+// painel administrativo, so o RBAC/ownership muda). Idempotente por ESTADO
+// (mesmo principio de pauseTrip/resumeTrip/completeTrip) -- reenviar a
+// mesma transicao apos reconexao nunca duplica.
+export function updateDeliveryStopStatus(
+  tripId: string,
+  stopId: string,
+  input: { status: TripDeliveryStopStatus; reason?: string },
+): Promise<TripDeliveryStop> {
+  return apiRequest<TripDeliveryStop>(`/driver/trips/${tripId}/delivery-stops/${stopId}/status`, {
+    method: 'PATCH',
+    body: input,
+  });
 }
 
 export function createFuelSupply(

@@ -53,6 +53,16 @@ export class TireMovementEntity {
   @ApiProperty({ nullable: true })
   reason!: string | null;
 
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description: 'Fase 109 -- OS (VehicleMaintenance) que motivou esta troca, quando aplicavel.',
+  })
+  maintenanceId!: string | null;
+
+  @ApiProperty({ nullable: true })
+  maintenanceServiceOrderNumber!: string | null;
+
   @ApiProperty({ format: 'uuid' })
   createdBy!: string;
 

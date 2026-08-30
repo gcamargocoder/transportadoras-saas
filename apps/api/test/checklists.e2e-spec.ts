@@ -479,6 +479,50 @@ describe('Checklists (e2e)', () => {
       expect(ids).not.toContain(draftRes.body.data.id);
     });
 
+    // Fase 111 -- ChecklistTemplate.vehicleType/trailerType ja existiam desde
+    // a Fase 38 mas nunca eram de fato usados para filtrar nada. Com tripId,
+    // so entram templates genericos ou que batem com o tipo do
+    // veiculo/carreta da composicao daquela viagem.
+    it('driver/checklists/available com tripId filtra por vehicleType/trailerType da composicao', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('AvailableByType');
+      const { vehicleId, tripId, driverAuth } = await setupDriverWithTrip(adminAuth, tenantId);
+      const vehicleRes = await request(app.getHttpServer()).get(`/api/v1/vehicles/${vehicleId}`).set('Authorization', adminAuth).expect(200);
+      expect(vehicleRes.body.data.type).toBe('TRACTOR_UNIT');
+
+      async function createPublished(vehicleType?: string) {
+        const createRes = await request(app.getHttpServer())
+          .post('/api/v1/checklists/templates')
+          .set('Authorization', adminAuth)
+          .send({ ...buildTemplatePayload(), ...(vehicleType ? { vehicleType } : {}) })
+          .expect(201);
+        const id = createRes.body.data.id as string;
+        await request(app.getHttpServer()).post(`/api/v1/checklists/templates/${id}/publish`).set('Authorization', adminAuth).expect(200);
+        return id;
+      }
+
+      const genericId = await createPublished();
+      const matchingId = await createPublished('TRACTOR_UNIT');
+      const nonMatchingId = await createPublished('VAN');
+
+      const withTripRes = await request(app.getHttpServer())
+        .get('/api/v1/driver/checklists/available')
+        .query({ tripId })
+        .set('Authorization', driverAuth)
+        .expect(200);
+      const idsWithTrip = (withTripRes.body.data as { id: string }[]).map((t) => t.id);
+      expect(idsWithTrip).toEqual(expect.arrayContaining([genericId, matchingId]));
+      expect(idsWithTrip).not.toContain(nonMatchingId);
+
+      // Sem tripId (compatibilidade com chamadas antigas) -- nenhum filtro,
+      // todos aparecem.
+      const withoutTripRes = await request(app.getHttpServer())
+        .get('/api/v1/driver/checklists/available')
+        .set('Authorization', driverAuth)
+        .expect(200);
+      const idsWithoutTrip = (withoutTripRes.body.data as { id: string }[]).map((t) => t.id);
+      expect(idsWithoutTrip).toEqual(expect.arrayContaining([genericId, matchingId, nonMatchingId]));
+    });
+
     it('CASO 4: motorista cria uma execucao (POST driver/checklists) -- templateVersion gravado', async () => {
       const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Exec2');
       const { driverAuth } = await setupDriver(adminAuth, tenantId);

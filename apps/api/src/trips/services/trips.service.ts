@@ -1,10 +1,21 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Alert, Prisma, RouteEventType, TrackingPoint, TripStatus, VehicleStatus } from '@prisma/client';
+import {
+  Alert,
+  ChecklistExecutionStatus,
+  ChecklistType,
+  Prisma,
+  RouteEventType,
+  TrackingPoint,
+  TripStatus,
+  VehicleMaintenanceStatus,
+  VehicleStatus,
+} from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
@@ -13,7 +24,12 @@ import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { hasCriticalNonConformity } from '../../checklists/utils/checklist-non-conformity.util';
 import { resolveVehicleAvailability } from '../../fleet/services/vehicle-availability.service';
+import {
+  evaluateMaintenancePlan,
+  MaintenancePlanEvaluationStatus,
+} from '../../fleet-operations/utils/maintenance-plan-status.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTripDto } from '../dto/create-trip.dto';
 import { FindTripsQueryDto } from '../dto/find-trips-query.dto';
@@ -24,6 +40,7 @@ import { TripEntity } from '../entities/trip.entity';
 import { TripSummaryEntity } from '../entities/trip-summary.entity';
 import {
   TripOperationAlertEntity,
+  TripOperationDeliverySummaryEntity,
   TripOperationEntity,
   TripOperationPositionEntity,
   TripOperationTollSummaryEntity,
@@ -32,11 +49,14 @@ import {
 import { toTripEntity, TripWithRelations } from '../mappers/trip.mapper';
 import { toTripSummaryEntity } from '../mappers/trip-summary.mapper';
 import { DEFAULT_STALE_THRESHOLD_MINUTES } from '../constants/monitoring.constants';
+import { buildDeliveryStopCountsByTrip, EMPTY_DELIVERY_STOP_STATUS_COUNTS } from '../utils/empty-trip.util';
 import {
   computeLocationFreshness,
   computeMovementStatus,
   computeOperationalStatus,
 } from '../utils/operational-status.util';
+import { resolveRequirePreTripChecklist } from '../utils/trip-preferences.util';
+import { assertTripPlanningAllowed } from '../utils/trip-planning-lock.util';
 import { TollRoutesService } from '../../toll-routes/services/toll-routes.service';
 import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
 import { TollReconciliationResult } from '../../toll-routes/utils/toll-reconciliation.util';
@@ -108,6 +128,34 @@ function resolveStatusChangeAction(from: TripStatus, to: TripStatus): string {
     default:
       return 'trip.status_changed';
   }
+}
+
+// Fase 112 -- extrai a mensagem de uma HttpException lancada por codigo
+// nosso (ex: assertCanStart), mesmo padrao ja usado por
+// AllExceptionsFilter.extractMessage -- nunca uma segunda logica de
+// formatacao de erro.
+function extractHttpMessage(exception: HttpException): string {
+  const response = exception.getResponse();
+  if (typeof response === 'string') return response;
+  if (response && typeof response === 'object' && 'message' in response) {
+    const message = (response as { message: string | string[] }).message;
+    return Array.isArray(message) ? message.join(' ') : message;
+  }
+  return exception.message;
+}
+
+// Fase 112 -- leitura defensiva de TripFreight.calculationInput (JSON
+// livre, ver schema.prisma) -- nunca confia cegamente no formato.
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// calculationInput e sempre gravado via toJsonSafe (Decimal->number ja
+// convertido antes de virar JSON, ver FreightPricingService) -- nunca um
+// Prisma.Decimal aqui, so number|string|null cru de um JSON.
+function extractJsonNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return null;
 }
 
 @Injectable()
@@ -192,18 +240,95 @@ export class TripsService {
   async getSummary(tenantId: string, id: string): Promise<TripSummaryEntity> {
     const trip = await this.findOwnedOrThrow(tenantId, id);
 
-    const [metrics, tollAggregate] = await Promise.all([
+    const [
+      metrics,
+      tollAggregate,
+      settings,
+      mostRecentPreTripChecklist,
+      tripFreight,
+      deliveryStopRows,
+      openOccurrencesCount,
+      criticalOpenOccurrencesCount,
+    ] = await Promise.all([
       this.prisma.tripMetrics.findUnique({ where: { tripId: id } }),
       this.prisma.tollTransaction.aggregate({
         where: { tenantId, tripId: id },
         _count: { _all: true },
         _sum: { chargedAmount: true },
       }),
+      this.prisma.tenantSettings.findUnique({ where: { tenantId } }),
+      this.prisma.checklistExecution.findFirst({
+        where: { tenantId, tripId: id, template: { type: ChecklistType.PRE_TRIP } },
+        orderBy: { startedAt: 'desc' },
+        include: { answers: { include: { item: true } } },
+      }),
+      this.prisma.tripFreight.findFirst({ where: { tenantId, tripId: id }, select: { calculationInput: true } }),
+      // Fase 116 -- consolidacao do fechamento: mesma agregacao de
+      // TripDeliveryStop ja usada em getActiveOperations (Fase 105), agora
+      // tambem para uma unica viagem (inclusive ja terminada).
+      this.prisma.tripDeliveryStop.groupBy({
+        by: ['tripId', 'status'],
+        where: { tenantId, tripId: id },
+        _count: true,
+      }),
+      this.prisma.tripOccurrence.count({ where: { tenantId, tripId: id, resolvedAt: null, cancelledAt: null } }),
+      this.prisma.tripOccurrence.count({
+        where: { tenantId, tripId: id, resolvedAt: null, cancelledAt: null, severity: 'CRITICAL' },
+      }),
     ]);
+
+    // Fase 112 -- reaproveita INTEGRALMENTE assertCanStart (nunca uma
+    // segunda regra de "pode iniciar"): so captura o resultado em vez de
+    // deixar a excecao propagar, ja que aqui e uma LEITURA (nunca a propria
+    // transicao de status). Fase 116 -- so chamado enquanto a viagem ainda
+    // nao partiu (mesmo criterio de assertTripPlanningAllowed): depois da
+    // partida, assertCanStart avaliaria condicoes (motorista/veiculo
+    // disponiveis AGORA) que nao tem mais nenhum sentido para uma viagem
+    // que ja esta em andamento ou ja terminou -- e podiam produzir um
+    // notReadyReason enganoso (ex: motorista despachado para OUTRA viagem
+    // depois que esta ja tinha partido).
+    let readyToStart = true;
+    let notReadyReason: string | null = null;
+    let isPreDeparture = true;
+    try {
+      assertTripPlanningAllowed(trip);
+    } catch {
+      isPreDeparture = false;
+    }
+    if (isPreDeparture) {
+      try {
+        await this.assertCanStart(tenantId, trip, id);
+      } catch (error) {
+        readyToStart = false;
+        notReadyReason = error instanceof HttpException ? extractHttpMessage(error) : 'Nao e possivel iniciar a viagem.';
+      }
+    }
+
+    const weightKg = isPlainRecord(tripFreight?.calculationInput)
+      ? extractJsonNumber(tripFreight.calculationInput.weightKg)
+      : null;
+
+    const deliveryStopCounts =
+      buildDeliveryStopCountsByTrip(deliveryStopRows).get(id) ?? EMPTY_DELIVERY_STOP_STATUS_COUNTS;
 
     return toTripSummaryEntity(trip, metrics, {
       count: tollAggregate._count._all,
       total: tollAggregate._sum.chargedAmount,
+    }, {
+      readyToStart,
+      notReadyReason,
+      routePlanComputed: trip.routePlanId !== null,
+      plannedMetricsSynced: metrics !== null && metrics.plannedDistanceKm !== null,
+      preTripChecklistRequired: resolveRequirePreTripChecklist(settings?.preferences),
+      preTripChecklistStatus: mostRecentPreTripChecklist?.status ?? null,
+      preTripChecklistHasCriticalNonConformity: mostRecentPreTripChecklist
+        ? hasCriticalNonConformity(mostRecentPreTripChecklist.answers)
+        : false,
+      plannedWeightKg: weightKg,
+      vehicleCapacityKg: toNumberOrNull(trip.composition?.vehicle.cargoCapacityKg ?? null),
+      deliveryStopCounts,
+      openOccurrencesCount,
+      criticalOpenOccurrencesCount,
     });
   }
 
@@ -225,8 +350,25 @@ export class TripsService {
       return result;
     }
     const tripIds = trips.map((trip) => trip.id);
+    // Fase 114 -- veiculos vinculados as viagens ativas (no maximo 1 por
+    // viagem, ja que Vehicle so pode estar em UMA viagem ativa por vez --
+    // regra ja garantida por assertVehicleAvailable). Usado so para escopar
+    // a consulta de MaintenancePlan abaixo, nunca 1 query por veiculo.
+    const vehicleIds = [
+      ...new Set(trips.map((trip) => trip.composition?.vehicleId).filter((id): id is string => Boolean(id))),
+    ];
 
-    const [lastPoints, deviationEvents, tollSummaries, alerts, settings] = await Promise.all([
+    const [
+      lastPoints,
+      deviationEvents,
+      tollSummaries,
+      alerts,
+      settings,
+      deliveryStopRows,
+      occurrenceRows,
+      preTripChecklists,
+      activeMaintenancePlans,
+    ] = await Promise.all([
       // Uma linha por viagem: a leitura de TrackingPoint mais recente
       // (distinct + orderBy), nunca o historico inteiro.
       this.prisma.trackingPoint.findMany({
@@ -243,7 +385,68 @@ export class TripsService {
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.tenantSettings.findUnique({ where: { tenantId } }),
+      // Fase 105 -- Torre de Controle: resumo de entregas por viagem
+      // (TripDeliveryStop, Fase 88/99), mesma agregacao ja usada por
+      // FleetOperationsMetricsService/EmptyTripsService.
+      this.prisma.tripDeliveryStop.groupBy({
+        by: ['tripId', 'status'],
+        where: { tenantId, tripId: { in: tripIds } },
+        _count: true,
+      }),
+      // Fase 105 -- ocorrencias EM ABERTO por viagem (resolvedAt/cancelledAt
+      // nulos), agrupadas por severidade -- mesmo criterio ja usado por
+      // isCriticalOpenOccurrence/NotificationsService.collectCriticalOccurrences.
+      this.prisma.tripOccurrence.groupBy({
+        by: ['tripId', 'severity'],
+        where: { tenantId, tripId: { in: tripIds }, resolvedAt: null, cancelledAt: null },
+        _count: true,
+      }),
+      // Fase 111 -- Torre de Controle: checklist PRE_TRIP mais recente por
+      // viagem. 1 query em lote (IN tripIds), nunca 1 por viagem. answers+item
+      // trazidos para calcular hasCriticalNonConformity em memoria (mesma
+      // funcao pura ja usada em ChecklistExecutionsService/NotificationsService).
+      this.prisma.checklistExecution.findMany({
+        where: { tenantId, tripId: { in: tripIds }, template: { type: ChecklistType.PRE_TRIP } },
+        select: {
+          tripId: true,
+          status: true,
+          startedAt: true,
+          answers: { select: { booleanValue: true, item: { select: { type: true, required: true, critical: true } } } },
+        },
+        orderBy: { startedAt: 'desc' },
+      }),
+      // Fase 114 -- Torre de Controle: planos de manutencao preventiva ATIVOS
+      // dos veiculos em viagem agora, escopados por IN vehicleIds (nunca o
+      // catalogo inteiro do tenant, nunca 1 query por veiculo). Mesma fonte
+      // ja usada por FleetOperationsMetricsService.computeMaintenancePlanStatus
+      // e NotificationsService.collectMaintenancePlansDue -- nenhuma segunda
+      // regra de vencimento.
+      this.prisma.maintenancePlan.findMany({
+        where: { tenantId, active: true, vehicleId: { in: vehicleIds } },
+      }),
     ]);
+
+    // Fase 114 -- segunda etapa (depende dos planIds acima, por isso fora do
+    // Promise.all principal): ultima VehicleMaintenance COMPLETED por plano.
+    // Mesmo padrao de 2 queries em lote ja usado nos 2 lugares citados acima
+    // -- nunca 1 consulta por plano. Vehicle.odometerKm ja veio no TRIP_INCLUDE
+    // (composition.vehicle), entao nao repete essa consulta aqui.
+    const lastCompletedMaintenanceByPlan = new Map<string, { completedAt: Date | null; odometerKm: number | null }>();
+    if (activeMaintenancePlans.length > 0) {
+      const planIds = activeMaintenancePlans.map((plan) => plan.id);
+      const lastCompletedRows = await this.prisma.vehicleMaintenance.findMany({
+        where: { tenantId, maintenancePlanId: { in: planIds }, status: VehicleMaintenanceStatus.COMPLETED },
+        select: { maintenancePlanId: true, completedAt: true, odometerKm: true },
+        orderBy: { completedAt: 'desc' },
+      });
+      for (const row of lastCompletedRows) {
+        if (!row.maintenancePlanId || lastCompletedMaintenanceByPlan.has(row.maintenancePlanId)) continue;
+        lastCompletedMaintenanceByPlan.set(row.maintenancePlanId, {
+          completedAt: row.completedAt,
+          odometerKm: toNumberOrNull(row.odometerKm),
+        });
+      }
+    }
 
     const lastPointByTrip = new Map(lastPoints.map((point) => [point.tripId, point]));
     const deviationsByTrip = new Map<string, typeof deviationEvents>();
@@ -259,9 +462,57 @@ export class TripsService {
       list.push(alert);
       alertsByTrip.set(alert.tripId, list);
     }
+    const deliveryCountsByTrip = buildDeliveryStopCountsByTrip(deliveryStopRows);
+    // Fase 111 -- so o mais recente por viagem (orderBy startedAt desc,
+    // primeira ocorrencia vence), mesmo criterio de "instalacao mais
+    // recente" ja usado em TiresService.findOne.
+    const preTripChecklistByTrip = new Map<string, (typeof preTripChecklists)[number]>();
+    for (const execution of preTripChecklists) {
+      if (!execution.tripId || preTripChecklistByTrip.has(execution.tripId)) continue;
+      preTripChecklistByTrip.set(execution.tripId, execution);
+    }
+    const openOccurrencesByTrip = new Map<string, { open: number; critical: number }>();
+    for (const row of occurrenceRows) {
+      const entry = openOccurrencesByTrip.get(row.tripId) ?? { open: 0, critical: 0 };
+      entry.open += row._count;
+      if (row.severity === 'CRITICAL') entry.critical += row._count;
+      openOccurrencesByTrip.set(row.tripId, entry);
+    }
 
     const staleThresholdMinutes = settings?.alertDelayThresholdMin ?? DEFAULT_STALE_THRESHOLD_MINUTES;
     const now = new Date();
+
+    // Fase 114 -- pior status de manutencao por veiculo (OVERDUE > DUE_SOON >
+    // OK > UNKNOWN), avaliado com a MESMA funcao pura reaproveitada acima
+    // (evaluateMaintenancePlan) sobre os planos ja carregados em lote. Um
+    // veiculo pode ter varios planos ativos (ex: oleo + freios); o pior entre
+    // eles e o sinal mostrado na Torre de Controle.
+    const odometerByVehicle = new Map<string, number | null>();
+    for (const trip of trips) {
+      if (trip.composition?.vehicleId) {
+        odometerByVehicle.set(trip.composition.vehicleId, toNumberOrNull(trip.composition.vehicle.odometerKm));
+      }
+    }
+    const maintenanceStatusesByVehicle = new Map<string, MaintenancePlanEvaluationStatus[]>();
+    for (const plan of activeMaintenancePlans) {
+      const lastService = lastCompletedMaintenanceByPlan.get(plan.id) ?? null;
+      const currentOdometerKm = odometerByVehicle.get(plan.vehicleId) ?? null;
+      const evaluation = evaluateMaintenancePlan(
+        { intervalKm: plan.intervalKm, intervalDays: plan.intervalDays, alertBeforeKm: plan.alertBeforeKm, alertBeforeDays: plan.alertBeforeDays },
+        lastService,
+        currentOdometerKm,
+        now,
+      );
+      const list = maintenanceStatusesByVehicle.get(plan.vehicleId) ?? [];
+      list.push(evaluation.status);
+      maintenanceStatusesByVehicle.set(plan.vehicleId, list);
+    }
+    const worstMaintenanceStatus = (statuses: MaintenancePlanEvaluationStatus[]): MaintenancePlanEvaluationStatus => {
+      if (statuses.includes('OVERDUE')) return 'OVERDUE';
+      if (statuses.includes('DUE_SOON')) return 'DUE_SOON';
+      if (statuses.includes('OK')) return 'OK';
+      return 'UNKNOWN';
+    };
 
     result.items = trips.map((trip) => {
       const lastPoint = lastPointByTrip.get(trip.id) ?? null;
@@ -304,6 +555,43 @@ export class TripsService {
       entity.defaultAxles = trip.composition?.axleConfiguration?.totalAxles ?? null;
       entity.tollSummary = toTollSummaryEntity(summary);
       entity.alerts = (alertsByTrip.get(trip.id) ?? []).map(toAlertEntity);
+
+      // Fase 105 -- Torre de Controle.
+      const deliveryCounts = deliveryCountsByTrip.get(trip.id) ?? EMPTY_DELIVERY_STOP_STATUS_COUNTS;
+      const deliverySummary = new TripOperationDeliverySummaryEntity();
+      deliverySummary.pendingCount = deliveryCounts.pending;
+      deliverySummary.inProgressCount = deliveryCounts.inProgress;
+      deliverySummary.completedCount = deliveryCounts.completed;
+      deliverySummary.failedCount = deliveryCounts.failed;
+      deliverySummary.cancelledCount = deliveryCounts.cancelled;
+      deliverySummary.totalCount =
+        deliveryCounts.pending + deliveryCounts.inProgress + deliveryCounts.completed + deliveryCounts.failed + deliveryCounts.cancelled;
+      entity.deliverySummary = deliverySummary;
+
+      const occurrenceCounts = openOccurrencesByTrip.get(trip.id) ?? { open: 0, critical: 0 };
+      entity.openOccurrencesCount = occurrenceCounts.open;
+      entity.criticalOpenOccurrencesCount = occurrenceCounts.critical;
+
+      const preTripChecklist = preTripChecklistByTrip.get(trip.id) ?? null;
+      entity.preTripChecklistStatus = preTripChecklist?.status ?? null;
+      entity.preTripChecklistHasCriticalNonConformity =
+        preTripChecklist?.status === ChecklistExecutionStatus.COMPLETED
+          ? hasCriticalNonConformity(preTripChecklist.answers)
+          : false;
+
+      entity.plannedArrival = trip.plannedArrival;
+      // Mesmo criterio de FleetOperationsMetricsService.delayedTrips: nao
+      // terminal (garantido aqui -- getActiveOperations so busca
+      // NON_TERMINAL_STATUSES) e plannedArrival no passado.
+      entity.isDelayed = trip.plannedArrival !== null && trip.plannedArrival.getTime() < now.getTime();
+
+      // Fase 114 -- Torre de Controle.
+      entity.priority = trip.priority;
+      const vehicleId = trip.composition?.vehicleId ?? null;
+      entity.maintenanceStatus = vehicleId
+        ? worstMaintenanceStatus(maintenanceStatusesByVehicle.get(vehicleId) ?? [])
+        : 'UNKNOWN';
+
       return entity;
     });
 
@@ -852,6 +1140,45 @@ export class TripsService {
           'Nao e possivel iniciar a viagem: veiculo ja esta em outra viagem ativa.',
         );
       }
+    }
+
+    await this.assertPreTripChecklistSatisfied(tenantId, trip, tripId);
+  }
+
+  // Fase 111 -- opt-in por tenant (TenantSettings.preferences.requirePreTripChecklist,
+  // default false -- nenhuma viagem/tenant existente e afetada a menos que
+  // ative explicitamente, ver trip-preferences.util.ts). Quando ligado, a
+  // viagem so inicia se houver um ChecklistExecution PRE_TRIP para ESTA
+  // viagem que esteja COMPLETED e sem nao-conformidade critica sem
+  // resolucao -- mesma funcao pura ja usada por ChecklistExecutionsService/
+  // NotificationsService (hasCriticalNonConformity), nunca uma segunda
+  // regra. So verifica quando ha veiculo vinculado (sem composicao, nao ha
+  // o que inspecionar).
+  private async assertPreTripChecklistSatisfied(
+    tenantId: string,
+    trip: TripWithRelations,
+    tripId: string,
+  ): Promise<void> {
+    if (!trip.composition?.vehicleId) return;
+
+    const settings = await this.prisma.tenantSettings.findUnique({ where: { tenantId } });
+    if (!resolveRequirePreTripChecklist(settings?.preferences)) return;
+
+    const execution = await this.prisma.checklistExecution.findFirst({
+      where: { tenantId, tripId, template: { type: ChecklistType.PRE_TRIP } },
+      orderBy: { startedAt: 'desc' },
+      include: { answers: { include: { item: true } } },
+    });
+
+    if (!execution || execution.status !== ChecklistExecutionStatus.COMPLETED) {
+      throw new ConflictException(
+        'Nao e possivel iniciar a viagem: checklist pre-viagem obrigatorio nao foi concluido.',
+      );
+    }
+    if (hasCriticalNonConformity(execution.answers)) {
+      throw new ConflictException(
+        'Nao e possivel iniciar a viagem: checklist pre-viagem tem nao-conformidade critica pendente.',
+      );
     }
   }
 

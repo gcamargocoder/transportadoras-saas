@@ -11,7 +11,7 @@ export type ReceivablePaymentWithRelations = ReceivablePayment & {
 
 export type ReceivableWithRelations = Receivable & {
   customer: { name: string } | null;
-  trip: { origin: { name: string }; destination: { name: string } };
+  trip: { origin: { name: string }; destination: { name: string } } | null;
   creator: UserAccount | null;
   canceller: UserAccount | null;
   payments?: ReceivablePaymentWithRelations[];
@@ -24,6 +24,9 @@ export function toReceivablePaymentEntity(row: ReceivablePaymentWithRelations): 
   entity.amount = toNumberOrNull(row.amount) ?? 0;
   entity.paymentDate = row.paymentDate;
   entity.paymentMethod = row.paymentMethod;
+  entity.interestAmount = toNumberOrNull(row.interestAmount);
+  entity.fineAmount = toNumberOrNull(row.fineAmount);
+  entity.discountAmount = toNumberOrNull(row.discountAmount);
   entity.reference = row.reference;
   entity.notes = row.notes;
   entity.financialAccountId = row.financialAccountId;
@@ -44,7 +47,7 @@ export function toReceivableEntity(row: ReceivableWithRelations, now: Date = new
   entity.customerId = row.customerId;
   entity.customerName = row.customer?.name ?? null;
   entity.tripId = row.tripId;
-  entity.tripLabel = `${row.trip.origin.name} → ${row.trip.destination.name}`;
+  entity.tripLabel = row.trip ? `${row.trip.origin.name} → ${row.trip.destination.name}` : null;
   entity.billingId = row.billingId;
   entity.description = row.description;
   entity.originalAmount = originalAmount;
@@ -60,6 +63,10 @@ export function toReceivableEntity(row: ReceivableWithRelations, now: Date = new
   entity.creatorName = row.creator?.name ?? null;
   entity.createdAt = row.createdAt;
   entity.updatedAt = row.updatedAt;
+  entity.installmentGroupId = row.installmentGroupId;
+  entity.installmentNumber = row.installmentNumber;
+  entity.installmentTotal = row.installmentTotal;
+  entity.fiscalDocumentId = row.fiscalDocumentId;
   if (row.payments) {
     entity.payments = row.payments
       .slice()

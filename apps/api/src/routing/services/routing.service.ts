@@ -1,6 +1,6 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AlertSeverity, AlertType, Prisma, RouteEventType, RouteVersionReason } from '@prisma/client';
+import { AlertSeverity, AlertType, Prisma, RouteEventType, RouteVersionReason, TripStatus } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
@@ -56,6 +56,7 @@ export class RoutingService {
     metadata: RequestMetadata,
   ): Promise<RoutePlanEntity> {
     const trip = await this.loadTripForRouting(tenantId, tripId);
+    this.assertRouteWritable(trip);
     const [calculated] = await this.provider.calculateRoutes({
       origin: { label: this.originLabelOf(trip) },
       destination: { label: this.destinationLabelOf(trip) },
@@ -99,6 +100,7 @@ export class RoutingService {
     metadata: RequestMetadata,
   ): Promise<RoutePlanEntity[]> {
     const trip = await this.loadTripForRouting(tenantId, tripId);
+    this.assertRouteWritable(trip);
     const calculatedRoutes = await this.provider.calculateRoutes({
       origin: { label: this.originLabelOf(trip) },
       destination: { label: this.destinationLabelOf(trip) },
@@ -141,7 +143,8 @@ export class RoutingService {
     actor: AuditActor,
     metadata: RequestMetadata,
   ): Promise<RoutePlanEntity> {
-    await this.assertTripExists(tenantId, tripId);
+    const trip = await this.assertTripExists(tenantId, tripId);
+    this.assertRouteWritable(trip);
 
     const routePlan = await this.prisma.routePlan.findFirst({
       where: { id: dto.routePlanId, tenantId, tripId },
@@ -306,6 +309,7 @@ export class RoutingService {
     difference: ReturnType<typeof computeRouteComparison> | null;
   }> {
     const trip = await this.loadTripForRouting(tenantId, tripId);
+    this.assertRouteWritable(trip);
 
     const previousRoutePlan = trip.routePlanId
       ? await this.prisma.routePlan.findFirst({
@@ -621,6 +625,19 @@ export class RoutingService {
       throw new NotFoundException('Viagem nao encontrada nesta empresa.');
     }
     return trip;
+  }
+
+  // Fase 116 -- viagem ja ENCERRADA (COMPLETED) ou CANCELLED: a rota vira
+  // historico e nao deve mais ser recalculada/trocada (preserva o que de
+  // fato foi usado durante a execucao). So bloqueia as 4 ESCRITAS abaixo
+  // (computar/alternativas/selecionar/recalcular) -- leitura
+  // (getCurrent/getTolls/getDriverView) continua sempre permitida.
+  private assertRouteWritable(trip: { status: TripStatus }): void {
+    if (trip.status === TripStatus.COMPLETED || trip.status === TripStatus.CANCELLED) {
+      throw new ConflictException(
+        'Nao e possivel alterar a rota: a viagem ja esta COMPLETED/CANCELLED (rota preservada como historico).',
+      );
+    }
   }
 
   private originLabelOf(trip: TripForRouting): string {

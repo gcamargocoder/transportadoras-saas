@@ -31,7 +31,13 @@ import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { getCustomerProfitabilityForCustomer } from '../../../../lib/api/customer-profitability.api';
 import { listContracts, listFreightTables, getFreightDashboard } from '../../../../lib/api/freight.api';
 import { getReceivablesDashboard, listReceivables } from '../../../../lib/api/receivables.api';
-import { getCustomer, getCustomerSummary, listTrips } from '../../../../lib/api/trips.api';
+import {
+  getCustomer,
+  getCustomerSummary,
+  getDeliveryOccurrencesDashboard,
+  getDeliveryStopsDashboard,
+  listTrips,
+} from '../../../../lib/api/trips.api';
 import { FREIGHT_WRITE_ROLES, TRIP_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { useAuth } from '../../../../hooks/use-auth';
 import {
@@ -96,6 +102,20 @@ export default function CustomerDetailPage(): JSX.Element {
   const dashboardQuery = useQuery({
     queryKey: ['freight', 'dashboard', { customerId }],
     queryFn: () => getFreightDashboard({ customerId }),
+  });
+
+  // Fase 104 -- "relatorio por cliente": entregas e ocorrencias de entrega
+  // deste cliente, reaproveitando integralmente os dashboards CROSS-TRIP ja
+  // existentes (Fases 99/101) -- nenhum calculo/agregacao novo, so o filtro
+  // customerId ja suportado (ocorrencias ganhou esse filtro nesta fase).
+  const deliveriesDashboardQuery = useQuery({
+    queryKey: ['delivery-stops', 'dashboard', { customerId }],
+    queryFn: () => getDeliveryStopsDashboard({ customerId }),
+  });
+
+  const deliveryOccurrencesDashboardQuery = useQuery({
+    queryKey: ['delivery-occurrences', 'dashboard', { customerId }],
+    queryFn: () => getDeliveryOccurrencesDashboard({ customerId }),
   });
 
   // Fase 97 -- receita/custo REAL (nao contratado/projetado) das viagens
@@ -199,6 +219,72 @@ export default function CustomerDetailPage(): JSX.Element {
               value={
                 summaryQuery.data ? `${summaryQuery.data.activeContractsCount} de ${summaryQuery.data.contractsTotal}` : '—'
               }
+            />
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+            Entregas — situação das paradas/entregas planejadas deste cliente (Fase 99)
+          </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Entregas (total)"
+              value={deliveriesDashboardQuery.data ? String(deliveriesDashboardQuery.data.totalCount) : '—'}
+            />
+            <StatCard
+              label="Concluídas"
+              value={deliveriesDashboardQuery.data ? String(deliveriesDashboardQuery.data.completedCount) : '—'}
+              tone="success"
+            />
+            <StatCard
+              label="Pendentes/em andamento"
+              value={
+                deliveriesDashboardQuery.data
+                  ? String(deliveriesDashboardQuery.data.pendingCount + deliveriesDashboardQuery.data.inProgressCount)
+                  : '—'
+              }
+            />
+            <StatCard
+              label="Atrasadas"
+              value={deliveriesDashboardQuery.data ? String(deliveriesDashboardQuery.data.lateCount) : '—'}
+              tone={deliveriesDashboardQuery.data && deliveriesDashboardQuery.data.lateCount > 0 ? 'warning' : 'success'}
+            />
+            <StatCard
+              label="Com falha"
+              value={deliveriesDashboardQuery.data ? String(deliveriesDashboardQuery.data.failedCount) : '—'}
+              tone={deliveriesDashboardQuery.data && deliveriesDashboardQuery.data.failedCount > 0 ? 'danger' : 'success'}
+            />
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+            Ocorrências de entrega — incidentes registrados nas entregas deste cliente (Fase 101)
+          </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Ocorrências (total)"
+              value={deliveryOccurrencesDashboardQuery.data ? String(deliveryOccurrencesDashboardQuery.data.totalCount) : '—'}
+            />
+            <StatCard
+              label="Em aberto"
+              value={deliveryOccurrencesDashboardQuery.data ? String(deliveryOccurrencesDashboardQuery.data.openCount) : '—'}
+              tone={deliveryOccurrencesDashboardQuery.data && deliveryOccurrencesDashboardQuery.data.openCount > 0 ? 'warning' : 'success'}
+            />
+            <StatCard
+              label="Críticas em aberto"
+              value={deliveryOccurrencesDashboardQuery.data ? String(deliveryOccurrencesDashboardQuery.data.criticalOpenCount) : '—'}
+              tone={
+                deliveryOccurrencesDashboardQuery.data && deliveryOccurrencesDashboardQuery.data.criticalOpenCount > 0
+                  ? 'danger'
+                  : 'success'
+              }
+            />
+            <StatCard
+              label="Resolvidas"
+              value={deliveryOccurrencesDashboardQuery.data ? String(deliveryOccurrencesDashboardQuery.data.resolvedCount) : '—'}
+              tone="success"
             />
           </div>
         </div>

@@ -47,6 +47,15 @@ correspondente, nem o contrário. Testado explicitamente: conta inativa,
 conta de outro tenant e valor acima do saldo não deixam nenhum registro
 órfão (nem payment, nem transaction).
 
+**`FinancialTransaction.amount` nem sempre é igual a `payment.amount`**
+desde a Fase Financeiro CP/CR (juros/multa/desconto, ver
+`docs/payables.md`/`docs/receivables.md`): quando o pagamento tem
+`interestAmount`/`fineAmount`, a `FinancialTransaction` reflete o valor
+**real** movimentado (`amount + interestAmount + fineAmount`) — juros/multa
+são cobrança adicional, não abatem o saldo do título, mas são caixa de
+verdade. `discountAmount` nunca aparece na `FinancialTransaction` (abate o
+saldo do título, mas nenhum dinheiro correspondente se move).
+
 ## Vínculo bidirecional (sem identificador paralelo)
 
 Dois campos, cada um resolvendo uma direção da mesma relação — não duas

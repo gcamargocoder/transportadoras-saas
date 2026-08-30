@@ -41,6 +41,22 @@ export function generatePayableFromExpense(expenseId: string, payload: GenerateP
   return api.post<PayableEntity>(`/payables/from-expense/${expenseId}`, payload);
 }
 
+export interface CreatePayablePayload {
+  supplierName?: string | undefined;
+  category: ExpenseCategory;
+  description: string;
+  originalAmount: number;
+  issueDate: string;
+  dueDate: string;
+  installments?: number | undefined;
+  // Documento fiscal de origem (autopreenchimento) -- ver GET /fiscal/documents/:id.
+  fiscalDocumentId?: string | undefined;
+}
+
+export function createPayable(payload: CreatePayablePayload) {
+  return api.post<PayableEntity[]>('/payables', payload);
+}
+
 export interface RegisterPayablePaymentPayload {
   amount: number;
   paymentDate: string;
@@ -49,6 +65,9 @@ export interface RegisterPayablePaymentPayload {
   financialAccountId: string;
   reference?: string | undefined;
   notes?: string | undefined;
+  interestAmount?: number | undefined;
+  fineAmount?: number | undefined;
+  discountAmount?: number | undefined;
 }
 
 export function registerPayablePayment(id: string, payload: RegisterPayablePaymentPayload) {

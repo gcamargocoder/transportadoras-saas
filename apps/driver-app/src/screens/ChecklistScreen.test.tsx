@@ -57,6 +57,15 @@ describe('ChecklistScreen', () => {
     expect(screen.queryByText('Sider Pre-Viagem')).toBeNull();
   });
 
+  // Fase 111 -- getAvailableChecklists agora recebe tripId (backend filtra
+  // por vehicleType/trailerType da composicao daquela viagem).
+  it('chama getAvailableChecklists com o tripId da rota', async () => {
+    renderScreen('PRE_TRIP');
+
+    await screen.findByText('Sider Pre-Viagem');
+    expect(api.getAvailableChecklists).toHaveBeenCalledWith('trip-1');
+  });
+
   it('mostra mensagem quando nao ha template publicado para o tipo', async () => {
     api.getAvailableChecklists.mockResolvedValue([]);
     renderScreen('PRE_TRIP');
