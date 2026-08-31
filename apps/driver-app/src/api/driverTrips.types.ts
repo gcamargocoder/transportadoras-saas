@@ -177,6 +177,13 @@ export interface AxleEvent {
   endedAt: string | null;
 }
 
+// Espelha FuelType do backend (packages/database/prisma/schema.prisma) --
+// gap real encontrado na auditoria "TMS + Driver App": o app nunca
+// perguntava o tipo, todo abastecimento registrado em campo caia em OUTRO
+// (default do backend quando omitido), misturando diesel/ARLA nos
+// relatorios administrativos.
+export type FuelType = 'DIESEL_S10' | 'DIESEL_S500' | 'GASOLINA' | 'ETANOL' | 'ARLA32' | 'OUTRO';
+
 export interface FuelSupply {
   id: string;
   tripId: string | null;

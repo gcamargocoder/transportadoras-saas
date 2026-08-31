@@ -58,6 +58,9 @@ import type {
   TenantModule,
   TenantPlanTier,
   TenantStatus,
+  TollDataProvider,
+  TollDataSyncStatus,
+  TollPlazaType,
   TireLocationType,
   TireStatus,
   TollMatchStatus,
@@ -919,6 +922,7 @@ export interface TollPlazaEntity {
   id: string;
   name: string;
   operator: string;
+  type: TollPlazaType;
   highway: string | null;
   km: number | null;
   city: string | null;
@@ -4049,4 +4053,39 @@ export interface MaintenanceProviderSummaryEntity {
   vehiclesServedCount: number;
   totalCost: number | null;
   lastUsedAt: string | null;
+}
+
+// Fase "Alertas de sincronizacao" -- TollDataSource/TollDataSyncRun ja
+// existem desde a Fase 33 (GET /toll-data/sources e /toll-data/sync-runs),
+// sem nenhum tipo no frontend ate esta fase (nenhuma UI os consumia).
+export interface TollDataSourceEntity {
+  id: string;
+  provider: TollDataProvider;
+  name: string;
+  authority: string;
+  baseUrl: string;
+  enabled: boolean;
+  lastSyncAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TollDataSyncRunEntity {
+  id: string;
+  sourceId: string;
+  provider: TollDataProvider;
+  startedAt: string;
+  finishedAt: string | null;
+  status: TollDataSyncStatus;
+  recordsRead: number;
+  recordsCreated: number;
+  recordsUpdated: number;
+  recordsUnchanged: number;
+  recordsRejected: number;
+  errorMessage: string | null;
+  triggeredBy: string | null;
+  createdAt: string;
 }

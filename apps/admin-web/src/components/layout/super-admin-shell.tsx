@@ -1,6 +1,6 @@
 'use client';
 
-import { LayoutDashboard, LogOut, ShieldCheck, Building2, ArrowLeftCircle, Receipt } from 'lucide-react';
+import { LayoutDashboard, LogOut, ShieldCheck, Building2, ArrowLeftCircle, Receipt, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
@@ -12,6 +12,8 @@ const NAV_ITEMS = [
   { label: 'Dashboard', href: '/super-admin', icon: LayoutDashboard },
   { label: 'Transportadoras', href: '/super-admin/tenants', icon: Building2 },
   { label: 'Cobrança', href: '/super-admin/billing', icon: Receipt },
+  // Fase "Alertas de sincronizacao".
+  { label: 'Sincronização de pedágios', href: '/super-admin/toll-data', icon: RefreshCw },
 ] as const;
 
 // Fase 47 -- shell PRÓPRIO da área /super-admin, deliberadamente distinto

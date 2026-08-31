@@ -11,8 +11,15 @@ export function extractRows(tableHtml: string): string[] {
   return matches ?? [];
 }
 
+// Fase "Expansao ANTT" -- algumas concessoes publicam cabecalho em HTML
+// semantico real (<th scope="col">), nao so a sopa de <td> gerada por
+// exportacao do Word -- confirmado por download real (Via 040 e outras).
+// <th> e <td> tem o mesmo significado de "celula" para efeito de extracao
+// de texto; aceitar os dois nunca muda o resultado de paginas que so usam
+// <td> (RJ_AGETRANSP, que ja usa <th> no cabecalho mas descarta essa linha
+// via rows.slice(1) sem nunca ler o conteudo dela).
 export function extractCells(rowHtml: string): string[] {
-  const matches = rowHtml.match(/<td[^>]*>[\s\S]*?<\/td>/g) ?? [];
+  const matches = rowHtml.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/g) ?? [];
   return matches.map((cell) => cellText(cell));
 }
 

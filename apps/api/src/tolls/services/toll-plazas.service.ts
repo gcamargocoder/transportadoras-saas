@@ -31,6 +31,7 @@ export class TollPlazasService {
       ...(query.operator
         ? { operator: { contains: query.operator, mode: Prisma.QueryMode.insensitive } }
         : {}),
+      ...(query.type ? { type: query.type } : {}),
       ...(query.search
         ? {
             OR: [
@@ -74,6 +75,7 @@ export class TollPlazasService {
         name: dto.name,
         operator: dto.operator,
         ...compact({
+          type: dto.type,
           highway: dto.highway,
           km: dto.km,
           city: dto.city,
@@ -113,6 +115,7 @@ export class TollPlazasService {
       data: compact({
         name: dto.name,
         operator: dto.operator,
+        type: dto.type,
         highway: dto.highway,
         km: dto.km,
         city: dto.city,

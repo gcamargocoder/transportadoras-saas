@@ -7,6 +7,7 @@ export function toTollPlazaEntity(plaza: TollPlaza): TollPlazaEntity {
   entity.id = plaza.id;
   entity.name = plaza.name;
   entity.operator = plaza.operator;
+  entity.type = plaza.type;
   entity.highway = plaza.highway;
   entity.km = toNumberOrNull(plaza.km);
   entity.city = plaza.city;

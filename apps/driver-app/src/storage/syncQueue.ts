@@ -4,6 +4,7 @@ import { ChecklistAnswerInput, ChecklistEvidenceType } from '../api/driverCheckl
 import * as driverTripsApi from '../api/driverTrips.api';
 import {
   AxleEventSource,
+  FuelType,
   TrackingPointInput,
   TripDeliveryStopStatus,
   TripOccurrenceSeverity,
@@ -46,6 +47,7 @@ type PendingAction =
       deviceEventId: string;
       odometerKm: number;
       liters: number;
+      fuelType?: FuelType;
       pricePerLiter?: number;
       latitude?: number;
       longitude?: number;
@@ -190,6 +192,7 @@ async function runAction(action: PendingAction): Promise<void> {
         odometerKm: action.odometerKm,
         liters: action.liters,
         ...compact({
+          fuelType: action.fuelType,
           pricePerLiter: action.pricePerLiter,
           latitude: action.latitude,
           longitude: action.longitude,

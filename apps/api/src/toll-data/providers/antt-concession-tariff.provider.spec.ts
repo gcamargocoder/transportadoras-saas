@@ -1,12 +1,24 @@
 import { AnttConcessionTollDataProvider } from './antt-concession-tariff.provider';
-import { ANTT_CONCESSIONS, buildAnttPlazaLocationsUrl, buildAnttTariffsUrl } from './antt-concessions.config';
+import { ANTT_CONCESSIONS, AnttConcessionConfig, buildAnttPlazaLocationsUrl, buildAnttTariffsUrl } from './antt-concessions.config';
 
 // Mesmo padrao de antt-toll-data.provider.spec.ts / google.provider.spec.ts:
 // mocka global.fetch na fronteira HTTP, exercitando a logica real de
 // retry/timeout/validacao (nunca a rede real da ANTT em teste automatizado).
+//
+// Fase "Expansao ANTT" -- ANTT_CONCESSIONS aqui e mockado para 1 unico item
+// (nunca a lista real de 27, que so a Fase "Expansao ANTT" adicionou):
+// estes testes verificam o comportamento do provider POR concessao (retry,
+// isolamento de falha, validacao de estrutura) -- nunca quantas concessoes
+// existem em producao. Sem isso, os 500ms de INTER_CONCESSION_DELAY_MS entre
+// cada uma das 27 concessoes reais estourariam o timeout padrao do Jest.
 const CONCESSION = ANTT_CONCESSIONS[0]!;
 const TARIFFS_URL = buildAnttTariffsUrl(CONCESSION);
 const LOCATIONS_URL = buildAnttPlazaLocationsUrl(CONCESSION);
+
+jest.mock('./antt-concessions.config', () => {
+  const actual = jest.requireActual('./antt-concessions.config');
+  return { ...actual, ANTT_CONCESSIONS: [actual.ANTT_CONCESSIONS[0] as AnttConcessionConfig] };
+});
 
 // HTML minimo, porem estruturalmente valido (mesmos marcadores exigidos
 // pelo parser real), o suficiente para produzir >=1 tarifa normalizada --

@@ -33,6 +33,12 @@ export function resolveNotificationLink(notification: NotificationEntity): strin
       return `/drivers/${notification.entityId}`;
     case 'TripBilling':
       return tripId ? `/trips/${tripId}` : '/operations/fleet/billing';
+    // Fase "Alertas de sincronizacao" -- painel de status das fontes
+    // oficiais de pedagio (Super Admin), nunca uma tela por execucao
+    // isolada (entityId aqui e o id da EXECUCAO que disparou o alerta,
+    // sem tela dedicada propria).
+    case 'TollDataSource':
+      return '/super-admin/toll-data';
     default:
       return null;
   }

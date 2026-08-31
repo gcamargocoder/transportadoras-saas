@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { TollPlazaType } from '@prisma/client';
 
 // Dado de referencia GLOBAL (nao pertence a nenhum tenant).
 export class TollPlazaEntity {
@@ -10,6 +11,9 @@ export class TollPlazaEntity {
 
   @ApiProperty()
   operator!: string;
+
+  @ApiProperty({ enum: TollPlazaType })
+  type!: TollPlazaType;
 
   @ApiProperty({ nullable: true })
   highway!: string | null;

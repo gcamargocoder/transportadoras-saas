@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { TollDataController } from './controllers/toll-data.controller';
 import { AnttConcessionTollDataProvider } from './providers/antt-concession-tariff.provider';
 import { AnttTollDataProvider } from './providers/antt-toll-data.provider';
@@ -22,7 +23,7 @@ import { TOLL_DATA_PROVIDERS } from './toll-data.constants';
 // consumidor de SchedulerRegistry nesta base de codigo ate agora (auditoria
 // confirmou nenhum job/scheduler preexistente).
 @Module({
-  imports: [ScheduleModule.forRoot()],
+  imports: [ScheduleModule.forRoot(), NotificationsModule],
   controllers: [TollDataController],
   providers: [
     AnttTollDataProvider,

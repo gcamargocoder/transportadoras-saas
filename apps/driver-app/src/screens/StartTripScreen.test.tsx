@@ -102,11 +102,28 @@ describe('StartTripScreen', () => {
         tripId: 'trip-1',
         odometerKm: 100000,
         liters: 200,
+        fuelType: 'DIESEL_S10', // gap real da auditoria "TMS + Driver App": default sensato, nunca mais OUTRO por omissao.
         pricePerLiter: 6.5,
         latitude: -23.5,
         longitude: -46.6,
       }),
     );
+  });
+
+  it('motorista pode trocar o tipo de combustivel (ex: Arla 32) e o valor selecionado e enviado no abastecimento da largada', async () => {
+    renderScreen();
+    await screen.findByText('ABC1D23');
+
+    fireEvent.changeText(screen.getByLabelText('KM atual'), '100000');
+    fireEvent.press(screen.getByText('Carregado'));
+    fireEvent.press(screen.getByText('Abasteci'));
+    fireEvent.press(screen.getByText('Arla 32'));
+    fireEvent.changeText(screen.getByLabelText('Litros'), '40');
+    fireEvent.changeText(screen.getByLabelText('Valor pago'), '200');
+    fireEvent.press(screen.getByText('INICIAR VIAGEM'));
+
+    await waitFor(() => expect(api.startTrip).toHaveBeenCalledTimes(1));
+    expect(mockedSubmitOrQueue).toHaveBeenCalledWith(expect.objectContaining({ fuelType: 'ARLA32' }));
   });
 
   it('a acao de iniciar chama POST /driver/trips/:id/start com o payload correto e navega para Home (viagem fica ACTIVE)', async () => {

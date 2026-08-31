@@ -12,7 +12,16 @@ function emptyFindMany() {
 
 function buildPrismaMock(overrides: Record<string, unknown> = {}) {
   return {
-    notification: { findMany: emptyFindMany(), count: jest.fn().mockResolvedValue(0), createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    notification: {
+      findMany: emptyFindMany(),
+      count: jest.fn().mockResolvedValue(0),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      // Fase "Alertas de sincronizacao" -- notifyTollDataSyncFailure/
+      // resolveTollDataSyncAlerts usam findFirst (checagem de alerta ja
+      // aberto) e updateMany (auto-resolucao), nunca usados antes deste tipo.
+      findFirst: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     tripOccurrence: { findMany: emptyFindMany() },
     vehicle: { findMany: emptyFindMany() },
     vehicleMaintenance: { findMany: emptyFindMany() },
@@ -158,7 +167,11 @@ describe('NotificationsService -- deduplicacao/idempotencia do processamento', (
     await service.processTenant(TENANT_ID);
 
     expect(prisma.notification.createMany).toHaveBeenCalledWith(expect.objectContaining({ skipDuplicates: true }));
-    expect((prisma.notification as unknown as { findFirst?: unknown }).findFirst).toBeUndefined();
+    // Fase "Alertas de sincronizacao" -- findFirst passou a existir no mock
+    // (usado por notifyTollDataSyncFailure, um metodo DIFERENTE, nunca
+    // chamado por processTenant/collectCandidates) -- o invariante real
+    // continua o mesmo: processTenant nunca o chama.
+    expect(prisma.notification.findFirst).not.toHaveBeenCalled();
   });
 
   it('sem candidatos, nunca chama createMany (evita insert vazio)', async () => {
@@ -243,5 +256,95 @@ describe('NotificationsService -- janela de processamento (secao 20 do pedido)',
 
     const call = (prisma.tripOccurrence.findMany as jest.Mock).mock.calls[0][0];
     expect(call.where).toMatchObject({ tenantId: TENANT_ID, resolvedAt: null, cancelledAt: null });
+  });
+});
+
+// Fase "Alertas de sincronizacao" -- notifyTollDataSyncFailure/
+// resolveTollDataSyncAlerts sao chamados por TollDataSyncService (evento),
+// nunca pelo scan periodico por tenant -- por isso testados a parte,
+// nunca via processTenant/collectCandidates.
+describe('NotificationsService -- alertas de sincronizacao de pedagio', () => {
+  it('nao cria nenhuma notificacao quando nenhum tenant tem o modulo TOLLS habilitado', async () => {
+    const { service, prisma } = buildService({ tenant: { findMany: jest.fn().mockResolvedValue([]) } });
+
+    const count = await service.notifyTollDataSyncFailure({
+      sourceId: 'source-1',
+      provider: 'ANTT_TARIFAS' as never,
+      sourceName: 'ANTT - Tarifas',
+      runId: 'run-1',
+      errorMessage: 'pagina fora do ar',
+    });
+
+    expect(count).toBe(0);
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+  });
+
+  it('cria 1 notificacao CRITICAL por SUPER_ADMIN de cada tenant com TOLLS habilitado, com sourceId/provider/runId em metadata', async () => {
+    const { service, prisma } = buildService({
+      tenant: { findMany: jest.fn().mockResolvedValue([{ id: 'tenant-1' }, { id: 'tenant-2' }]) },
+      userAccount: { findMany: jest.fn().mockResolvedValue([{ id: 'admin-1', tenantId: 'tenant-1' }, { id: 'admin-2', tenantId: 'tenant-2' }]) },
+      notification: { findFirst: jest.fn().mockResolvedValue(null), createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    });
+
+    const count = await service.notifyTollDataSyncFailure({
+      sourceId: 'source-1',
+      provider: 'ANTT_TARIFAS' as never,
+      sourceName: 'ANTT - Tarifas',
+      runId: 'run-2',
+      errorMessage: 'pagina-indice fora do ar',
+    });
+
+    expect(count).toBe(2);
+    const rows = (prisma.notification.createMany as jest.Mock).mock.calls[0][0].data;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      tenantId: 'tenant-1',
+      recipientId: 'admin-1',
+      type: NotificationType.TOLL_DATA_SYNC_FAILURE,
+      severity: AlertSeverity.CRITICAL,
+      entityType: 'TollDataSource',
+      entityId: 'run-2', // nunca sourceId fixo -- ver comentario do enum no schema.
+      metadata: { sourceId: 'source-1', provider: 'ANTT_TARIFAS', runId: 'run-2' },
+    });
+  });
+
+  it('NUNCA cria uma 2a notificacao enquanto ja existir uma nao lida para a mesma fonte (mesmo episodio de falha, sem spam)', async () => {
+    const { service, prisma } = buildService({
+      tenant: { findMany: jest.fn().mockResolvedValue([{ id: 'tenant-1' }]) },
+      notification: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'existing-alert' }),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    });
+
+    const count = await service.notifyTollDataSyncFailure({
+      sourceId: 'source-1',
+      provider: 'ANTT_TARIFAS' as never,
+      sourceName: 'ANTT - Tarifas',
+      runId: 'run-3',
+      errorMessage: 'ainda fora do ar',
+    });
+
+    expect(count).toBe(0);
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
+  });
+
+  it('resolveTollDataSyncAlerts marca como lidas (readAt) so as notificacoes NAO LIDAS da fonte informada, filtrando por metadata.sourceId', async () => {
+    const { service, prisma } = buildService({
+      notification: { updateMany: jest.fn().mockResolvedValue({ count: 3 }) },
+    });
+
+    const count = await service.resolveTollDataSyncAlerts('source-1');
+
+    expect(count).toBe(3);
+    expect(prisma.notification.updateMany).toHaveBeenCalledWith({
+      where: {
+        type: NotificationType.TOLL_DATA_SYNC_FAILURE,
+        entityType: 'TollDataSource',
+        readAt: null,
+        metadata: { path: ['sourceId'], equals: 'source-1' },
+      },
+      data: { readAt: expect.any(Date) },
+    });
   });
 });

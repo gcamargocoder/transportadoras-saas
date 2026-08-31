@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import * as Location from 'expo-location';
 import * as driverTripsApi from '../api/driverTrips.api';
 import { DriverConfig } from '../api/driverTrips.types';
-import { submitOrQueue } from '../storage/syncQueue';
+import { flushQueue, submitOrQueue } from '../storage/syncQueue';
 import { useLocationTracker } from './useLocationTracker';
 
 jest.mock('../api/driverTrips.api');
@@ -10,6 +10,7 @@ jest.mock('../storage/syncQueue');
 
 const api = driverTripsApi as jest.Mocked<typeof driverTripsApi>;
 const mockedSubmitOrQueue = submitOrQueue as jest.Mock;
+const mockedFlushQueue = flushQueue as jest.Mock;
 const mockedWatchPositionAsync = Location.watchPositionAsync as jest.Mock;
 const mockedRequestPermissions = Location.requestForegroundPermissionsAsync as jest.Mock;
 
@@ -51,6 +52,7 @@ describe('useLocationTracker', () => {
     watchCallback = null;
     removeMock = jest.fn();
     mockedSubmitOrQueue.mockResolvedValue({ queued: false });
+    mockedFlushQueue.mockResolvedValue({ sent: 0, remaining: 0 });
     mockedRequestPermissions.mockResolvedValue({ status: 'granted' });
     mockedWatchPositionAsync.mockImplementation(async (_options: unknown, callback: typeof watchCallback) => {
       watchCallback = callback;
@@ -190,6 +192,33 @@ describe('useLocationTracker', () => {
 
       expect(result.current.lastKnown).toBeTruthy();
       expect(mockedSubmitOrQueue).toHaveBeenCalledTimes(1); // reaproveita a fila, nao cria um 2o caminho
+    });
+  });
+
+  // Gap real encontrado na auditoria "TMS + Driver App": a fila offline
+  // (abastecimento/ocorrencia/eixo enfileirados sem sinal) so era drenada em
+  // gatilhos manuais (abrir o app, puxar para atualizar, pausar/retomar) --
+  // podia ficar presa por horas numa area sem sinal ate o motorista voltar
+  // pra Home. Corrigido: o proprio envio de GPS (a cada poucos segundos)
+  // agora dispara flushQueue() quando prova que a conexao voltou.
+  describe('H. drenagem automatica da fila offline ao reconectar', () => {
+    it('quando o envio da posicao tem sucesso (conexao disponivel), tenta drenar o resto da fila (flushQueue)', async () => {
+      mockedSubmitOrQueue.mockResolvedValue({ queued: false });
+      renderHook(() => useLocationTracker('trip-1', CONFIG));
+      await waitFor(() => expect(watchCallback).toBeInstanceOf(Function));
+
+      await act(async () => watchCallback!(buildPosition()));
+      await waitFor(() => expect(mockedFlushQueue).toHaveBeenCalledTimes(1));
+    });
+
+    it('quando o envio da posicao fica enfileirado (ainda sem conexao), NUNCA tenta flushQueue (sem sinal, seria so trabalho perdido)', async () => {
+      mockedSubmitOrQueue.mockResolvedValue({ queued: true });
+      renderHook(() => useLocationTracker('trip-1', CONFIG));
+      await waitFor(() => expect(watchCallback).toBeInstanceOf(Function));
+
+      await act(async () => watchCallback!(buildPosition()));
+
+      expect(mockedFlushQueue).not.toHaveBeenCalled();
     });
   });
 

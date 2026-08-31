@@ -16,6 +16,7 @@ import { useDebounce } from '../../../hooks/use-debounce';
 import { CreatePlazaModal } from '../../../features/tolls/create-plaza-modal';
 import { UpdatePlazaModal } from '../../../features/tolls/update-plaza-modal';
 import { listTollPlazas } from '../../../lib/api/tolls.api';
+import { TOLL_PLAZA_TYPE_LABELS } from '../../../lib/labels';
 import type { TollPlazaEntity } from '../../../types/entities';
 import { formatCurrency } from '../../../utils/format';
 
@@ -40,6 +41,14 @@ export default function TollPlazasPage(): JSX.Element {
     () => [
       { header: 'Nome', accessorFn: (row) => row.name },
       { header: 'Concessionária', accessorFn: (row) => row.operator },
+      {
+        header: 'Tipo',
+        cell: ({ row }) => (
+          <Badge tone={row.original.type === 'FREE_FLOW_GANTRY' ? 'info' : 'neutral'}>
+            {TOLL_PLAZA_TYPE_LABELS[row.original.type]}
+          </Badge>
+        ),
+      },
       { header: 'Rodovia', accessorFn: (row) => row.highway ?? '-' },
       {
         header: 'Cidade/UF',

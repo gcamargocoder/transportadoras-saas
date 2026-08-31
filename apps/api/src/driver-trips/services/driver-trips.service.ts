@@ -283,10 +283,20 @@ export class DriverTripsService {
     return entity;
   }
 
-  // GET /driver/trips/:id/nearby-toll-plazas -- so pracas da TollRoute
-  // vinculada aquela viagem (corredor conhecido, Fase 23), nunca busca livre
-  // no cadastro global. Distancia calculada em memoria (Haversine) a partir
-  // de TollPlaza.latitude/longitude -- sem PostGIS/Google Maps.
+  // GET /driver/trips/:id/nearby-toll-plazas -- Fase 25 so buscava pracas da
+  // TollRoute vinculada a viagem (corredor operacional manual, Fase 23), e
+  // retornava [] sem esse corredor -- gap real encontrado na auditoria "TMS
+  // + Driver App": o corredor manual e cadastro extra OPCIONAL, a maioria
+  // das viagens nunca tem um, entao o aviso de pedagio proximo (e a tela de
+  // confirmacao de eixos que ele dispara) simplesmente nunca ativava nesses
+  // casos. Corrigido reaproveitando a MESMA rota geografica real ja
+  // calculada (RoutePlan.tolls, populada por discoverTollsAlongRoute na
+  // Fase 26 -- nunca uma segunda descoberta de pedagio): corredor manual
+  // continua tendo prioridade quando cadastrado (decisao operacional
+  // explicita da transportadora), e so na ausencia dele cai para a rota
+  // geografica. So considera pracas com match real (tollPlazaId != null) --
+  // nunca inventa correspondencia para uma UNMATCHED. Distancia calculada em
+  // memoria (Haversine) -- sem PostGIS/Google Maps, mesmo desenho anterior.
   async getNearbyTollPlazas(
     tenantId: string,
     driverId: string,
@@ -303,7 +313,7 @@ export class DriverTripsService {
         tollRoute: { include: { stops: { include: { tollPlaza: true } } } },
       },
     });
-    if (!trip?.tollRoute) {
+    if (!trip) {
       return [];
     }
 
@@ -311,30 +321,77 @@ export class DriverTripsService {
     const radiusMeters = settings?.tollProximityRadiusMeters ?? 3000;
     const defaultAxles = trip.composition?.axleConfiguration?.totalAxles ?? 0;
 
-    return trip.tollRoute.stops
-      .map((stop) => {
-        const plazaLat = toNumberOrNull(stop.tollPlaza.latitude);
-        const plazaLng = toNumberOrNull(stop.tollPlaza.longitude);
-        if (plazaLat === null || plazaLng === null) {
+    const candidates = trip.tollRoute
+      ? trip.tollRoute.stops.map((stop) => ({
+          tollPlazaId: stop.tollPlaza.id,
+          name: stop.tollPlaza.name,
+          highway: stop.tollPlaza.highway,
+          latitude: toNumberOrNull(stop.tollPlaza.latitude),
+          longitude: toNumberOrNull(stop.tollPlaza.longitude),
+          axleCountUsed: null as number | null,
+        }))
+      : await this.getRoutePlanTollCandidates(tenantId, trip.routePlanId);
+
+    return candidates
+      .map((candidate) => {
+        if (candidate.latitude === null || candidate.longitude === null) {
           return null;
         }
         const distanceMeters = haversineDistanceMeters(
           { latitude: lat, longitude: lng },
-          { latitude: plazaLat, longitude: plazaLng },
+          { latitude: candidate.latitude, longitude: candidate.longitude },
         );
         if (distanceMeters > radiusMeters) {
           return null;
         }
         const entity = new NearbyTollPlazaEntity();
-        entity.tollPlazaId = stop.tollPlaza.id;
-        entity.name = stop.tollPlaza.name;
-        entity.highway = stop.tollPlaza.highway;
+        entity.tollPlazaId = candidate.tollPlazaId;
+        entity.name = candidate.name;
+        entity.highway = candidate.highway;
         entity.distanceMeters = Math.round(distanceMeters);
-        entity.defaultAxles = defaultAxles;
+        entity.defaultAxles = candidate.axleCountUsed ?? defaultAxles;
         return entity;
       })
       .filter((entry): entry is NearbyTollPlazaEntity => entry !== null)
       .sort((a, b) => a.distanceMeters - b.distanceMeters);
+  }
+
+  // Fallback geografico de getNearbyTollPlazas (ver comentario acima) --
+  // le RoutePlanToll (ja persistido pelo calculo de rota, Fase 26), nunca
+  // recalcula nada. highway vem de um segundo lote (nunca 1 query por
+  // praca) porque RoutePlanToll nao guarda esse campo, so TollPlaza.
+  private async getRoutePlanTollCandidates(
+    tenantId: string,
+    routePlanId: string | null,
+  ): Promise<
+    { tollPlazaId: string; name: string; highway: string | null; latitude: number | null; longitude: number | null; axleCountUsed: number | null }[]
+  > {
+    if (!routePlanId) {
+      return [];
+    }
+    const tolls = await this.prisma.routePlanToll.findMany({
+      where: { tenantId, routePlanId, tollPlazaId: { not: null } },
+      select: { tollPlazaId: true, name: true, latitude: true, longitude: true, axleCountUsed: true },
+    });
+    if (tolls.length === 0) {
+      return [];
+    }
+
+    const plazaIds = [...new Set(tolls.map((toll) => toll.tollPlazaId!))];
+    const plazas = await this.prisma.tollPlaza.findMany({
+      where: { id: { in: plazaIds } },
+      select: { id: true, highway: true },
+    });
+    const highwayById = new Map(plazas.map((plaza) => [plaza.id, plaza.highway]));
+
+    return tolls.map((toll) => ({
+      tollPlazaId: toll.tollPlazaId!,
+      name: toll.name,
+      highway: highwayById.get(toll.tollPlazaId!) ?? null,
+      latitude: toNumberOrNull(toll.latitude),
+      longitude: toNumberOrNull(toll.longitude),
+      axleCountUsed: toll.axleCountUsed,
+    }));
   }
 
   // Valida a posse (trip.driverId === driverId autenticado) ANTES de

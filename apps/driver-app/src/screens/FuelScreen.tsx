@@ -6,6 +6,7 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
 import { TextField } from '../components/TextField';
+import { FuelType } from '../api/driverTrips.types';
 import { generateDeviceEventId } from '../storage/deviceEventId';
 import { submitOrQueue } from '../storage/syncQueue';
 import { colors } from '../theme/colors';
@@ -15,6 +16,20 @@ import { RootStackParamList } from '../navigation/types';
 type Props = NativeStackScreenProps<RootStackParamList, 'Fuel'>;
 
 type FuelLocation = 'TRANSPORTADORA' | 'OUTRO';
+
+// Gap real encontrado na auditoria "TMS + Driver App": o app nunca
+// perguntava o tipo de item abastecido -- todo registro caia em OUTRO
+// (default do backend), misturando diesel/ARLA/etc nos relatorios. Espelha
+// FuelType do backend (packages/database/prisma/schema.prisma), rotulo
+// curto o suficiente para caber num botao pequeno.
+const FUEL_TYPE_OPTIONS: { value: FuelType; label: string }[] = [
+  { value: 'DIESEL_S10', label: 'Diesel S10' },
+  { value: 'DIESEL_S500', label: 'Diesel S500' },
+  { value: 'ARLA32', label: 'Arla 32' },
+  { value: 'GASOLINA', label: 'Gasolina' },
+  { value: 'ETANOL', label: 'Etanol' },
+  { value: 'OUTRO', label: 'Outro' },
+];
 
 // ABASTECIMENTO EM ROTA (Fase 25, secao 8; Fase 28, secao 7/8) -- KM, litros
 // e valor pago. Tudo o mais (viagem, veiculo, motorista, data/hora, posto
@@ -27,6 +42,7 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
   const [odometerKm, setOdometerKm] = useState('');
   const [liters, setLiters] = useState('');
   const [amountPaid, setAmountPaid] = useState('');
+  const [fuelType, setFuelType] = useState<FuelType>('DIESEL_S10');
   const [fuelLocation, setFuelLocation] = useState<FuelLocation>('TRANSPORTADORA');
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -51,6 +67,7 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
         deviceEventId: generateDeviceEventId(),
         odometerKm: odometer,
         liters: litersValue,
+        fuelType,
         pricePerLiter: amountValue / litersValue,
         ...compact({ latitude: position?.coords.latitude, longitude: position?.coords.longitude }),
       });
@@ -85,6 +102,21 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
         onChangeText={setAmountPaid}
         keyboardType="numeric"
       />
+
+      <Card>
+        <Text style={{ color: colors.text, fontWeight: '700' }}>Tipo</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+          {FUEL_TYPE_OPTIONS.map((option) => (
+            <View key={option.value} style={{ width: '31%' }}>
+              <Button
+                label={option.label}
+                variant={fuelType === option.value ? 'primary' : 'secondary'}
+                onPress={() => setFuelType(option.value)}
+              />
+            </View>
+          ))}
+        </View>
+      </Card>
 
       <Card>
         <Text style={{ color: colors.text, fontWeight: '700' }}>Local</Text>

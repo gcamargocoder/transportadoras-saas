@@ -45,6 +45,12 @@ export const NOTIFICATION_RECIPIENT_ROLES: Record<NotificationType, UserRole[]> 
   // operacional/de seguranca imediata, mesmo grupo de TIRE_NEAR_REPLACEMENT/
   // VEHICLE_MAINTENANCE (nunca restrito a gestao).
   CHECKLIST_CRITICAL_NON_CONFORMITY: OPERATIONAL_ROLES,
+  // Fase "Alertas de sincronizacao" -- falha de fonte oficial de dados de
+  // pedagio e uma questao de configuracao/infraestrutura, restrita a quem
+  // ja pode agir sobre ela (o unico role com escrita em /toll-data/sync e
+  // /toll-data/rates, ver TollDataController) -- nunca OPERATIONAL_ROLES
+  // inteiro, que nao tem nenhuma acao possivel sobre isso.
+  TOLL_DATA_SYNC_FAILURE: [UserRole.SUPER_ADMIN],
 };
 
 // Todos os roles com PELO MENOS 1 tipo de notificacao elegivel -- usado

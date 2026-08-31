@@ -9,7 +9,9 @@ import {
   Notification,
   NotificationType,
   Prisma,
+  TenantModule,
   TireLocationType,
+  TollDataProvider,
   TripBillingStatus,
   TripStatus,
   TripOccurrenceSeverity,
@@ -21,6 +23,7 @@ import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { hasCriticalNonConformity } from '../../checklists/utils/checklist-non-conformity.util';
+import { NOTIFICATION_RECIPIENT_ROLES } from '../constants/notification-recipient-roles.constants';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { detectOdometerRegression } from '../../common/utils/fuel-consumption.util';
@@ -182,6 +185,100 @@ export class NotificationsService {
     });
 
     return { count: result.count };
+  }
+
+  // ==========================================================================
+  // ALERTAS DE SINCRONIZACAO (Fase "Alertas de sincronizacao") -- diferente
+  // do restante deste arquivo (condicoes varridas periodicamente por tenant
+  // via collectCandidates/processTenant), estes 2 metodos sao chamados
+  // DIRETAMENTE por TollDataSyncService ao final de cada execucao de
+  // sincronizacao (evento, nao scan) -- TollPlaza/TollRate/TollDataSource
+  // sao dado GLOBAL (sem tenantId), entao "alertar a transportadora"
+  // significa: toda transportadora ATIVA com o modulo TOLLS habilitado,
+  // destinatario = NOTIFICATION_RECIPIENT_ROLES.TOLL_DATA_SYNC_FAILURE
+  // (SUPER_ADMIN, unico role com acao real sobre isso).
+  // ==========================================================================
+
+  // Chamado quando um provider acumula falhas consecutivas (ver
+  // TollDataSyncService -- o "retry antes do alerta" e o proprio
+  // agendamento diario: nunca alerta na 1a falha isolada). Nunca duplica
+  // enquanto o MESMO episodio de falha continua (verifica se ja existe uma
+  // notificacao NAO LIDA para esta fonte antes de criar) -- por isso nunca
+  // 1 notificacao por dia durante toda uma indisponibilidade prolongada.
+  async notifyTollDataSyncFailure(params: {
+    sourceId: string;
+    provider: TollDataProvider;
+    sourceName: string;
+    runId: string;
+    errorMessage: string | null;
+  }): Promise<number> {
+    const alreadyOpen = await this.prisma.notification.findFirst({
+      where: {
+        type: NotificationType.TOLL_DATA_SYNC_FAILURE,
+        entityType: 'TollDataSource',
+        readAt: null,
+        metadata: { path: ['sourceId'], equals: params.sourceId },
+      },
+      select: { id: true },
+    });
+    if (alreadyOpen) return 0;
+
+    const tenants = await this.prisma.tenant.findMany({
+      where: { isActive: true, plan: { enabledModules: { has: TenantModule.TOLLS } } },
+      select: { id: true },
+    });
+    if (tenants.length === 0) return 0;
+
+    const recipientRoles = NOTIFICATION_RECIPIENT_ROLES[NotificationType.TOLL_DATA_SYNC_FAILURE];
+    const recipients = await this.prisma.userAccount.findMany({
+      where: { tenantId: { in: tenants.map((t) => t.id) }, isActive: true, deletedAt: null, role: { in: recipientRoles } },
+      select: { id: true, tenantId: true },
+    });
+    if (recipients.length === 0) return 0;
+
+    const errorSummary = (params.errorMessage ?? 'Erro nao especificado pela fonte.').slice(0, 300);
+    const rows: Prisma.NotificationCreateManyInput[] = recipients.map((recipient) => ({
+      tenantId: recipient.tenantId,
+      recipientId: recipient.id,
+      type: NotificationType.TOLL_DATA_SYNC_FAILURE,
+      title: `Falha persistente na sincronização de pedágios: ${params.sourceName}`,
+      message: `A sincronização automática de "${params.sourceName}" (${params.provider}) falhou em execuções consecutivas. Último erro: ${errorSummary}`,
+      severity: AlertSeverity.CRITICAL,
+      entityType: 'TollDataSource',
+      // entityId = id da EXECUCAO que cruzou o limiar (nunca sourceId fixo):
+      // permite reabrir o alerta num episodio de falha futuro sem colidir
+      // com o unique constraint da notificacao anterior (ja resolvida).
+      entityId: params.runId,
+      metadata: { sourceId: params.sourceId, provider: params.provider, runId: params.runId } as Prisma.InputJsonValue,
+    }));
+
+    const result = await this.prisma.notification.createMany({ data: rows, skipDuplicates: true });
+    if (result.count > 0) {
+      this.logger.warn(`Alerta critico de sincronizacao criado para ${params.sourceName}: ${result.count} destinatario(s).`);
+    }
+    return result.count;
+  }
+
+  // Chamado quando um provider volta a ter uma execucao SUCCESS/PARTIAL
+  // (fonte respondeu e algo foi aplicado) -- resolve automaticamente
+  // (readAt=now) qualquer alerta ainda aberto desta fonte, reaproveitando o
+  // MESMO campo `readAt` ja usado por PATCH /notifications/:id/read (nunca
+  // um campo/status novo). O alerta continua no historico do usuario (nunca
+  // apagado), so deixa de contar como nao-lido/critico pendente.
+  async resolveTollDataSyncAlerts(sourceId: string): Promise<number> {
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        type: NotificationType.TOLL_DATA_SYNC_FAILURE,
+        entityType: 'TollDataSource',
+        readAt: null,
+        metadata: { path: ['sourceId'], equals: sourceId },
+      },
+      data: { readAt: new Date() },
+    });
+    if (result.count > 0) {
+      this.logger.log(`Alerta de sincronizacao resolvido automaticamente para a fonte ${sourceId}: ${result.count} notificacao(oes).`);
+    }
+    return result.count;
   }
 
   private buildWhere(tenantId: string, userId: string, query: FindNotificationsQueryDto): Prisma.NotificationWhereInput {

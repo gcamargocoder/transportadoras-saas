@@ -851,6 +851,15 @@ export const NotificationType = {
   // computeDeliveryProofStatus, ver docs/notifications.md).
   DELIVERY_PROOF_PENDING: 'DELIVERY_PROOF_PENDING',
   DELIVERY_PROOF_PROBLEM: 'DELIVERY_PROOF_PROBLEM',
+  // Fase 98/111 -- faltavam neste enum do frontend (gap real encontrado e
+  // corrigido na Fase "Alertas de sincronizacao": sem esta entrada,
+  // NOTIFICATION_TYPE_LABELS[tipo] resolvia undefined em runtime para
+  // qualquer notificacao destes 2 tipos, ja emitidos pelo backend desde as
+  // fases correspondentes).
+  CONTRACT_EXPIRING: 'CONTRACT_EXPIRING',
+  CHECKLIST_CRITICAL_NON_CONFORMITY: 'CHECKLIST_CRITICAL_NON_CONFORMITY',
+  // Fase "Alertas de sincronizacao".
+  TOLL_DATA_SYNC_FAILURE: 'TOLL_DATA_SYNC_FAILURE',
 } as const;
 
 // Fase 72 -- Contas a Receber. Status ESCRITO (nunca contem OVERDUE --
@@ -922,3 +931,33 @@ export type PayableStatus = (typeof PayableStatus)[keyof typeof PayableStatus];
 
 // Status EFETIVO retornado pela API -- inclui OVERDUE, nunca persistido.
 export type PayableEffectiveStatus = PayableStatus | 'OVERDUE';
+
+// Fase "Alertas de sincronizacao" -- fontes oficiais de dados de pedagio
+// (TollDataSource/TollDataSyncRun, ja existentes desde a Fase 33, sem UI
+// ate esta fase).
+export const TollDataProvider = {
+  ANTT: 'ANTT',
+  ANTT_TARIFAS: 'ANTT_TARIFAS',
+  RJ_AGETRANSP: 'RJ_AGETRANSP',
+  ARTESP: 'ARTESP',
+  OTHER: 'OTHER',
+} as const;
+export type TollDataProvider = (typeof TollDataProvider)[keyof typeof TollDataProvider];
+
+// Fase "Free Flow / Porticos de Pedagio" -- campo ja existe no backend
+// (TollPlazaEntity.type) desde essa fase, mas nunca tinha chegado ao
+// frontend (nenhuma tela expunha nem lia) -- gap real corrigido na
+// auditoria "TMS + Driver App".
+export const TollPlazaType = {
+  PHYSICAL_PLAZA: 'PHYSICAL_PLAZA',
+  FREE_FLOW_GANTRY: 'FREE_FLOW_GANTRY',
+} as const;
+export type TollPlazaType = (typeof TollPlazaType)[keyof typeof TollPlazaType];
+
+export const TollDataSyncStatus = {
+  RUNNING: 'RUNNING',
+  SUCCESS: 'SUCCESS',
+  PARTIAL: 'PARTIAL',
+  FAILED: 'FAILED',
+} as const;
+export type TollDataSyncStatus = (typeof TollDataSyncStatus)[keyof typeof TollDataSyncStatus];

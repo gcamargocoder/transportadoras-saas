@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import { TollPlazaType } from '@prisma/client';
+import { IsEnum, IsIn, IsOptional, IsString, Length, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
 export enum TollPlazaSortField {
@@ -25,6 +26,14 @@ export class FindTollPlazasQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(150)
   operator?: string;
+
+  @ApiPropertyOptional({
+    enum: TollPlazaType,
+    description: 'Filtra por tipo: PHYSICAL_PLAZA ou FREE_FLOW_GANTRY.',
+  })
+  @IsOptional()
+  @IsEnum(TollPlazaType)
+  type?: TollPlazaType;
 
   @ApiPropertyOptional({ enum: TollPlazaSortField, default: TollPlazaSortField.NAME })
   @IsOptional()

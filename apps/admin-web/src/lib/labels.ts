@@ -53,6 +53,9 @@ import {
   TenantStatus,
   TireLocationType,
   TireStatus,
+  TollDataProvider,
+  TollDataSyncStatus,
+  TollPlazaType,
   TollMatchStatus,
   TollTransactionStatus,
   TrailerType,
@@ -866,6 +869,43 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   // Fase 70.
   DELIVERY_PROOF_PENDING: 'Comprovante de entrega aguardando revisão',
   DELIVERY_PROOF_PROBLEM: 'Comprovante de entrega com problema',
+  // Fase 98/111 -- faltavam neste mapa (gap real corrigido na Fase
+  // "Alertas de sincronizacao": sem a entrada, o label renderizava
+  // "undefined" para notificacoes ja emitidas pelo backend).
+  CONTRACT_EXPIRING: 'Contrato vencendo',
+  CHECKLIST_CRITICAL_NON_CONFORMITY: 'Checklist com item crítico',
+  // Fase "Alertas de sincronizacao".
+  TOLL_DATA_SYNC_FAILURE: 'Falha na sincronização de pedágios',
+};
+
+// Fase "Alertas de sincronizacao".
+export const TOLL_DATA_PROVIDER_LABELS: Record<TollDataProvider, string> = {
+  ANTT: 'ANTT — Praças de pedágio (KMZ)',
+  ANTT_TARIFAS: 'ANTT — Tarifas por concessão',
+  RJ_AGETRANSP: 'AGETRANSP/RJ — Tarifas',
+  ARTESP: 'ARTESP — Praças (SP)',
+  OTHER: 'Outra fonte',
+};
+
+export const TOLL_DATA_SYNC_STATUS_LABELS: Record<TollDataSyncStatus, string> = {
+  RUNNING: 'Em execução',
+  SUCCESS: 'Sucesso',
+  PARTIAL: 'Parcial',
+  FAILED: 'Falha',
+};
+
+export const TOLL_DATA_SYNC_STATUS_TONE: Record<TollDataSyncStatus, 'success' | 'warning' | 'danger' | 'info'> = {
+  RUNNING: 'info',
+  SUCCESS: 'success',
+  PARTIAL: 'warning',
+  FAILED: 'danger',
+};
+
+// Fase "Free Flow / Porticos de Pedagio" -- ver comentario do enum em
+// types/enums.ts.
+export const TOLL_PLAZA_TYPE_LABELS: Record<TollPlazaType, string> = {
+  PHYSICAL_PLAZA: 'Praça física',
+  FREE_FLOW_GANTRY: 'Pórtico Free Flow',
 };
 
 // Fase 72 -- Contas a Receber. Inclui OVERDUE (nunca persistido no

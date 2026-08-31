@@ -7,7 +7,7 @@ import type {
   TollPlazaEntity,
   TollTransactionEntity,
 } from '../../types/entities';
-import type { TollTransactionSource, TollTransactionStatus } from '../../types/enums';
+import type { TollPlazaType, TollTransactionSource, TollTransactionStatus } from '../../types/enums';
 import { api } from './http';
 
 export interface FindTollTransactionsQuery extends PaginationParams {
@@ -76,6 +76,7 @@ export function getTollPlaza(id: string) {
 export interface CreateTollPlazaPayload {
   name: string;
   operator: string;
+  type?: TollPlazaType | undefined;
   highway?: string | undefined;
   km?: number | undefined;
   city?: string | undefined;

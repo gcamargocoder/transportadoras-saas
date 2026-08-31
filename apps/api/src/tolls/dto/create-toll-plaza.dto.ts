@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { TollPlazaType } from '@prisma/client';
 import {
+  IsEnum,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -23,6 +25,17 @@ export class CreateTollPlazaDto {
   @MinLength(2)
   @MaxLength(150)
   operator!: string;
+
+  @ApiPropertyOptional({
+    enum: TollPlazaType,
+    default: TollPlazaType.PHYSICAL_PLAZA,
+    description:
+      'PHYSICAL_PLAZA (padrao) ou FREE_FLOW_GANTRY (portico de cobranca sem parada). ' +
+      'Omitido = PHYSICAL_PLAZA.',
+  })
+  @IsOptional()
+  @IsEnum(TollPlazaType)
+  type?: TollPlazaType;
 
   @ApiPropertyOptional({ example: 'SP-280' })
   @IsOptional()

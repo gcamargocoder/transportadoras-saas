@@ -79,6 +79,14 @@ describe('resolveNotificationLink', () => {
     expect(link).toBeNull();
   });
 
+  // Fase "Alertas de sincronizacao".
+  it('TollDataSource leva para o painel de status do Super Admin, independente do entityId (id da execucao, sem tela propria)', () => {
+    const link = resolveNotificationLink(
+      buildNotification({ type: 'TOLL_DATA_SYNC_FAILURE', entityType: 'TollDataSource', entityId: 'run-1' }),
+    );
+    expect(link).toBe('/super-admin/toll-data');
+  });
+
   it('entityType desconhecido nunca inventa uma URL', () => {
     const link = resolveNotificationLink(buildNotification({ entityType: 'SomethingUnknown' }));
     expect(link).toBeNull();

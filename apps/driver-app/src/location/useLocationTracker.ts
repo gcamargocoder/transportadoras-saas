@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as driverTripsApi from '../api/driverTrips.api';
 import { DriverConfig } from '../api/driverTrips.types';
 import { generateDeviceEventId } from '../storage/deviceEventId';
-import { submitOrQueue } from '../storage/syncQueue';
+import { flushQueue, submitOrQueue } from '../storage/syncQueue';
 import { compact } from '../utils/compact';
 import { haversineDistanceMeters } from './geo';
 
@@ -47,6 +47,18 @@ export function useLocationTracker(
     async function handlePosition(position: Location.LocationObject): Promise<void> {
       setLastKnown(position);
 
+      // Gap real encontrado na auditoria "TMS + Driver App": a fila offline
+      // (abastecimento, ocorrencia, excecao de eixo etc. enfileirados
+      // enquanto sem sinal) so era drenada em gatilhos manuais/pontuais
+      // (montar o app, puxar para atualizar, pausar/retomar) -- nunca
+      // automaticamente ao reconectar. O envio de posicao GPS acontece a
+      // cada poucos segundos durante toda a viagem e e o sinal mais
+      // confiavel de "a conexao acabou de voltar"; quando ele tem sucesso
+      // (queued=false), aproveita para tentar drenar o resto da fila
+      // tambem -- reaproveita flushQueue() ja existente, nunca um segundo
+      // mecanismo de sincronizacao. Fire-and-forget (nunca bloqueia/atrasa
+      // o proximo ping de GPS); flushQueue e barata quando a fila ja esta
+      // vazia (1 leitura do AsyncStorage).
       void submitOrQueue({
         kind: 'locations',
         tripId: tripId!,
@@ -60,6 +72,10 @@ export function useLocationTracker(
             recordedAt: new Date(position.timestamp).toISOString(),
           }) as { deviceEventId: string; latitude: number; longitude: number; recordedAt: string },
         ],
+      }).then((result) => {
+        if (!result.queued) {
+          void flushQueue();
+        }
       });
 
       if (!config) return;

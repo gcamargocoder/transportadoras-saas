@@ -9,17 +9,24 @@ import { Button } from '../../components/ui/button';
 import { FormField } from '../../components/ui/form-field';
 import { Input } from '../../components/ui/input';
 import { Modal } from '../../components/ui/modal';
+import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { toFriendlyMessage } from '../../lib/api/errors';
 import { updateTollPlaza } from '../../lib/api/tolls.api';
+import { TOLL_PLAZA_TYPE_LABELS } from '../../lib/labels';
 import type { TollPlazaEntity } from '../../types/entities';
+import { TollPlazaType } from '../../types/enums';
 
 const schema = z.object({
   name: z.string().min(2, 'Informe o nome da praça.'),
   operator: z.string().min(2, 'Informe a concessionária.'),
+  type: z.enum(['PHYSICAL_PLAZA', 'FREE_FLOW_GANTRY']).optional(),
   highway: z.string().optional(),
+  km: z.coerce.number().min(0, 'Km não pode ser negativo.').optional(),
   city: z.string().optional(),
   state: z.string().max(2).optional(),
+  latitude: z.coerce.number().min(-90).max(90).optional(),
+  longitude: z.coerce.number().min(-180).max(180).optional(),
   pricePerAxle: z.coerce.number().positive('Informe um valor maior que zero.').optional(),
 });
 
@@ -48,9 +55,13 @@ export function UpdatePlazaModal({
       reset({
         name: plaza.name,
         operator: plaza.operator,
+        type: plaza.type,
         highway: plaza.highway ?? '',
+        km: plaza.km ?? undefined,
         city: plaza.city ?? '',
         state: plaza.state ?? '',
+        latitude: plaza.latitude ?? undefined,
+        longitude: plaza.longitude ?? undefined,
         pricePerAxle: plaza.pricePerAxle ?? undefined,
       });
     }
@@ -98,6 +109,19 @@ export function UpdatePlazaModal({
         >
           <Input id="operator" invalid={Boolean(errors.operator)} {...register('operator')} />
         </FormField>
+        <FormField
+          label="Tipo"
+          htmlFor="type"
+          hint="Praça física (cancela) ou pórtico Free Flow (cobrança eletrônica sem parada)."
+        >
+          <Select id="type" {...register('type')}>
+            {Object.values(TollPlazaType).map((type) => (
+              <option key={type} value={type}>
+                {TOLL_PLAZA_TYPE_LABELS[type]}
+              </option>
+            ))}
+          </Select>
+        </FormField>
         <div className="grid grid-cols-2 gap-4">
           <FormField label="Rodovia" htmlFor="highway" hint="Opcional">
             <Input id="highway" {...register('highway')} />
@@ -106,8 +130,24 @@ export function UpdatePlazaModal({
             <Input id="state" maxLength={2} {...register('state')} />
           </FormField>
         </div>
-        <FormField label="Cidade" htmlFor="city" hint="Opcional">
-          <Input id="city" {...register('city')} />
+        <div className="grid grid-cols-2 gap-4">
+          <FormField label="Cidade" htmlFor="city" hint="Opcional">
+            <Input id="city" {...register('city')} />
+          </FormField>
+          <FormField label="Km" htmlFor="km" hint="Opcional">
+            <Input id="km" type="number" step="0.001" min={0} {...register('km')} />
+          </FormField>
+        </div>
+        <FormField
+          label="Latitude / Longitude"
+          htmlFor="latitude"
+          error={errors.latitude?.message ?? errors.longitude?.message}
+          hint="Essencial para o motor de rotas identificar a praça/pórtico automaticamente. Deixe em branco se ainda não souber (nunca invente uma coordenada)."
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <Input id="latitude" type="number" step="0.0000001" {...register('latitude')} placeholder="-23.5505" />
+            <Input id="longitude" type="number" step="0.0000001" {...register('longitude')} placeholder="-46.6333" />
+          </div>
         </FormField>
         <FormField
           label="Valor por eixo (R$)"

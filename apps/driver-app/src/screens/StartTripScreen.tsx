@@ -7,7 +7,7 @@ import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
 import { TextField } from '../components/TextField';
 import * as driverTripsApi from '../api/driverTrips.api';
-import { DriverTrip, TripLoadStatus } from '../api/driverTrips.types';
+import { DriverTrip, FuelType, TripLoadStatus } from '../api/driverTrips.types';
 import { generateDeviceEventId } from '../storage/deviceEventId';
 import { submitOrQueue } from '../storage/syncQueue';
 import { colors } from '../theme/colors';
@@ -17,6 +17,18 @@ type Props = NativeStackScreenProps<RootStackParamList, 'StartTrip'>;
 
 type FuelChoice = 'NONE' | 'SUPPLIED';
 type FuelLocation = 'TRANSPORTADORA' | 'OUTRO';
+
+// Gap real encontrado na auditoria "TMS + Driver App" -- ver mesmo comentario
+// em FuelScreen.tsx (o abastecimento inicial usa o mesmo formulario/payload,
+// nunca uma segunda logica).
+const FUEL_TYPE_OPTIONS: { value: FuelType; label: string }[] = [
+  { value: 'DIESEL_S10', label: 'Diesel S10' },
+  { value: 'DIESEL_S500', label: 'Diesel S500' },
+  { value: 'ARLA32', label: 'Arla 32' },
+  { value: 'GASOLINA', label: 'Gasolina' },
+  { value: 'ETANOL', label: 'Etanol' },
+  { value: 'OUTRO', label: 'Outro' },
+];
 
 // Tela "INICIAR VIAGEM" (Fase 27, secao 2) -- unico formulario antes da
 // largada: caminhao/eixos/origem/destino vem PRE-PREENCHIDOS da viagem ja
@@ -29,6 +41,7 @@ export function StartTripScreen({ route, navigation }: Props): React.JSX.Element
   const [odometerKm, setOdometerKm] = useState('');
   const [loadStatus, setLoadStatus] = useState<TripLoadStatus | null>(null);
   const [fuelChoice, setFuelChoice] = useState<FuelChoice>('NONE');
+  const [fuelType, setFuelType] = useState<FuelType>('DIESEL_S10');
   const [fuelLocation, setFuelLocation] = useState<FuelLocation>('TRANSPORTADORA');
   const [liters, setLiters] = useState('');
   const [amountPaid, setAmountPaid] = useState('');
@@ -67,6 +80,7 @@ export function StartTripScreen({ route, navigation }: Props): React.JSX.Element
           deviceEventId: generateDeviceEventId(),
           odometerKm: parsedOdometer,
           liters: parsedLiters,
+          fuelType,
           pricePerLiter: parsedAmount / parsedLiters,
           ...(position
             ? { latitude: position.coords.latitude, longitude: position.coords.longitude }
@@ -142,6 +156,18 @@ export function StartTripScreen({ route, navigation }: Props): React.JSX.Element
 
         {fuelChoice === 'SUPPLIED' && (
           <>
+            <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Tipo</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {FUEL_TYPE_OPTIONS.map((option) => (
+                <View key={option.value} style={{ width: '31%' }}>
+                  <Button
+                    label={option.label}
+                    variant={fuelType === option.value ? 'primary' : 'secondary'}
+                    onPress={() => setFuelType(option.value)}
+                  />
+                </View>
+              ))}
+            </View>
             <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Local</Text>
             <View style={{ flexDirection: 'row', gap: 12 }}>
               <View style={{ flex: 1 }}>

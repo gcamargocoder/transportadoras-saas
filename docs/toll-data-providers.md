@@ -141,13 +141,41 @@ Nest (`@nestjs/schedule` + `cron`), registrada dinamicamente (não via
 de ambiente, avaliadas em runtime:
 
 - `TOLL_DATA_SYNC_ENABLED` (padrão `false` — nunca liga sozinho contra uma
-  fonte externa).
+  fonte externa; **verificar explicitamente no ambiente de produção real**
+  — não há arquivo de deploy neste repositório que declare essa variável,
+  ela só existe na configuração da hospedagem).
 - `TOLL_DATA_SYNC_CRON` (padrão `0 3 * * *`, uma vez por dia — nunca
   polling agressivo).
 
-Quando habilitado, `TollDataSyncScheduler` sincroniza ANTT e ARTESP em
-sequência (nunca em paralelo), e a falha de um provider nunca impede a
-tentativa do outro.
+Quando habilitado, `TollDataSyncScheduler` sincroniza, em sequência (nunca
+em paralelo), os 4 providers hoje registrados: `ANTT` (praças, KMZ),
+`ANTT_TARIFAS` (tarifas por concessão federal), `RJ_AGETRANSP` (tarifas
+RJ) e `ARTESP` (praças SP — sem tarifa automatizável confirmada). A falha
+de um provider nunca impede a tentativa dos demais.
+
+### Proteção contra execuções simultâneas (Fase "Atualização automática de Pedágios")
+
+Auditoria desta fase encontrou uma lacuna real: nada impedia 2 execuções
+`RUNNING` do MESMO provider ao mesmo tempo — um disparo manual
+(`POST /toll-data/sync`) colidindo com o scheduler, ou múltiplas instâncias
+da API disparando o mesmo cron simultaneamente (cada instância roda seu
+próprio `TollDataSyncScheduler.onModuleInit`, sem nenhuma coordenação entre
+elas). Corrigido com um índice único parcial no próprio banco (nunca só na
+aplicação, que não teria visibilidade entre instâncias):
+
+```sql
+CREATE UNIQUE INDEX toll_data_sync_runs_one_running_per_provider
+ON toll_data_sync_runs (provider) WHERE status = 'RUNNING';
+```
+
+`TollDataSyncService.sync()` tenta criar a linha `RUNNING`; se o banco
+rejeitar por violação de unicidade, a chamada é ignorada (log + retorno
+`status: RUNNING` referenciando a execução ativa, nenhuma linha nova
+criada, nenhum dado alterado) — nunca 2 sincronizações escrevendo sobre o
+mesmo `TollPlaza`/`TollRate` global ao mesmo tempo. Uma execução presa por
+mais de 1h (processo derrubado no meio de uma sincronização) é
+auto-recuperada (marcada `FAILED`) para nunca travar o provider
+permanentemente.
 
 ### Sincronização manual (admin)
 

@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma, TollDataProvider, TollDataSource, TollDataSyncRun, TollDataSyncStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotificationsService } from '../../notifications/services/notifications.service';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import {
   NormalizedTollTariff,
@@ -43,6 +44,7 @@ export class TollDataSyncService {
     private readonly prisma: PrismaService,
     private readonly sourceService: TollDataSourceService,
     private readonly ratesService: TollRatesService,
+    private readonly notifications: NotificationsService,
     @Inject(TOLL_DATA_PROVIDERS) private readonly providers: TollDataProviderPort[],
   ) {}
 
@@ -79,9 +81,34 @@ export class TollDataSyncService {
   // automatica (secao 10) ou o userId do administrador na execucao manual.
   async sync(provider: TollDataProvider, triggeredBy: string): Promise<TollDataSyncOutcome> {
     const source = await this.sourceService.ensureSource(provider);
-    const run = await this.prisma.tollDataSyncRun.create({
-      data: { sourceId: source.id, provider, status: TollDataSyncStatus.RUNNING, triggeredBy },
-    });
+    const run = await this.startRunOrSkip(source.id, provider, triggeredBy);
+
+    // Fase "Atualizacao automatica de Pedagios" -- ja existe uma execucao
+    // RUNNING para este provider (colisao real: scheduler x disparo manual,
+    // ou mais de 1 instancia da API) -- nunca inicia uma 2a em paralelo
+    // sobre o mesmo TollPlaza/TollRate globais. Nao cria uma nova linha de
+    // TollDataSyncRun para esta tentativa ignorada (a execucao que
+    // realmente esta rodando ja vai registrar seu proprio resultado).
+    if (!run) {
+      const active = await this.prisma.tollDataSyncRun.findFirst({
+        where: { provider, status: TollDataSyncStatus.RUNNING },
+        orderBy: { startedAt: 'desc' },
+      });
+      const message = active
+        ? `Ja existe uma sincronizacao em andamento para ${provider} (iniciada em ${active.startedAt.toISOString()}, run ${active.id}) -- esta chamada foi ignorada, nenhum dado foi alterado.`
+        : `Ja existe uma sincronizacao em andamento para ${provider} -- esta chamada foi ignorada, nenhum dado foi alterado.`;
+      this.logger.warn(message);
+      return {
+        runId: active?.id ?? '',
+        status: TollDataSyncStatus.RUNNING,
+        errorMessage: message,
+        recordsRead: 0,
+        recordsCreated: 0,
+        recordsUpdated: 0,
+        recordsUnchanged: 0,
+        recordsRejected: 0,
+      };
+    }
 
     const providerImpl = this.providers.find((p) => p.provider === provider);
 
@@ -91,7 +118,7 @@ export class TollDataSyncService {
       const message = !source.enabled
         ? 'Fonte desabilitada (TollDataSource.enabled=false).'
         : 'Provider sem fonte estruturada automatizavel confirmada nesta fase.';
-      return this.finishRun(run.id, source.id, {
+      return this.finishRun(run.id, source.id, provider, {
         status: TollDataSyncStatus.FAILED,
         errorMessage: message,
         recordsRead: 0,
@@ -106,12 +133,12 @@ export class TollDataSyncService {
       return this.syncPlazas(providerImpl, provider, source.id, run.id);
     }
     if (providerImpl.fetchTariffs) {
-      return this.syncTariffs(providerImpl, source.id, run.id);
+      return this.syncTariffs(providerImpl, provider, source.id, run.id);
     }
 
     // Nunca deveria acontecer (provider registrado sem nenhum metodo de
     // busca) -- mas se acontecer, falha explicitamente em vez de silenciar.
-    return this.finishRun(run.id, source.id, {
+    return this.finishRun(run.id, source.id, provider, {
       status: TollDataSyncStatus.FAILED,
       errorMessage: 'Provider registrado sem fetchPlazas() nem fetchTariffs().',
       recordsRead: 0,
@@ -120,6 +147,67 @@ export class TollDataSyncService {
       recordsUnchanged: 0,
       recordsRejected: 0,
     });
+  }
+
+  // Fase "Atualizacao automatica de Pedagios" -- cria a linha RUNNING so se
+  // nao houver outra RUNNING para o mesmo provider, usando o indice unico
+  // parcial do banco (migration 20260914000000_toll_data_sync_run_single_running_per_provider)
+  // como trava real -- nunca um "check entao insere" na aplicacao (teria uma
+  // janela de corrida entre 2 instancias/requisicoes). Retorna null quando
+  // ja existe uma RUNNING genuina (o chamador decide o que informar).
+  //
+  // Auto-recuperacao: se a RUNNING existente estiver "presa" ha mais tempo
+  // do que qualquer sincronizacao real deveria levar (processo anterior
+  // reiniciado/derrubado no meio da execucao, nunca finalizou), marca-a
+  // FAILED e tenta criar a nova run 1 vez -- sem isso, um crash no meio de
+  // uma sincronizacao travaria aquele provider PARA SEMPRE (pior que o
+  // problema que esta trava resolve).
+  private static readonly STALE_RUN_THRESHOLD_MS = 60 * 60 * 1000; // 1h
+
+  private async startRunOrSkip(
+    sourceId: string,
+    provider: TollDataProvider,
+    triggeredBy: string,
+  ): Promise<TollDataSyncRun | null> {
+    try {
+      return await this.prisma.tollDataSyncRun.create({
+        data: { sourceId, provider, status: TollDataSyncStatus.RUNNING, triggeredBy },
+      });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) throw error;
+
+      const stuck = await this.prisma.tollDataSyncRun.findFirst({
+        where: { provider, status: TollDataSyncStatus.RUNNING },
+        orderBy: { startedAt: 'desc' },
+      });
+      const isStale =
+        !!stuck && Date.now() - stuck.startedAt.getTime() > TollDataSyncService.STALE_RUN_THRESHOLD_MS;
+      if (!isStale) return null;
+
+      this.logger.warn(
+        `Execucao RUNNING presa para ${provider} (run ${stuck!.id}, iniciada em ${stuck!.startedAt.toISOString()}) -- ` +
+          'marcando como falha para liberar uma nova tentativa.',
+      );
+      await this.prisma.tollDataSyncRun.update({
+        where: { id: stuck!.id },
+        data: {
+          status: TollDataSyncStatus.FAILED,
+          finishedAt: new Date(),
+          errorMessage: 'Execucao anterior nao finalizou dentro do tempo esperado (processo provavelmente reiniciado ou travado) -- marcada como falha automaticamente para liberar nova tentativa.',
+        },
+      });
+
+      try {
+        return await this.prisma.tollDataSyncRun.create({
+          data: { sourceId, provider, status: TollDataSyncStatus.RUNNING, triggeredBy },
+        });
+      } catch (retryError) {
+        // Outra instancia venceu a corrida entre a recuperacao e esta nova
+        // tentativa -- trata como concorrencia genuina, nunca insiste mais.
+        if (retryError instanceof Prisma.PrismaClientKnownRequestError && retryError.code === 'P2002') return null;
+        throw retryError;
+      }
+    }
   }
 
   // ==========================================================================
@@ -141,7 +229,7 @@ export class TollDataSyncService {
       // resposta (poderia conter detalhes de infraestrutura da fonte).
       const message = error instanceof Error ? error.message : 'Erro desconhecido ao sincronizar.';
       this.logger.error(`Sincronizacao ${provider} falhou: ${message}`);
-      return this.finishRun(runId, sourceId, {
+      return this.finishRun(runId, sourceId, provider, {
         status: TollDataSyncStatus.FAILED,
         errorMessage: message,
         recordsRead: 0,
@@ -153,7 +241,7 @@ export class TollDataSyncService {
     }
 
     const result = await this.applyPlazas(provider, sourceId, fetchResult.plazas);
-    return this.finishRun(runId, sourceId, {
+    return this.finishRun(runId, sourceId, provider, {
       status: this.statusFromCounts(result),
       errorMessage: null,
       ...result,
@@ -318,7 +406,12 @@ export class TollDataSyncService {
   // fluxo de TARIFAS por concessao (Fase 35)
   // ==========================================================================
 
-  private async syncTariffs(providerImpl: TollDataProviderPort, sourceId: string, runId: string): Promise<TollDataSyncOutcome> {
+  private async syncTariffs(
+    providerImpl: TollDataProviderPort,
+    provider: TollDataProvider,
+    sourceId: string,
+    runId: string,
+  ): Promise<TollDataSyncOutcome> {
     let fetchResult: Awaited<ReturnType<NonNullable<TollDataProviderPort['fetchTariffs']>>>;
     try {
       fetchResult = await providerImpl.fetchTariffs!();
@@ -329,7 +422,7 @@ export class TollDataSyncService {
       // reportada via failedConcessions, nao chega aqui como excecao.
       const message = error instanceof Error ? error.message : 'Erro desconhecido ao sincronizar.';
       this.logger.error(`Sincronizacao de tarifas falhou: ${message}`);
-      return this.finishRun(runId, sourceId, {
+      return this.finishRun(runId, sourceId, provider, {
         status: TollDataSyncStatus.FAILED,
         errorMessage: message,
         recordsRead: 0,
@@ -350,7 +443,7 @@ export class TollDataSyncService {
         ? `Concessoes com falha: ${fetchResult.failedConcessions.map((f) => `${f.name} (${f.reason})`).join('; ')}`
         : null;
 
-    return this.finishRun(runId, sourceId, {
+    return this.finishRun(runId, sourceId, provider, {
       status: this.statusFromCounts({ ...result, recordsRejected }),
       errorMessage,
       recordsRead: result.recordsRead,
@@ -450,6 +543,7 @@ export class TollDataSyncService {
   private async finishRun(
     runId: string,
     sourceId: string,
+    provider: TollDataProvider,
     result: {
       status: TollDataSyncStatus;
       errorMessage: string | null;
@@ -474,7 +568,7 @@ export class TollDataSyncService {
         errorMessage: result.errorMessage,
       },
     });
-    await this.prisma.tollDataSource.update({
+    const source = await this.prisma.tollDataSource.update({
       where: { id: sourceId },
       data: {
         lastSyncAt: finishedAt,
@@ -482,7 +576,54 @@ export class TollDataSyncService {
           ? { lastFailureAt: finishedAt, lastError: result.errorMessage }
           : { lastSuccessAt: finishedAt, lastError: null }),
       },
+      select: { name: true },
     });
+
+    await this.checkPersistentFailure(sourceId, provider, source.name, runId, result.status, result.errorMessage);
+
     return { runId, ...result };
+  }
+
+  // Fase "Alertas de sincronizacao" -- "retry antes do alerta critico" e o
+  // proprio agendamento diario (TOLL_DATA_SYNC_CRON, nunca mais de 1x/dia):
+  // a 1a falha isolada NUNCA alerta (pode ser uma instabilidade
+  // transitoria da fonte, ja mitigada 1 vez em fetchHtmlWithRetry -- 1
+  // tentativa extra por download). So quando a execucao ATUAL e a
+  // IMEDIATAMENTE anterior de um MESMO provider falharam as duas
+  // (PERSISTENT_FAILURE_THRESHOLD consecutivas, contando so FAILED --
+  // PARTIAL nunca conta como falha aqui, significa que a fonte respondeu e
+  // algo foi aplicado) e que a situacao vira "falha persistente" e gera o
+  // alerta critico (NotificationsService.notifyTollDataSyncFailure, que ja
+  // e idempotente por si so -- nunca duplica enquanto o mesmo episodio
+  // continua). Sucesso/parcial sempre resolve qualquer alerta aberto
+  // (nunca precisa esperar o mesmo limiar para "desalertar").
+  private static readonly PERSISTENT_FAILURE_THRESHOLD = 2;
+
+  private async checkPersistentFailure(
+    sourceId: string,
+    provider: TollDataProvider,
+    sourceName: string,
+    runId: string,
+    status: TollDataSyncStatus,
+    errorMessage: string | null,
+  ): Promise<void> {
+    if (status === TollDataSyncStatus.SUCCESS || status === TollDataSyncStatus.PARTIAL) {
+      await this.notifications.resolveTollDataSyncAlerts(sourceId);
+      return;
+    }
+    if (status !== TollDataSyncStatus.FAILED) return; // RUNNING nunca chega aqui (finishRun so roda ao concluir).
+
+    const recentRuns = await this.prisma.tollDataSyncRun.findMany({
+      where: { provider, id: { not: runId } },
+      orderBy: { startedAt: 'desc' },
+      take: TollDataSyncService.PERSISTENT_FAILURE_THRESHOLD - 1,
+      select: { status: true },
+    });
+    const previousAllFailed =
+      recentRuns.length === TollDataSyncService.PERSISTENT_FAILURE_THRESHOLD - 1 &&
+      recentRuns.every((r) => r.status === TollDataSyncStatus.FAILED);
+    if (!previousAllFailed) return;
+
+    await this.notifications.notifyTollDataSyncFailure({ sourceId, provider, sourceName, runId, errorMessage });
   }
 }

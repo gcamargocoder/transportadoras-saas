@@ -221,6 +221,146 @@ describe('parseAnttConcessionTariffTable (fixture real -- Via Cristais)', () => 
     const cat1P1 = rows.find((r) => r.category === 1 && r.plazaLabel === 'P1');
     expect(cat1P1?.price).toBeNull();
   });
+
+  // Fase "Expansao ANTT" -- download AO VIVO (nao a fixture acima, capturada
+  // na Fase 35) revelou que a mesma pagina de Via Cristais passou a publicar
+  // o cabecalho de praca por extenso ("Praça 1".."Praça 7"), nunca mais
+  // abreviado ("P1".."P7") -- confirmado byte-a-byte nesta fase. Verbatim da
+  // fonte real (2 das 12 categorias reais).
+  it('cabecalho de praca por extenso ("Praça 1".."Praça n") e reconhecido e normalizado para "P1".."Pn"', () => {
+    const html = `<table>
+<tr><td>Categoria de Veículo</td><td>Tipo de Veículo</td><td>Número de Eixos</td><td>Rodagem</td><td>Multiplicador da Tarifa</td><td colspan="7">Valores a serem Praticados (R$)</td></tr>
+<tr><td>Praça 1</td><td>Praça 2</td><td>Praça 3</td><td>Praça 4</td><td>Praça 5</td><td>Praça 6</td><td>Praça 7</td></tr>
+<tr><td>1</td><td>Automóvel, caminhonete e furgão</td><td>2</td><td>Simples</td><td>1</td><td>12,10</td><td>12,20</td><td>12,40</td><td>12,20</td><td>12,30</td><td>12,50</td><td>16,60</td></tr>
+<tr><td>2</td><td>Caminhão leve, ônibus, caminhão-trator e furgão</td><td>2</td><td>Dupla</td><td>2</td><td>24,20</td><td>24,40</td><td>24,80</td><td>24,40</td><td>24,60</td><td>25,00</td><td>33,20</td></tr>
+</table>`;
+    const rows = parseAnttConcessionTariffTable(html);
+    expect(rows).toHaveLength(14); // 2 categorias x 7 pracas
+    expect(new Set(rows.map((r) => r.plazaLabel))).toEqual(new Set(['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7']));
+    const cat1P1 = rows.find((r) => r.category === 1 && r.plazaLabel === 'P1');
+    expect(cat1P1?.price).toBeCloseTo(12.1);
+  });
+
+  it('celula de cabecalho de praca que nao bate com nenhum dos 2 formatos reconhecidos descarta a tabela inteira (nunca adivinha o rotulo)', () => {
+    const html = `<table>
+<tr><td>Categoria</td><td>Tipo</td><td>Eixos</td><td>Rodagem</td><td>Multiplicador</td><td colspan="2">Valores</td></tr>
+<tr><td>P1</td><td>Praca desconhecida</td></tr>
+<tr><td>1</td><td>Automovel</td><td>2</td><td>Simples</td><td>1</td><td>10,00</td><td>20,00</td></tr>
+</table>`;
+    expect(parseAnttConcessionTariffTable(html)).toEqual([]);
+  });
+
+  // Fase "Expansao ANTT" -- download AO VIVO de Via 040 e Autopista Régis
+  // Bittencourt revelou concessoes que publicam UM UNICO valor por
+  // categoria, valido para TODAS as pracas (nunca uma coluna por praca) --
+  // confirmado byte-a-byte nesta fase. Verbatim de Via 040 (10 das 10
+  // categorias reais, aqui recortado para 3).
+  describe('modo uniforme (1 valor por categoria, sem coluna por praca)', () => {
+    const REAL_UNIFORM_HTML = `<table>
+<tr><th scope="col">Categoria de Veículo</th><th scope="col">Tipo de Veículo</th><th scope="col">Número de Eixos</th><th scope="col">Rodagem</th><th scope="col">Multiplicador da Tarifa</th><th scope="col">Valores a serem Praticados</th></tr>
+<tr><td>1</td><td>Automóvel, caminhonete e furgão</td><td>2</td><td>Simples</td><td>1,0</td><td>6,30</td></tr>
+<tr><td>2</td><td>Caminhão leve, Ônibus, caminhão-trator e furgão</td><td>2</td><td>Dupla</td><td>2,0</td><td>12,60</td></tr>
+<tr><td>3</td><td>Automóvel e caminhonete com semirreboque</td><td>3</td><td>Simples</td><td>1,5</td><td>9,45</td></tr>
+</table>`;
+
+    it('reconhece cabecalho em <th> (HTML semantico) e gera 1 linha por categoria com plazaLabel null', () => {
+      const rows = parseAnttConcessionTariffTable(REAL_UNIFORM_HTML);
+      expect(rows).toHaveLength(3);
+      expect(rows.every((r) => r.plazaLabel === null)).toBe(true);
+      const cat1 = rows.find((r) => r.category === 1);
+      expect(cat1).toMatchObject({ vehicleType: 'Automóvel, caminhonete e furgão', axleCount: 2, wheelType: 'Simples', price: 6.3 });
+    });
+
+    it('normalizeAnttConcessionTariffs emite highway/km/city/lat/long todos null (mesmo significado de RJ_AGETRANSP: tarifa uniforme, nunca localizacao inventada)', () => {
+      const normalized = normalizeAnttConcessionTariffs(REAL_UNIFORM_HTML, '<table><tr><td>RODOVIA</td><td>MUNIC</td></tr></table>');
+      // Categorias 1 e 2 tem o MESMO numero de eixos (2, so difere por
+      // Rodagem Simples/Dupla) -- mesma regra de ambiguidade ja aplicada ao
+      // modo multi-praca (ver describe acima) tambem vale aqui, entao so a
+      // categoria 3 (3 eixos, unica) sobrevive.
+      expect(normalized).toHaveLength(1);
+      const row = normalized[0]!;
+      expect(row.plazaLabel).toBeNull();
+      expect(row.highway).toBeNull();
+      expect(row.km).toBeNull();
+      expect(row.city).toBeNull();
+      expect(row.latitude).toBeNull();
+      expect(row.longitude).toBeNull();
+      expect(row.axleCategory).toBe('3 eixos');
+      expect(row.price).toBeCloseTo(9.45);
+    });
+
+    it('linha de dado com numero de colunas diferente de 6 e ignorada (nunca alinhada "na marra")', () => {
+      const withExtraColumn = REAL_UNIFORM_HTML.replace('<td>6,30</td>', '<td>6,30</td><td>extra</td>');
+      const rows = parseAnttConcessionTariffTable(withExtraColumn);
+      expect(rows.some((r) => r.category === 1)).toBe(false);
+      expect(rows.some((r) => r.category === 2)).toBe(true);
+    });
+
+    // Fase "Expansao ANTT" -- download AO VIVO de Rodovia do Aço revelou
+    // uma concessao que NAO publica a coluna "Rodagem" -- confirmado
+    // byte-a-byte. wheelType deve ficar null (nunca "Simples"/"Dupla"
+    // inventado), nunca deslocando Multiplicador/Valores para a coluna
+    // errada.
+    it('sem coluna "Rodagem" (confirmado pelo cabecalho real) -- wheelType fica null, nunca inventado', () => {
+      const html = `<table>
+<tr><td>Categoria de Veículo</td><td>Tipo de Veículo</td><td>Nº de Eixos</td><td>Multiplicador da Tarifa</td><td>Valores a serem Praticados*</td></tr>
+<tr><td>1</td><td>Automóvel, caminhonete e furgão</td><td>2</td><td>1</td><td>6,50</td></tr>
+<tr><td>2</td><td>Caminhão leve, ônibus, caminhão-trator e furgão</td><td>2</td><td>2</td><td>13,00</td></tr>
+<tr><td>3</td><td>Automóvel e caminhonete com semi-reboque</td><td>3</td><td>1,5</td><td>9,75</td></tr>
+</table>`;
+      const rows = parseAnttConcessionTariffTable(html);
+      expect(rows).toHaveLength(3);
+      expect(rows.every((r) => r.wheelType === null)).toBe(true);
+      const cat3 = rows.find((r) => r.category === 3);
+      expect(cat3).toMatchObject({ vehicleType: 'Automóvel e caminhonete com semi-reboque', axleCount: 3, wheelType: null, price: 9.75, plazaLabel: null });
+    });
+  });
+
+  // Fase "Recuperacao ANTT" -- fixture REAL, baixada em 30/08/2026 de
+  // .../lista-de-concessoes/ecosul-contrato-encerrado/tarifas-de-pedagio
+  // -- concessao SEM coluna "Multiplicador": o valor final ja vem pronto
+  // na ultima coluna ("Valores a serem Praticados (R$)"). 8 categorias
+  // reais, verbatim (so a formatacao de indentacao foi normalizada).
+  describe('modo valor direto, sem coluna Multiplicador (fixture real -- Ecosul, contrato encerrado)', () => {
+    const REAL_DIRECT_VALUE_HTML = `<table>
+<tbody>
+<tr><td><p><span>Categoria de Veículo</span></p></td><td><p><span>Tipo de Veículo</span></p></td><td><p><span>Número de Eixos</span></p></td><td><p><span>Rodagem</span></p></td><td><p><span>Valores a serem Praticados (R$)</span></p></td></tr>
+<tr><td><p>1</p></td><td><p>Automóvel, caminhonete e furgão</p></td><td><p>2</p></td><td><p>Simples</p></td><td><p><span>19,60</span></p></td></tr>
+<tr><td><p>2</p></td><td><p>Caminhão leve, ônibus, caminhão-trator e furgão</p></td><td><p>2</p></td><td><p>Dupla</p></td><td><p><span>39,10</span></p></td></tr>
+<tr><td><p>5</p></td><td><p>Caminhão com reboque e caminhão-trator com semi-reboque</p></td><td><p>5</p></td><td><p>Dupla</p></td><td><p><span>97,80</span></p></td></tr>
+<tr><td><p>6</p></td><td><p>Caminhão com reboque e caminhão-trator com semi-reboque</p></td><td><p>6</p></td><td><p>Dupla</p></td><td><p><span>117,40</span></p></td></tr>
+</tbody>
+</table>`;
+
+    it('reconhece a tabela sem "Multiplicador" pelo cabecalho "Valores a serem Praticados" e extrai o valor final direto', () => {
+      const rows = parseAnttConcessionTariffTable(REAL_DIRECT_VALUE_HTML);
+      expect(rows).toHaveLength(4);
+      expect(rows.every((r) => r.plazaLabel === null)).toBe(true);
+      expect(rows.every((r) => r.tariffMultiplier === null)).toBe(true);
+      const cat1 = rows.find((r) => r.category === 1);
+      expect(cat1).toMatchObject({ vehicleType: 'Automóvel, caminhonete e furgão', axleCount: 2, wheelType: 'Simples', price: 19.6 });
+    });
+
+    it('nunca tenta o modo Multiplicador quando a tabela ja foi encontrada pelo caminho de valor direto (sem competir/colidir)', () => {
+      // Confirma que uma fonte SEM "Multiplicador" nunca cai no branch
+      // errado (que exigiria uma coluna a mais e rejeitaria a linha toda).
+      const rows = parseAnttConcessionTariffTable(REAL_DIRECT_VALUE_HTML);
+      expect(rows.map((r) => r.price)).toEqual([19.6, 39.1, 97.8, 117.4]);
+    });
+
+    it('normalizeAnttConcessionTariffs trata como modo uniforme (highway/km/city/lat/long null) e aplica a mesma regra de ambiguidade de eixos', () => {
+      const normalized = normalizeAnttConcessionTariffs(
+        REAL_DIRECT_VALUE_HTML,
+        '<table><tr><td>RODOVIA</td><td>MUNIC</td></tr></table>',
+      );
+      // Categorias 1 e 2 tem o mesmo numero de eixos (2) -- excluidas por
+      // ambiguidade, mesma regra ja usada nos outros modos. So 5 e 6 eixos
+      // sobrevivem (cada um aparece em exatamente 1 categoria).
+      expect(normalized).toHaveLength(2);
+      expect(normalized.map((r) => r.axleCategory).sort()).toEqual(['5 eixos', '6 eixos']);
+      expect(normalized.every((r) => r.plazaLabel === null && r.highway === null)).toBe(true);
+    });
+  });
 });
 
 describe('parseAnttConcessionPlazaLocations (fixture real -- Via Cristais)', () => {
@@ -251,6 +391,31 @@ describe('parseAnttConcessionPlazaLocations (fixture real -- Via Cristais)', () 
 
   it('conteudo vazio retorna lista vazia, nunca lanca excecao', () => {
     expect(parseAnttConcessionPlazaLocations('')).toEqual([]);
+  });
+
+  // Fase "Expansao ANTT" -- download AO VIVO de Autopista Fluminense
+  // revelou zero a esquerda no rotulo ("P01"), nunca visto na fixture de
+  // Via Cristais (Fase 35, sempre "P1"). Confirmado byte-a-byte nesta fase.
+  it('rotulo com zero a esquerda ("P01") e normalizado para a mesma forma ("P1")', () => {
+    const html = `<table><tr><td>PRAÇA DE PEDÁGIO</td><td>RODOVIA</td><td>UF</td><td>KM/M</td><td>MUNICÍPIO</td><td>TIPO DE PISTA</td><td>SENTIDO</td><td>LATITUDE</td><td>LONGITUDE</td></tr>
+<tr><td>P01 - Casimiro de Abreu</td><td>BR-101</td><td>RJ</td><td>192,82</td><td>Casimiro de Abreu</td><td>Principal</td><td>Crescente/Decrescente</td><td>-22,476441</td><td>-42,088519</td></tr>
+</table>`;
+    const locations = parseAnttConcessionPlazaLocations(html);
+    expect(locations).toHaveLength(1);
+    expect(locations[0]?.plazaLabel).toBe('P1');
+  });
+
+  // Fase "Expansao ANTT" -- download AO VIVO de Concebra revelou rotulo sem
+  // NENHUM separador entre numero e nome, so espaco ("P1 ALEXÂNIA") --
+  // confirmado byte-a-byte nesta fase, distinto do en-dash/hifen ja
+  // cobertos acima.
+  it('rotulo sem separador (so espaco: "P1 ALEXÂNIA") e reconhecido normalmente', () => {
+    const html = `<table><tr><td>PRAÇA DE PEDÁGIO</td><td>RODOVIA</td><td>UF</td><td>KM/M</td><td>MUNICÍPIO</td><td>TIPO DE PISTA</td><td>SENTIDO</td><td>LATITUDE</td><td>LONGITUDE</td></tr>
+<tr><td>P1 ALEXÂNIA</td><td>BR-060</td><td>GO</td><td>43,1</td><td>Alexânia</td><td>Principal</td><td>Crescente/Decrescente</td><td>-16,1157</td><td>-48,5892</td></tr>
+</table>`;
+    const locations = parseAnttConcessionPlazaLocations(html);
+    expect(locations).toHaveLength(1);
+    expect(locations[0]).toMatchObject({ plazaLabel: 'P1', plazaName: 'ALEXÂNIA', highway: 'BR-060' });
   });
 });
 
@@ -286,5 +451,25 @@ describe('normalizeAnttConcessionTariffs (combinacao das 2 paginas)', () => {
     expect(p1Cat3?.km).toBeCloseTo(17.65);
     expect(p1Cat3?.price).toBeCloseTo(16.95);
     expect(p1Cat3?.currency).toBe('BRL');
+  });
+
+  // Fase "Expansao ANTT" -- caso real (Autopista Fluminense): a pagina de
+  // tarifas usa "P1" (sem zero a esquerda) e a pagina de localizacao da
+  // MESMA concessao usa "P01" (com zero a esquerda) -- sem normalizar os
+  // dois lados para a mesma forma, esta combinacao nunca encontraria a
+  // localizacao (comparacao de string exata) e a concessao inteira seria
+  // rejeitada por engano, mesmo com as 2 paginas estruturalmente validas.
+  it('combina corretamente quando a pagina de tarifas usa "P1" e a de localizacao usa "P01" (zero a esquerda so de um lado)', () => {
+    const tariffHtml = `<table>
+<tr><td>Categoria</td><td>Tipo</td><td>Eixos</td><td>Rodagem</td><td>Multiplicador</td><td>Valores</td></tr>
+<tr><td>P1</td></tr>
+<tr><td>1</td><td>Automovel</td><td>2</td><td>Simples</td><td>1</td><td>7,50</td></tr>
+</table>`;
+    const locationHtml = `<table><tr><td>PRAÇA DE PEDÁGIO</td><td>RODOVIA</td><td>UF</td><td>KM/M</td><td>MUNICÍPIO</td><td>TIPO DE PISTA</td><td>SENTIDO</td><td>LATITUDE</td><td>LONGITUDE</td></tr>
+<tr><td>P01 - Casimiro de Abreu</td><td>BR-101</td><td>RJ</td><td>192,82</td><td>Casimiro de Abreu</td><td>Principal</td><td>Crescente/Decrescente</td><td>-22,476441</td><td>-42,088519</td></tr>
+</table>`;
+    const normalized = normalizeAnttConcessionTariffs(tariffHtml, locationHtml);
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]).toMatchObject({ plazaLabel: 'P1', highway: 'BR-101', city: 'Casimiro de Abreu', price: 7.5 });
   });
 });

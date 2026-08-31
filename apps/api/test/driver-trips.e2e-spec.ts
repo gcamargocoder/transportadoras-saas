@@ -779,6 +779,138 @@ describe('Driver Trips (e2e)', () => {
   // ==========================================================================
   // 12-19 + 22-24: eixos (padrao, excecao, retorno, timeout) + conciliacao
   // ==========================================================================
+  // Auditoria "TMS + Driver App" -- gap real: sem TollRoute manual (corredor
+  // operacional opcional, Fase 23), GET nearby-toll-plazas sempre retornava
+  // [] e o aviso de pedagio proximo nunca ativava, mesmo com uma rota
+  // geografica real calculada. Corrigido: cai para RoutePlan.tolls quando
+  // nao ha corredor manual. RoutePlan/RoutePlanToll criados direto via
+  // Prisma aqui (nunca via provider de rota real -- sem rede em e2e,
+  // equivalente ao resultado que discoverTollsAlongRoute persistiria).
+  describe('pedagio proximo (nearby-toll-plazas) -- fallback para rota geografica', () => {
+    it('sem TollRoute manual, encontra a praca pela RoutePlan.tolls (rota geografica real)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('NearbyToll1');
+      const plazaId = await createTollPlaza(adminAuth, { latitude: -23.55, longitude: -46.63 });
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId, { totalAxles: 9 });
+
+      const routePlan = await prisma.routePlan.create({
+        data: {
+          tenantId,
+          tripId,
+          originLabel: 'Origem',
+          destinationLabel: 'Destino',
+          originLatitude: -23.6,
+          originLongitude: -46.7,
+          destinationLatitude: -23.4,
+          destinationLongitude: -46.5,
+          distanceMeters: 50_000,
+          durationSeconds: 3_600,
+          encodedPolyline: '_p~iF~ps|U',
+          provider: 'GOOGLE',
+          tolls: {
+            create: {
+              tenantId,
+              tollPlazaId: plazaId,
+              sequence: 1,
+              latitude: -23.55,
+              longitude: -46.63,
+              name: 'Praca da rota',
+              distanceFromOriginMeters: 20_000,
+              matchStatus: 'MATCHED',
+              source: 'TOLL_PLAZA_MATCH',
+            },
+          },
+        },
+      });
+      await prisma.trip.update({ where: { id: tripId }, data: { routePlanId: routePlan.id } });
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/driver/trips/${tripId}/nearby-toll-plazas`)
+        .query({ lat: -23.5505, lng: -46.6333 })
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].tollPlazaId).toBe(plazaId);
+      expect(res.body.data[0].defaultAxles).toBe(9);
+    });
+
+    it('sem TollRoute manual e sem RoutePlan calculada, continua retornando lista vazia (nunca inventa praca)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('NearbyToll2');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId, { totalAxles: 9 });
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/driver/trips/${tripId}/nearby-toll-plazas`)
+        .query({ lat: -23.5505, lng: -46.6333 })
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('praca UNMATCHED da RoutePlan (sem tollPlazaId) nunca aparece -- nunca inventa correspondencia', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('NearbyToll3');
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId, { totalAxles: 9 });
+
+      const routePlan = await prisma.routePlan.create({
+        data: {
+          tenantId,
+          tripId,
+          originLabel: 'Origem',
+          destinationLabel: 'Destino',
+          originLatitude: -23.6,
+          originLongitude: -46.7,
+          destinationLatitude: -23.4,
+          destinationLongitude: -46.5,
+          distanceMeters: 50_000,
+          durationSeconds: 3_600,
+          encodedPolyline: '_p~iF~ps|U',
+          provider: 'GOOGLE',
+          tolls: {
+            create: {
+              tenantId,
+              tollPlazaId: null,
+              sequence: 1,
+              latitude: -23.55,
+              longitude: -46.63,
+              name: 'Praca 1',
+              distanceFromOriginMeters: 20_000,
+              matchStatus: 'UNMATCHED',
+              source: 'TOLL_PLAZA_MATCH',
+            },
+          },
+        },
+      });
+      await prisma.trip.update({ where: { id: tripId }, data: { routePlanId: routePlan.id } });
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/driver/trips/${tripId}/nearby-toll-plazas`)
+        .query({ lat: -23.5505, lng: -46.6333 })
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('com TollRoute manual cadastrado, continua tendo prioridade (comportamento anterior preservado)', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('NearbyToll4');
+      const plazaId = await createTollPlaza(adminAuth, { latitude: -23.55, longitude: -46.63 });
+      const routeId = await createRoute(adminAuth, [plazaId]);
+      const { driverAuth, tripId } = await setupDriverWithTrip(adminAuth, tenantId, {
+        totalAxles: 9,
+        tollRouteId: routeId,
+      });
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/driver/trips/${tripId}/nearby-toll-plazas`)
+        .query({ lat: -23.5505, lng: -46.6333 })
+        .set('Authorization', driverAuth)
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].tollPlazaId).toBe(plazaId);
+    });
+  });
+
   describe('eixos e conciliacao', () => {
     it('passagem automatica assume o padrao da composicao (9) quando o motorista nao responde (timeout)', async () => {
       const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('Axle1');

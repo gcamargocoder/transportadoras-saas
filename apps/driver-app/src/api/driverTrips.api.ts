@@ -10,6 +10,7 @@ import {
   DriverShift,
   DriverTrip,
   FuelSupply,
+  FuelType,
   NearbyTollPlaza,
   OccurrenceEvidence,
   RouteComparison,
@@ -175,6 +176,7 @@ export function createFuelSupply(
     deviceEventId: string;
     odometerKm: number;
     liters: number;
+    fuelType?: FuelType;
     pricePerLiter?: number;
     latitude?: number;
     longitude?: number;

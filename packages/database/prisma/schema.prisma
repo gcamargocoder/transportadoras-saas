@@ -2942,6 +2942,21 @@ enum NotificationType {
   /// respondido NAO (mesmo criterio de hasCriticalNonConformity/
   /// checklist-non-conformity.util.ts, nunca uma segunda regra).
   CHECKLIST_CRITICAL_NON_CONFORMITY
+  /// Fase "Alertas de sincronizacao" -- gerado por TollDataSyncService
+  /// (nunca pelo scan periodico de NotificationsService.processTenant --
+  /// evento direto da sincronizacao, nao uma condicao varrida por tenant),
+  /// quando um provider de dados de pedagio acumula
+  /// PERSISTENT_FAILURE_THRESHOLD execucoes FAILED consecutivas (nunca na
+  /// 1a falha isolada -- da tempo do "retry" natural do proximo
+  /// agendamento). entityType='TollDataSource', entityId=TollDataSyncRun.id
+  /// (varia a cada novo episodio de falha, nunca o id fixo da fonte --
+  /// necessario para o alerta poder ser reaberto apos uma resolucao
+  /// anterior, ja que o unique constraint (tenantId,recipientId,type,
+  /// entityType,entityId) bloquearia uma 2a linha com o mesmo entityId).
+  /// metadata.sourceId identifica a fonte para o auto-resolve
+  /// (NotificationsService.resolveTollDataSyncAlerts) marcar como lida
+  /// assim que a mesma fonte tiver uma execucao SUCCESS/PARTIAL.
+  TOLL_DATA_SYNC_FAILURE
 
   @@map("notification_type")
 }
@@ -3040,12 +3055,36 @@ enum TollPlazaMatchConfidence {
   @@map("toll_plaza_match_confidence")
 }
 
+/// Fase "Free Flow" -- distingue uma praca com estrutura fisica (cancela/
+/// cabine) de um portico de cobranca eletronica sem parada (Resolucao ANTT
+/// 6.079/2026). PHYSICAL_PLAZA e o default (preserva todo dado existente,
+/// 100% carregado por AnttTollDataProvider ate hoje). FREE_FLOW_GANTRY nunca
+/// e criado por nenhum sync automatico nesta fase -- a ANTT nao publica
+/// dataset estruturado (CSV/KML/API) de localizacao de portico (so texto
+/// livre em paginas institucionais, ver relatorio da fase) -- por isso so
+/// pode ser cadastrado manualmente (SUPER_ADMIN, mesmo endpoint de sempre)
+/// quando a localizacao real for conhecida.
+enum TollPlazaType {
+  PHYSICAL_PLAZA
+  FREE_FLOW_GANTRY
+
+  @@map("toll_plaza_type")
+}
+
 model TollPlaza {
   id           String                                @id @default(uuid()) @db.Uuid
   name         String
   operator     String // concessionaria (ex: CCR, Arteris) -- distinta de TagProvider (Sem Parar, ConectCar...), texto livre de proposito
+  /// PHYSICAL_PLAZA (default) ou FREE_FLOW_GANTRY -- ver doc do enum
+  /// TollPlazaType. Nunca infere o tipo a partir de outro campo (km/geo
+  /// ausentes NAO significam portico -- praca fisica legada tambem pode
+  /// nao ter coordenada cadastrada).
+  type         TollPlazaType                        @default(PHYSICAL_PLAZA)
   highway      String?
-  /// Quilometro da rodovia onde a praca esta localizada.
+  /// Quilometro da rodovia onde a praca esta localizada. Para
+  /// FREE_FLOW_GANTRY, so preenchido quando a fonte oficial publicar o km
+  /// exato (nao publicado para nenhum portico verificado nesta fase --
+  /// nunca estimado/inventado).
   km           Decimal?                              @db.Decimal(10, 3)
   city         String?
   state        String?                               @db.VarChar(2)
@@ -3101,6 +3140,15 @@ model TollDataSource {
 
 /// Historico de execucoes de sincronizacao (Fase 33, secao 12) -- nunca
 /// sobrescrito, 1 linha por execucao (manual ou agendada).
+///
+/// Fase "Atualizacao automatica de Pedagios" -- indice unico parcial
+/// aplicado via migration (nao expressavel na sintaxe declarativa do
+/// Prisma, por isso nao aparece como @@unique aqui): garante no proprio
+/// banco que nunca existam 2 linhas com o MESMO provider e status=RUNNING
+/// ao mesmo tempo (protege contra o scheduler colidir com um disparo
+/// manual, ou contra multiplas instancias da API disparando o mesmo cron).
+/// Ver migration 20260914000000_toll_data_sync_run_single_running_per_provider
+/// e TollDataSyncService.startRunOrSkip.
 model TollDataSyncRun {
   id               String             @id @default(uuid()) @db.Uuid
   sourceId         String             @map("source_id") @db.Uuid
