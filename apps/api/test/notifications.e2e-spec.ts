@@ -874,6 +874,115 @@ describe('Notifications (e2e)', () => {
   });
 
   // ==========================================================================
+  // Fase A -- veiculo OCIOSO ha muito tempo (tempo SEM VIAGEM entre
+  // operacoes). Limiar em TenantSettings.preferences.idleAlertThresholdMinutes
+  // (SEM migration). Reaproveita NotificationType.VEHICLE_UNAVAILABLE (nenhum
+  // enum novo), distinguido por entityType='VehicleIdle'.
+  // ==========================================================================
+  describe('integracao -- veiculo ocioso (Fase A)', () => {
+    async function setIdleThreshold(auth: string, minutes: number | null) {
+      await request(app.getHttpServer())
+        .patch('/api/v1/tenant-settings')
+        .set('Authorization', auth)
+        .send({ preferences: minutes === null ? {} : { idleAlertThresholdMinutes: minutes } })
+        .expect(200);
+    }
+
+    // Veiculo com 1 viagem CONCLUIDA que chegou ha `hoursAgo` horas e sem
+    // viagem posterior -> ocioso agora ha ~hoursAgo horas.
+    async function makeIdleVehicle(auth: string, hoursAgo: number) {
+      const { tripId, vehicleId } = await setupTripWithVehicleDriver(auth);
+      await prisma.trip.update({
+        where: { id: tripId },
+        data: {
+          status: 'COMPLETED',
+          actualDeparture: new Date(Date.now() - (hoursAgo + 24) * 60 * 60 * 1000),
+          actualArrival: new Date(Date.now() - hoursAgo * 60 * 60 * 1000),
+        },
+      });
+      return vehicleId;
+    }
+
+    it('sem limiar configurado -> NENHUM alerta de ociosidade (nunca um numero magico)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IdleNoThreshold');
+      await makeIdleVehicle(adminAuth, 48);
+      await processNow(adminAuth);
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_UNAVAILABLE' })
+        .expect(200);
+      expect(res.body.data.items.filter((n: { entityType: string }) => n.entityType === 'VehicleIdle')).toHaveLength(0);
+    });
+
+    it('veiculo ocioso acima do limiar -> VEHICLE_UNAVAILABLE com entityType=VehicleIdle e metadata da ociosidade', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IdleOver');
+      await setIdleThreshold(adminAuth, 60); // 1h
+      const vehicleId = await makeIdleVehicle(adminAuth, 10); // ocioso ha ~10h
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_UNAVAILABLE', entityType: 'VehicleIdle' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === vehicleId);
+      expect(notif).toBeTruthy();
+      expect(notif.type).toBe('VEHICLE_UNAVAILABLE');
+      expect(notif.entityType).toBe('VehicleIdle');
+      expect(notif.metadata).toMatchObject({ thresholdMinutes: 60 });
+      expect(notif.metadata.netIdleMinutes).toBeGreaterThanOrEqual(9 * 60);
+    });
+
+    it('veiculo ocioso ABAIXO do limiar -> nenhum alerta', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IdleUnder');
+      await setIdleThreshold(adminAuth, 100000); // limiar altissimo
+      await makeIdleVehicle(adminAuth, 5);
+      await processNow(adminAuth);
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_UNAVAILABLE', entityType: 'VehicleIdle' })
+        .expect(200);
+      expect(res.body.data.items).toHaveLength(0);
+    });
+
+    it('reprocessar (POST /notifications/process 2x) NUNCA duplica a notificacao de ociosidade', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('IdleDedup');
+      await setIdleThreshold(adminAuth, 60);
+      const vehicleId = await makeIdleVehicle(adminAuth, 12);
+
+      await processNow(adminAuth);
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'VEHICLE_UNAVAILABLE', entityType: 'VehicleIdle' })
+        .expect(200);
+      const matches = res.body.data.items.filter((n: { entityId: string }) => n.entityId === vehicleId);
+      expect(matches).toHaveLength(1);
+    });
+
+    it('isolamento multi-tenant: o alerta de ociosidade do tenant A nunca vaza para o tenant B', async () => {
+      const a = await createTenantAndLoginAsAdmin('IdleIsoA');
+      const b = await createTenantAndLoginAsAdmin('IdleIsoB');
+      await setIdleThreshold(a.adminAuth, 60);
+      await setIdleThreshold(b.adminAuth, 60);
+      await makeIdleVehicle(a.adminAuth, 20);
+      await processNow(a.adminAuth);
+      await processNow(b.adminAuth);
+
+      const resB = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', b.adminAuth)
+        .query({ type: 'VEHICLE_UNAVAILABLE', entityType: 'VehicleIdle' })
+        .expect(200);
+      expect(resB.body.data.items).toHaveLength(0);
+    });
+  });
+
+  // ==========================================================================
   // Integracao: contrato vencendo (Fase 98) -- Fase 111 fecha uma lacuna real
   // de cobertura de teste (nao um comportamento novo): esta suite nunca
   // exercitava CONTRACT_EXPIRING, o que deixou passar despercebido um bug

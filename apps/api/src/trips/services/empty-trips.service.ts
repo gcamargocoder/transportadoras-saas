@@ -117,6 +117,9 @@ export class EmptyTripsService {
       entity.reason = classifyEmptyTripReason(counts);
       entity.hasDeliveryStops =
         counts.completed + counts.cancelled + counts.pending + counts.inProgress + counts.failed > 0;
+      // Fase D -- CONTEXTO apenas (escalar ja carregado, sem query extra).
+      // `loadStatus === EMPTY` continua sendo o UNICO criterio de "vazia".
+      entity.previousTripId = trip.previousTripId;
       entity.distanceKm = toNumberOrNull(metrics?.actualDistanceKm ?? null);
       entity.totalCost = toNumberOrNull(metrics?.actualTotalCost ?? null);
       return entity;

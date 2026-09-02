@@ -831,9 +831,31 @@ export const TripTimelineOrigin = {
   EXPENSE: 'EXPENSE',
   REVENUE: 'REVENUE',
   OCCURRENCE: 'OCCURRENCE',
+  // Fase B -- periodo ocioso persistido (VehicleIdlePeriod) aberto/fechado por esta viagem.
+  IDLE_PERIOD: 'IDLE_PERIOD',
   AUDIT: 'AUDIT',
 } as const;
 export type TripTimelineOrigin = (typeof TripTimelineOrigin)[keyof typeof TripTimelineOrigin];
+
+// Fase B -- motivo de um periodo ocioso persistido (VehicleIdlePeriod).
+export const VehicleIdleReason = {
+  AGUARDANDO_CARGA: 'AGUARDANDO_CARGA',
+  AGUARDANDO_ORDEM: 'AGUARDANDO_ORDEM',
+  MANUTENCAO: 'MANUTENCAO',
+  DOCUMENTACAO: 'DOCUMENTACAO',
+  DESCANSO: 'DESCANSO',
+  PATIO: 'PATIO',
+  OUTRO: 'OUTRO',
+} as const;
+export type VehicleIdleReason = (typeof VehicleIdleReason)[keyof typeof VehicleIdleReason];
+
+// Fase B -- origem do registro de VehicleIdlePeriod.
+export const VehicleIdlePeriodSource = {
+  AUTO: 'AUTO',
+  MANUAL_ADMIN: 'MANUAL_ADMIN',
+  DRIVER_APP: 'DRIVER_APP',
+} as const;
+export type VehicleIdlePeriodSource = (typeof VehicleIdlePeriodSource)[keyof typeof VehicleIdlePeriodSource];
 
 // Fase 69 -- Centro de Alertas e Notificacoes.
 export const NotificationType = {

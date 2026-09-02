@@ -6,7 +6,7 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
 import * as driverTripsApi from '../api/driverTrips.api';
-import { DriverRoute, NearbyTollPlaza } from '../api/driverTrips.types';
+import { DriverIdlePeriod, DriverRoute, NearbyTollPlaza, VehicleIdleReason } from '../api/driverTrips.types';
 import * as notificationsApi from '../api/driverNotifications.api';
 import { useAuth } from '../auth/AuthContext';
 import { useLocationTracker } from '../location/useLocationTracker';
@@ -17,6 +17,22 @@ import { RootStackParamList } from '../navigation/types';
 
 function formatKm(meters: number): string {
   return `${(meters / 1000).toFixed(1)} km`;
+}
+
+// Fase C -- rotulos do motivo da parada (espelham VehicleIdleReason).
+const IDLE_REASON_LABELS: Record<VehicleIdleReason, string> = {
+  AGUARDANDO_CARGA: 'Aguardando carga',
+  AGUARDANDO_ORDEM: 'Aguardando ordem',
+  MANUTENCAO: 'Manutenção',
+  DOCUMENTACAO: 'Documentação',
+  DESCANSO: 'Descanso',
+  PATIO: 'Pátio',
+  OUTRO: 'Outro',
+};
+
+function formatIdleSince(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
 }
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
@@ -35,6 +51,17 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
   const [nearbyPlaza, setNearbyPlaza] = useState<NearbyTollPlaza | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  // Fase C -- periodo ocioso ABERTO do veiculo apos a ultima viagem deste
+  // motorista (Fase B ja o criou). So exibido quando NAO ha viagem ativa --
+  // o "fluxo pos-viagem". Recarrega a cada refresh/pull. Nunca cria nada.
+  const [idlePeriod, setIdlePeriod] = useState<DriverIdlePeriod | null>(null);
+
+  const loadIdlePeriod = useCallback(() => {
+    driverTripsApi
+      .getCurrentIdlePeriod()
+      .then(setIdlePeriod)
+      .catch(() => undefined);
+  }, []);
 
   // Fase 70 -- badge de nao lidas: carrega ao abrir a Home e volta a
   // consultar em todo pull-to-refresh (ver onPullToRefresh) -- sem push,
@@ -50,6 +77,16 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
   useEffect(() => {
     loadUnreadNotifications();
   }, [loadUnreadNotifications]);
+
+  // So consulta o periodo ocioso quando NAO ha viagem ativa (fluxo
+  // pos-viagem). Com viagem ativa, o veiculo nao esta parado entre operacoes.
+  useEffect(() => {
+    if (activeTrip) {
+      setIdlePeriod(null);
+      return;
+    }
+    loadIdlePeriod();
+  }, [activeTrip, loadIdlePeriod]);
 
   const isTracking = activeTrip?.status === 'IN_PROGRESS';
   useLocationTracker(isTracking ? activeTrip!.id : null, config);
@@ -137,6 +174,7 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
     setRefreshing(true);
     await refresh();
     loadUnreadNotifications();
+    loadIdlePeriod();
     setRefreshing(false);
   }
 
@@ -168,14 +206,33 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
         </View>
 
         {!activeTrip ? (
-          <Card>
-            <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
-              Nenhuma viagem atribuida no momento.
-            </Text>
-            <Text style={{ color: colors.textMuted }}>
-              Assim que uma viagem for despachada para voce, ela aparecera aqui.
-            </Text>
-          </Card>
+          <>
+            {idlePeriod && idlePeriod.status === 'OPEN' ? (
+              <Card>
+                <Text style={{ color: colors.warning, fontWeight: '700' }}>VEICULO PARADO</Text>
+                <Text style={{ color: colors.text }}>Veiculo: {idlePeriod.plate ?? '-'}</Text>
+                <Text style={{ color: colors.textMuted }}>
+                  Parado desde {formatIdleSince(idlePeriod.startedAt)}
+                </Text>
+                <Text style={{ color: colors.textMuted }}>
+                  Motivo: {IDLE_REASON_LABELS[idlePeriod.reason]}
+                  {idlePeriod.source === 'AUTO' ? ' (automatico)' : ''}
+                </Text>
+                <Button
+                  label="Finalizar operacao / informar motivo"
+                  onPress={() => navigation.navigate('IdleReason')}
+                />
+              </Card>
+            ) : null}
+            <Card>
+              <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
+                Nenhuma viagem atribuida no momento.
+              </Text>
+              <Text style={{ color: colors.textMuted }}>
+                Assim que uma viagem for despachada para voce, ela aparecera aqui.
+              </Text>
+            </Card>
+          </>
         ) : activeTrip.status === 'PAUSED' ? (
           <Card>
             <Text style={{ color: colors.warning, fontWeight: '700' }}>VIAGEM PAUSADA</Text>

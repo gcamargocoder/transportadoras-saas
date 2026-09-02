@@ -25,6 +25,10 @@ function buildPrismaMock(overrides: Record<string, unknown> = {}) {
     tripOccurrence: { findMany: emptyFindMany() },
     vehicle: { findMany: emptyFindMany() },
     vehicleMaintenance: { findMany: emptyFindMany() },
+    // Fase A -- collectIdleVehicles le TenantSettings.preferences para o
+    // limiar de ociosidade; null = sem limiar = coletor retorna [] cedo
+    // (nenhum outro teste desta suite e afetado).
+    tenantSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     // Fase 108 -- collectMaintenancePlansDue; Fase 110 -- collectTireLifespanNearReplacement
     // (via tireMovement); Fase 111 -- collectChecklistCriticalNonConformity.
     // Estes 3 nunca tinham sido adicionados a este mock (spec nunca foi

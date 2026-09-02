@@ -80,6 +80,7 @@ import {
   TripRoutingSuggestionEntity,
 } from '../entities/trip-routing-suggestion.entity';
 import { TripMetricsEntity } from '../entities/trip-metrics.entity';
+import { TripReturnConsolidationEntity } from '../entities/trip-return-consolidation.entity';
 import { TripSummaryEntity } from '../entities/trip-summary.entity';
 import { TripOperationsListEntity } from '../entities/trip-operation.entity';
 import { TripEntity } from '../entities/trip.entity';
@@ -90,6 +91,7 @@ import { RouteVersionsService } from '../services/route-versions.service';
 import { TripDeliveryStopsService } from '../services/trip-delivery-stops.service';
 import { TripEtaService } from '../services/trip-eta.service';
 import { TripMetricsService } from '../services/trip-metrics.service';
+import { TripReturnConsolidationService } from '../services/trip-return-consolidation.service';
 import { TripRoutingService } from '../services/trip-routing.service';
 import { TripTimelineService } from '../services/trip-timeline.service';
 import { TripsService } from '../services/trips.service';
@@ -106,6 +108,7 @@ export class TripsController {
     private readonly tripMetricsService: TripMetricsService,
     private readonly tripExpensesService: TripExpensesService,
     private readonly tripSettlementsService: TripSettlementsService,
+    private readonly tripReturnConsolidationService: TripReturnConsolidationService,
     private readonly tollReconciliationService: TollReconciliationService,
     private readonly tripStopsService: TripStopsService,
     private readonly axleEventsService: AxleEventsService,
@@ -898,6 +901,35 @@ export class TripsController {
     @Param('id', ParseUUIDPipe) tripId: string,
   ): Promise<TripFinancialResultEntity> {
     return this.tripSettlementsService.getFinancialResult(
+      this.tenantContext.requireTenantId(),
+      tripId,
+    );
+  }
+
+  // ==========================================================================
+  // CONSOLIDACAO IDA -> RETORNO (Fase E) -- visao DERIVADA e somente-leitura
+  // que agrega a viagem de IDA e seus RETORNOS diretamente vinculados por
+  // Trip.previousTripId (Fase D). Nao persiste nada, nao cria agrupador. O
+  // financeiro por perna e IDENTICO a GET /trips/:id/financial-result
+  // (mesma regra, nunca recalculado); o agregado e so soma em memoria dos
+  // valores que ja existem. Nunca infere ida/retorno; carga real (LOADED/
+  // EMPTY) vem so de loadStatus.
+  // ==========================================================================
+  @Get(':id/return-consolidation')
+  @Roles(...TRIP_SETTLEMENT_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Consolidacao DERIVADA (somente leitura) da OPERACAO ida + retorno: a viagem de ida consultada ' +
+      'e os retornos vinculados por Trip.previousTripId. Distancia (pernas concluidas), custos, ' +
+      'receitas e resultado agregados APENAS com valores existentes -- nunca inventa 0, nunca infere ' +
+      'carga, nunca altera dado nenhum. Ida sem retorno e valida (returnLegCount = 0).',
+  })
+  @ApiOkResponse({ type: TripReturnConsolidationEntity })
+  @ApiNotFoundResponse({ description: 'Viagem nao encontrada nesta empresa.' })
+  findReturnConsolidation(
+    @Param('id', ParseUUIDPipe) tripId: string,
+  ): Promise<TripReturnConsolidationEntity> {
+    return this.tripReturnConsolidationService.getConsolidation(
       this.tenantContext.requireTenantId(),
       tripId,
     );

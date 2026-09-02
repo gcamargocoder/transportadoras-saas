@@ -11,6 +11,12 @@
 // (documentado em docs/fleet-maintenance-dashboard.md).
 export type MaintenancePlanEvaluationStatus = 'OK' | 'DUE_SOON' | 'OVERDUE' | 'UNKNOWN';
 
+// Fase 81 -- quando status === 'OVERDUE', por qual(is) criterio(s) venceu.
+// null nos demais status. Aditivo: `status` (4 valores) permanece intacto,
+// os 4 consumidores de evaluateMaintenancePlan que so leem `.status` nao
+// sao afetados.
+export type MaintenancePlanOverdueReason = 'KM' | 'DATE' | 'BOTH' | null;
+
 export interface MaintenancePlanForEvaluation {
   intervalKm: number | null;
   intervalDays: number | null;
@@ -25,6 +31,7 @@ export interface MaintenancePlanLastService {
 
 export interface MaintenancePlanEvaluation {
   status: MaintenancePlanEvaluationStatus;
+  overdueReason: MaintenancePlanOverdueReason;
   dueOdometerKm: number | null;
   dueDate: Date | null;
   overdueByKm: number | null;
@@ -33,6 +40,7 @@ export interface MaintenancePlanEvaluation {
 
 const UNKNOWN_EVALUATION: MaintenancePlanEvaluation = {
   status: 'UNKNOWN',
+  overdueReason: null,
   dueOdometerKm: null,
   dueDate: null,
   overdueByKm: null,
@@ -91,5 +99,13 @@ export function evaluateMaintenancePlan(
       ? 'DUE_SOON'
       : 'OK';
 
-  return { status, dueOdometerKm, dueDate, overdueByKm, overdueByDays };
+  // Fase 81 -- granularidade do vencimento (so quando OVERDUE).
+  let overdueReason: MaintenancePlanOverdueReason = null;
+  if (status === 'OVERDUE') {
+    const kmOverdue = kmStatus === 'OVERDUE';
+    const dateOverdue = dateStatus === 'OVERDUE';
+    overdueReason = kmOverdue && dateOverdue ? 'BOTH' : kmOverdue ? 'KM' : 'DATE';
+  }
+
+  return { status, overdueReason, dueOdometerKm, dueDate, overdueByKm, overdueByDays };
 }

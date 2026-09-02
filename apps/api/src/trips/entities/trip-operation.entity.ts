@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { AlertSeverity, AlertType, ChecklistExecutionStatus, TripPriority, TripStatus } from '@prisma/client';
+import {
+  AlertSeverity,
+  AlertType,
+  ChecklistExecutionStatus,
+  TripLoadStatus,
+  TripPriority,
+  TripStatus,
+} from '@prisma/client';
 import { MaintenancePlanEvaluationStatus } from '../../fleet-operations/utils/maintenance-plan-status.util';
 import { ReconciliationStatus } from '../../toll-routes/utils/toll-reconciliation.util';
 import { LocationFreshness, MovementStatus, OperationalStatus } from '../utils/operational-status.util';
@@ -119,6 +126,20 @@ export class TripOperationEntity {
 
   @ApiProperty()
   destinationName!: string;
+
+  // Fase D -- carga REAL informada na largada (nunca inferida).
+  @ApiProperty({ enum: TripLoadStatus, nullable: true, description: 'Trip.loadStatus -- carregado/vazio real da largada.' })
+  loadStatus!: TripLoadStatus | null;
+
+  // Fase D -- INTENCAO de carga do planejamento administrativo. Distinta de
+  // loadStatus; nunca confundir planejado com realizado.
+  @ApiProperty({ enum: TripLoadStatus, nullable: true, description: 'Trip.plannedLoadStatus -- intencao de carga do planejamento.' })
+  plannedLoadStatus!: TripLoadStatus | null;
+
+  // Fase D -- viagem de IDA vinculada (vinculo explicito). Null quando esta
+  // viagem nao foi marcada como retorno de outra.
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Trip.previousTripId -- ida que originou este retorno.' })
+  previousTripId!: string | null;
 
   @ApiProperty({ nullable: true })
   actualDeparture!: Date | null;

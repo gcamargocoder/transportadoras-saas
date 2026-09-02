@@ -61,6 +61,7 @@ import { TollRoutesService } from '../../toll-routes/services/toll-routes.servic
 import { TollReconciliationService } from '../../toll-routes/services/toll-reconciliation.service';
 import { TollReconciliationResult } from '../../toll-routes/utils/toll-reconciliation.util';
 import { TripSettlementsService } from '../../trip-settlements/services/trip-settlements.service';
+import { VehicleIdlePeriodsService } from '../../vehicle-idle-periods/services/vehicle-idle-periods.service';
 import { CustomersService } from './customers.service';
 import { LocationsService } from './locations.service';
 
@@ -71,6 +72,21 @@ const TRIP_INCLUDE = {
   destination: true,
   composition: { include: { vehicle: true, axleConfiguration: true } },
   tollRoute: true,
+  // Fase D -- dados MINIMOS da viagem de ida vinculada (vinculo explicito,
+  // Trip.previousTripId). Nested SELECT (nao include) -- o Prisma resolve
+  // como 1 query em lote por pagina (WHERE id IN (...)), nunca N+1. So
+  // leitura; nunca carrega satelites financeiros/operacionais da ida.
+  previousTrip: {
+    select: {
+      id: true,
+      status: true,
+      plannedDeparture: true,
+      loadStatus: true,
+      plannedLoadStatus: true,
+      origin: { select: { name: true } },
+      destination: { select: { name: true } },
+    },
+  },
 } satisfies Prisma.TripInclude;
 
 // Viagens ainda "em aberto" (nao concluidas/canceladas) -- usado tanto para
@@ -168,6 +184,7 @@ export class TripsService {
     private readonly tollRoutesService: TollRoutesService,
     private readonly tollReconciliationService: TollReconciliationService,
     private readonly tripSettlementsService: TripSettlementsService,
+    private readonly idlePeriodsService: VehicleIdlePeriodsService,
   ) {}
 
   async findAll(tenantId: string, query: FindTripsQueryDto): Promise<PaginatedTripsEntity> {
@@ -540,6 +557,12 @@ export class TripsService {
       entity.vehiclePlate = trip.composition?.vehicle.plate ?? null;
       entity.originName = trip.origin.name;
       entity.destinationName = trip.destination.name;
+      // Fase D -- carga REAL (largada) + INTENCAO planejada + vinculo de
+      // retorno. Escalares ja carregados pelo TRIP_INCLUDE -- zero query
+      // extra. So exibicao; nunca confundir planejado com realizado.
+      entity.loadStatus = trip.loadStatus;
+      entity.plannedLoadStatus = trip.plannedLoadStatus;
+      entity.previousTripId = trip.previousTripId;
       entity.actualDeparture = trip.actualDeparture;
       entity.initialOdometerKm = toNumberOrNull(trip.initialOdometerKm);
       entity.currentOdometerKm = toNumberOrNull(trip.composition?.vehicle.odometerKm ?? null);
@@ -598,6 +621,28 @@ export class TripsService {
     return result;
   }
 
+  // Fase D -- valida o vinculo EXPLICITO ida -> retorno (Trip.previousTripId).
+  // Regras do pedido: FK inexistente OU de outro tenant -> 404 (mesma
+  // mensagem/handler ja usado em todo o modulo); apontar para a propria
+  // viagem -> 400. Nunca cria vinculo automatico -- so e chamado quando o
+  // operador informa previousTripId no create/update.
+  private async assertPreviousTripLinkable(
+    tenantId: string,
+    selfTripId: string | null,
+    previousTripId: string,
+  ): Promise<void> {
+    if (selfTripId !== null && previousTripId === selfTripId) {
+      throw new BadRequestException('previousTripId nao pode ser a propria viagem.');
+    }
+    const previous = await this.prisma.trip.findFirst({
+      where: { id: previousTripId, tenantId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!previous) {
+      throw new NotFoundException('Viagem anterior (previousTripId) nao encontrada.');
+    }
+  }
+
   async create(
     tenantId: string,
     dto: CreateTripDto,
@@ -627,6 +672,9 @@ export class TripsService {
     await this.assertDriverAvailable(tenantId, dto.driverId, departure, arrival);
     const composition = await this.assertCompositionAvailable(tenantId, dto.compositionId);
     await this.assertVehicleAvailable(tenantId, composition.vehicleId, departure, arrival);
+    if (dto.previousTripId) {
+      await this.assertPreviousTripLinkable(tenantId, null, dto.previousTripId);
+    }
 
     const trip = await this.prisma.$transaction(async (tx) => {
       const created = await tx.trip.create({
@@ -642,6 +690,11 @@ export class TripsService {
             tollRouteId: dto.tollRouteId,
             priority: dto.priority,
             notes: dto.notes,
+            // Fase D -- intencao/vinculo de planejamento. NUNCA tocam
+            // status, composicao, actualDeparture/actualArrival nem
+            // loadStatus (esse continua exclusivo da largada do motorista).
+            previousTripId: dto.previousTripId,
+            plannedLoadStatus: dto.plannedLoadStatus,
           }),
         },
       });
@@ -761,6 +814,12 @@ export class TripsService {
       await this.assertDriverAvailable(tenantId, dto.driverId as string, departure, arrival, id);
     }
 
+    // Fase D -- so valida quando um previousTripId REAL e informado; `null`
+    // (desvincular) e undefined (nao mexer) nao passam pela checagem.
+    if (dto.previousTripId !== undefined && dto.previousTripId !== null) {
+      await this.assertPreviousTripLinkable(tenantId, id, dto.previousTripId);
+    }
+
     const currentCompositionId = before.composition?.id ?? null;
     const compositionChanged =
       dto.compositionId !== undefined && dto.compositionId !== currentCompositionId;
@@ -791,6 +850,11 @@ export class TripsService {
           plannedArrival: dto.plannedArrival ? arrival : undefined,
           priority: dto.priority,
           notes: dto.notes,
+          // Fase D -- compact() preserva `null` (desvincular / limpar
+          // intencao) e descarta `undefined` (nao mexer). Nunca afetam
+          // status/composicao/actual*/loadStatus.
+          previousTripId: dto.previousTripId,
+          plannedLoadStatus: dto.plannedLoadStatus,
         }),
       });
 
@@ -917,6 +981,14 @@ export class TripsService {
       }
     }
 
+    // Fase B -- efeitos colaterais sobre VehicleIdlePeriod, gravados na MESMA
+    // transacao da transicao de status (atomico com a viagem). Auditados
+    // depois do commit (best-effort). Idempotencia/concorrencia garantidas
+    // no banco (ver VehicleIdlePeriodsService).
+    let idleAutoOpened = false;
+    let idleAutoClosedPeriodId: string | null = null;
+    const vehicleId = before.composition?.vehicleId ?? null;
+
     await this.prisma.$transaction(async (tx) => {
       await tx.trip.update({ where: { id }, data });
 
@@ -935,6 +1007,36 @@ export class TripsService {
             data: { odometerKm: bumpedOdometerKm },
           });
         }
+        // Fase B -- ABRE o periodo ocioso do veiculo, ancorado em
+        // actualArrival (nunca inventado). Nunca duplica (ON CONFLICT DO
+        // NOTHING contra o indice parcial "1 aberto por veiculo").
+        if (vehicleId && data.actualArrival instanceof Date) {
+          const opened = await this.idlePeriodsService.openForCompletedTrip(tx, {
+            tenantId,
+            vehicleId,
+            startedAt: data.actualArrival,
+            tripBeforeId: id,
+          });
+          idleAutoOpened = opened.created;
+        }
+      }
+
+      // Fase B -- ao INICIAR de verdade (1a transicao para IN_PROGRESS,
+      // quando actualDeparture passa a existir): FECHA o periodo ocioso
+      // aberto do veiculo (se houver). Nunca cria um periodo retroativo.
+      if (
+        dto.status === TripStatus.IN_PROGRESS &&
+        !before.actualDeparture &&
+        vehicleId &&
+        data.actualDeparture instanceof Date
+      ) {
+        const closed = await this.idlePeriodsService.closeForStartedTrip(tx, {
+          tenantId,
+          vehicleId,
+          endedAt: data.actualDeparture,
+          tripAfterId: id,
+        });
+        idleAutoClosedPeriodId = closed.periodId;
       }
     });
 
@@ -965,6 +1067,15 @@ export class TripsService {
         userAgent: metadata.userAgent,
       });
       await this.updateActualTripMetrics(tenantId, id, before, dto, actor, metadata);
+    }
+
+    // Fase B -- auditoria dos efeitos sobre VehicleIdlePeriod (pos-commit,
+    // best-effort: nunca desfaz a transicao ja confirmada).
+    if (idleAutoOpened && vehicleId) {
+      await this.idlePeriodsService.logAutoOpen(tenantId, vehicleId, id, actor, metadata);
+    }
+    if (idleAutoClosedPeriodId) {
+      await this.idlePeriodsService.logAutoClose(tenantId, idleAutoClosedPeriodId, id, actor, metadata);
     }
 
     return this.findOne(tenantId, id);

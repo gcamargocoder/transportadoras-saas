@@ -41,6 +41,35 @@ export type AxleEventSource = 'DRIVER_INPUT' | 'TIMEOUT_DEFAULT';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED';
 export type TripLoadStatus = 'LOADED' | 'EMPTY';
 
+// Fase C -- motivo de um periodo ocioso persistido (VehicleIdlePeriod).
+// Espelha o enum VehicleIdleReason do backend.
+export type VehicleIdleReason =
+  | 'AGUARDANDO_CARGA'
+  | 'AGUARDANDO_ORDEM'
+  | 'MANUTENCAO'
+  | 'DOCUMENTACAO'
+  | 'DESCANSO'
+  | 'PATIO'
+  | 'OUTRO';
+
+export type VehicleIdlePeriodSource = 'AUTO' | 'MANUAL_ADMIN' | 'DRIVER_APP';
+
+// GET /driver/idle-period -- periodo ocioso ABERTO do veiculo que este
+// motorista acabou de operar (ou null). A duracao/datas sao sempre do
+// backend; o app so exibe e permite ajustar o `reason`.
+export interface DriverIdlePeriod {
+  id: string;
+  vehicleId: string;
+  plate: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  durationMinutes: number | null;
+  reason: VehicleIdleReason;
+  source: VehicleIdlePeriodSource;
+  previousDestinationLabel: string | null;
+  status: 'OPEN' | 'CLOSED';
+}
+
 export interface LastLocation {
   latitude: number;
   longitude: number;

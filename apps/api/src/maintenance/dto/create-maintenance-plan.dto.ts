@@ -60,4 +60,10 @@ export class CreateMaintenancePlanDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @ApiPropertyOptional({ maxLength: 1000, description: 'Fase 81 -- observacoes livres do plano.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
 }

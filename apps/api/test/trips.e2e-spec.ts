@@ -1599,4 +1599,479 @@ describe('Trips (e2e)', () => {
       expect(queriesFor15).toBeLessThanOrEqual(queriesFor3 + 2);
     }, 120000);
   });
+
+  // ==========================================================================
+  // Fase D -- vinculo EXPLICITO ida -> retorno (Trip.previousTripId) +
+  // intencao de carga do planejamento (Trip.plannedLoadStatus). Nunca
+  // inferido automaticamente; nunca altera Trip.loadStatus (valor REAL da
+  // largada, Fase 27); nunca cria Operation/roundTrip agregado.
+  // ==========================================================================
+  describe('Fase D -- vinculo ida -> retorno + plannedLoadStatus', () => {
+    // Mesmo padrao de trip-empty-runs.e2e-spec.ts -- unica forma real de
+    // setar Trip.loadStatus e POST /driver/trips/:id/start.
+    async function loginAsDriver(tenantId: string, adminAuth: string, driverId: string) {
+      const unique = randomUUID().replace(/-/g, '').slice(0, 10);
+      const email = `driver-${unique}@teste.com`;
+      const password = 'SenhaForte123!';
+      const userRes = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Motorista App', email, password, role: 'DRIVER' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(`/api/v1/drivers/${driverId}/user-link`)
+        .set('Authorization', adminAuth)
+        .send({ userAccountId: userRes.body.data.id })
+        .expect(200);
+      const loginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ tenantId, email, password })
+        .expect(200);
+      return `Bearer ${loginRes.body.data.accessToken as string}`;
+    }
+
+    describe('vinculo previousTripId', () => {
+      it('cria viagem SEM previousTripId: previousTripId e previousTrip vem null', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevNone');
+        const auth = `Bearer ${adminAccessToken}`;
+        const prereqs = await setupTripPrerequisites(auth);
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs))
+          .expect(201);
+
+        expect(res.body.data.previousTripId).toBeNull();
+        expect(res.body.data.previousTrip).toBeNull();
+      });
+
+      it('cria viagem COM previousTripId valido: aparece no create e no GET (dados minimos da ida)', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevValid');
+        const auth = `Bearer ${adminAccessToken}`;
+        const idaPrereqs = await setupTripPrerequisites(auth);
+        const idaRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(idaPrereqs, { plannedDeparture: '2026-09-01T08:00:00.000Z', plannedArrival: '2026-09-02T18:00:00.000Z' }))
+          .expect(201);
+        const idaId = idaRes.body.data.id as string;
+
+        const retornoPrereqs = await setupTripPrerequisites(auth);
+        const retornoRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(
+            buildTripPayload(retornoPrereqs, {
+              previousTripId: idaId,
+              plannedDeparture: '2026-09-05T08:00:00.000Z',
+              plannedArrival: '2026-09-06T18:00:00.000Z',
+            }),
+          )
+          .expect(201);
+        expect(retornoRes.body.data.previousTripId).toBe(idaId);
+        expect(retornoRes.body.data.previousTrip).toMatchObject({
+          id: idaId,
+          status: 'PLANNED',
+          plannedLoadStatus: null,
+          loadStatus: null,
+        });
+        expect(typeof retornoRes.body.data.previousTrip.originName).toBe('string');
+        expect(typeof retornoRes.body.data.previousTrip.destinationName).toBe('string');
+
+        const getRes = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${retornoRes.body.data.id}`)
+          .set('Authorization', auth)
+          .expect(200);
+        expect(getRes.body.data.previousTripId).toBe(idaId);
+        expect(getRes.body.data.previousTrip.id).toBe(idaId);
+      });
+
+      it('previousTripId com FK inexistente -> 404', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevMissing');
+        const auth = `Bearer ${adminAccessToken}`;
+        const prereqs = await setupTripPrerequisites(auth);
+
+        await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs, { previousTripId: randomUUID() }))
+          .expect(404);
+      });
+
+      it('previousTripId de outro tenant -> 404 (isolamento multi-tenant)', async () => {
+        const { adminAccessToken: tokenA } = await createTenantAndLoginAsAdmin('PrevTenantA');
+        const authA = `Bearer ${tokenA}`;
+        const idaPrereqsA = await setupTripPrerequisites(authA);
+        const idaResA = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', authA)
+          .send(buildTripPayload(idaPrereqsA))
+          .expect(201);
+
+        const { adminAccessToken: tokenB } = await createTenantAndLoginAsAdmin('PrevTenantB');
+        const authB = `Bearer ${tokenB}`;
+        const prereqsB = await setupTripPrerequisites(authB);
+
+        await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', authB)
+          .send(buildTripPayload(prereqsB, { previousTripId: idaResA.body.data.id }))
+          .expect(404);
+      });
+
+      it('PATCH apontando previousTripId para a propria viagem -> 400', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevSelf');
+        const auth = `Bearer ${adminAccessToken}`;
+        const prereqs = await setupTripPrerequisites(auth);
+        const createRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs))
+          .expect(201);
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${createRes.body.data.id}`)
+          .set('Authorization', auth)
+          .send({ previousTripId: createRes.body.data.id })
+          .expect(400);
+      });
+
+      it('PATCH vincula depois da criacao e PATCH com null remove o vinculo', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevPatch');
+        const auth = `Bearer ${adminAccessToken}`;
+        const idaPrereqs = await setupTripPrerequisites(auth);
+        const idaRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(idaPrereqs))
+          .expect(201);
+
+        const retornoPrereqs = await setupTripPrerequisites(auth);
+        const retornoRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(retornoPrereqs))
+          .expect(201);
+        const retornoId = retornoRes.body.data.id as string;
+
+        const linked = await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${retornoId}`)
+          .set('Authorization', auth)
+          .send({ previousTripId: idaRes.body.data.id })
+          .expect(200);
+        expect(linked.body.data.previousTripId).toBe(idaRes.body.data.id);
+
+        const unlinked = await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${retornoId}`)
+          .set('Authorization', auth)
+          .send({ previousTripId: null })
+          .expect(200);
+        expect(unlinked.body.data.previousTripId).toBeNull();
+        expect(unlinked.body.data.previousTrip).toBeNull();
+      });
+
+      // TripsService.softDelete (regra ja existente, inalterada por esta
+      // fase) faz DELECAO LOGICA (deletedAt = now, prisma.trip.UPDATE) --
+      // nunca um DELETE fisico de linha. Por isso `DELETE /trips/:id` na
+      // API NAO aciona o `ON DELETE SET NULL` do Postgres: a linha da ida
+      // continua existindo (so marcada deletedAt), entao previousTripId do
+      // retorno permanece apontando para ela.
+      it('excluir (delecao logica) a viagem de ida pela API NAO desfaz o vinculo -- SetNull so age em exclusao FISICA de linha', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevSoftDelete');
+        const auth = `Bearer ${adminAccessToken}`;
+        const idaPrereqs = await setupTripPrerequisites(auth);
+        const idaRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(idaPrereqs))
+          .expect(201);
+
+        const retornoPrereqs = await setupTripPrerequisites(auth);
+        const retornoRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(retornoPrereqs, { previousTripId: idaRes.body.data.id }))
+          .expect(201);
+
+        // A ida esta PLANNED -> pode ser excluida (regra ja existente,
+        // inalterada por esta fase) -- mas e delecao LOGICA.
+        await request(app.getHttpServer())
+          .delete(`/api/v1/trips/${idaRes.body.data.id}`)
+          .set('Authorization', auth)
+          .expect(204);
+
+        const after = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${retornoRes.body.data.id}`)
+          .set('Authorization', auth)
+          .expect(200);
+        expect(after.body.data.previousTripId).toBe(idaRes.body.data.id);
+        expect(after.body.data.status).toBe('PLANNED');
+        // A propria ida deixa de ser acessivel (deletedAt preenchido) --
+        // GET direto nela agora e 404, regra ja existente e intocada.
+        await request(app.getHttpServer())
+          .get(`/api/v1/trips/${idaRes.body.data.id}`)
+          .set('Authorization', auth)
+          .expect(404);
+      });
+
+      // Prova, no nivel do banco, que a FK `trips_previous_trip_id_fkey`
+      // (ON DELETE SET NULL) realmente existe e funciona -- cenario que so
+      // ocorre numa exclusao FISICA de linha (nunca disparada pela API
+      // publica, que so faz delecao logica; pode ocorrer por rotina de
+      // retencao de dados ou pela Cascade de Tenant.onDelete no futuro).
+      it('onDelete: SetNull (nivel do banco): remover fisicamente a linha da ida limpa previousTripId do retorno', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevHardDeleteFk');
+        const auth = `Bearer ${adminAccessToken}`;
+        const idaPrereqs = await setupTripPrerequisites(auth);
+        const idaRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(idaPrereqs))
+          .expect(201);
+
+        const retornoPrereqs = await setupTripPrerequisites(auth);
+        const retornoRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(retornoPrereqs, { previousTripId: idaRes.body.data.id }))
+          .expect(201);
+
+        // Satelites 1:1 (TripMetrics/RouteVersion/TripComposition) tem
+        // onDelete: Cascade a partir de Trip -- o proprio Postgres os
+        // remove junto. Nunca exercitado pela API publica (que so faz
+        // delecao logica); usado aqui so para provar a FK do vinculo.
+        await prisma.trip.delete({ where: { id: idaRes.body.data.id } });
+
+        const after = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${retornoRes.body.data.id}`)
+          .set('Authorization', auth)
+          .expect(200);
+        expect(after.body.data.previousTripId).toBeNull();
+        expect(after.body.data.previousTrip).toBeNull();
+        expect(after.body.data.status).toBe('PLANNED');
+      });
+    });
+
+    describe('plannedLoadStatus (intencao de planejamento)', () => {
+      it('create com plannedLoadStatus=LOADED / =EMPTY; sem informar fica null', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PlanLoadCreate');
+        const auth = `Bearer ${adminAccessToken}`;
+
+        const prereqsLoaded = await setupTripPrerequisites(auth);
+        const loadedRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqsLoaded, { plannedLoadStatus: 'LOADED' }))
+          .expect(201);
+        expect(loadedRes.body.data.plannedLoadStatus).toBe('LOADED');
+
+        const prereqsEmpty = await setupTripPrerequisites(auth);
+        const emptyRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqsEmpty, { plannedLoadStatus: 'EMPTY' }))
+          .expect(201);
+        expect(emptyRes.body.data.plannedLoadStatus).toBe('EMPTY');
+
+        const prereqsNone = await setupTripPrerequisites(auth);
+        const noneRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqsNone))
+          .expect(201);
+        expect(noneRes.body.data.plannedLoadStatus).toBeNull();
+      });
+
+      it('PATCH com plannedLoadStatus=null limpa a intencao previamente informada', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PlanLoadClear');
+        const auth = `Bearer ${adminAccessToken}`;
+        const prereqs = await setupTripPrerequisites(auth);
+        const createRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs, { plannedLoadStatus: 'EMPTY' }))
+          .expect(201);
+
+        const cleared = await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${createRes.body.data.id}`)
+          .set('Authorization', auth)
+          .send({ plannedLoadStatus: null })
+          .expect(200);
+        expect(cleared.body.data.plannedLoadStatus).toBeNull();
+      });
+
+      it('plannedLoadStatus=EMPTY com loadStatus=LOADED real e valido -- NUNCA gera correcao/inferencia automatica', async () => {
+        const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('PlanVsReal');
+        const auth = `Bearer ${adminAccessToken}`;
+        const prereqs = await setupTripPrerequisites(auth);
+        const createRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs, { plannedLoadStatus: 'EMPTY' }))
+          .expect(201);
+        const tripId = createRes.body.data.id as string;
+
+        const driverAuth = await loginAsDriver(tenantId, auth, prereqs.driverId);
+        await request(app.getHttpServer())
+          .post(`/api/v1/driver/trips/${tripId}/start`)
+          .set('Authorization', driverAuth)
+          .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+          .expect(201);
+
+        const after = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${tripId}`)
+          .set('Authorization', auth)
+          .expect(200);
+        // O exemplo exato do pedido: plannedLoadStatus=EMPTY e loadStatus=LOADED
+        // coexistindo sem nenhuma correcao automatica de nenhum dos dois lados.
+        expect(after.body.data.plannedLoadStatus).toBe('EMPTY');
+        expect(after.body.data.loadStatus).toBe('LOADED');
+      });
+
+      it('loadStatus continua sendo definido SOMENTE no fluxo de largada -- create/update recusam o campo (400, nao whitelisted)', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('LoadStatusReadOnly');
+        const auth = `Bearer ${adminAccessToken}`;
+        const prereqs = await setupTripPrerequisites(auth);
+
+        await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs, { loadStatus: 'LOADED' }))
+          .expect(400);
+
+        const createRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(prereqs))
+          .expect(201);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${createRes.body.data.id}`)
+          .set('Authorization', auth)
+          .send({ loadStatus: 'EMPTY' })
+          .expect(400);
+      });
+    });
+
+    describe('nao afeta financeiro/operacional individual nem VehicleIdlePeriod', () => {
+      it('ida + retorno vinculados nao alteram os calculos financeiros individuais (TripMetrics/TripSettlement continuam por tripId)', async () => {
+        const { adminAccessToken } = await createTenantAndLoginAsAdmin('PrevFinance');
+        const auth = `Bearer ${adminAccessToken}`;
+
+        const idaPrereqs = await setupTripPrerequisites(auth);
+        const idaRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(idaPrereqs, { plannedMetrics: { distanceKm: 500, totalCost: 3000 } }))
+          .expect(201);
+
+        const retornoPrereqs = await setupTripPrerequisites(auth);
+        const retornoRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(
+            buildTripPayload(retornoPrereqs, {
+              previousTripId: idaRes.body.data.id,
+              plannedMetrics: { distanceKm: 300, totalCost: 1200 },
+            }),
+          )
+          .expect(201);
+
+        const idaSummary = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${idaRes.body.data.id}/summary`)
+          .set('Authorization', auth)
+          .expect(200);
+        const retornoSummary = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${retornoRes.body.data.id}/summary`)
+          .set('Authorization', auth)
+          .expect(200);
+
+        // Cada viagem mantem seu proprio TripMetrics -- o vinculo nao soma,
+        // nao mistura e nao cria nenhum agregador ida+retorno.
+        expect(idaSummary.body.data.plannedTotalCost).toBe(3000);
+        expect(idaSummary.body.data.distanceKm).toBe(500);
+        expect(retornoSummary.body.data.plannedTotalCost).toBe(1200);
+        expect(retornoSummary.body.data.distanceKm).toBe(300);
+      });
+
+      it('VehicleIdlePeriod continua fechando normalmente na partida do retorno, mesmo com previousTripId setado (coexistem sem vinculo automatico)', async () => {
+        const { tenantId, adminAccessToken } = await createTenantAndLoginAsAdmin('PrevIdlePeriod');
+        const auth = `Bearer ${adminAccessToken}`;
+
+        const idaPrereqs = await setupTripPrerequisites(auth);
+        const idaRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send(buildTripPayload(idaPrereqs))
+          .expect(201);
+        const idaId = idaRes.body.data.id as string;
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${idaId}/status`)
+          .set('Authorization', auth)
+          .send({ status: 'IN_PROGRESS' })
+          .expect(200);
+        await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${idaId}/status`)
+          .set('Authorization', auth)
+          .send({ status: 'COMPLETED' })
+          .expect(200);
+
+        // Fase B: viagem concluida abre um VehicleIdlePeriod para o veiculo,
+        // tripBeforeId = ida. Isso NUNCA cria/altera previousTripId sozinho.
+        const openPeriods = await prisma.vehicleIdlePeriod.findMany({
+          where: { tenantId, vehicleId: idaPrereqs.vehicleId, endedAt: null },
+        });
+        expect(openPeriods).toHaveLength(1);
+        expect(openPeriods[0]!.tripBeforeId).toBe(idaId);
+
+        // O retorno usa o MESMO veiculo (uma NOVA composicao -- a da ida ja
+        // ficou permanentemente vinculada a ela, regra inalterada desta
+        // fase) e aponta EXPLICITAMENTE para a ida via previousTripId --
+        // vinculo informado pelo operador, nunca inferido pelo idle period.
+        const retornoCompositionId = await createComposition(auth, idaPrereqs.vehicleId);
+        const retornoOriginId = await createLocation(auth, `Origem retorno ${randomUUID()}`);
+        const retornoRes = await request(app.getHttpServer())
+          .post('/api/v1/trips')
+          .set('Authorization', auth)
+          .send({
+            driverId: idaPrereqs.driverId,
+            compositionId: retornoCompositionId,
+            originLocationId: retornoOriginId,
+            destinationLocationId: idaPrereqs.originId,
+            previousTripId: idaId,
+            plannedDeparture: '2026-09-10T08:00:00.000Z',
+            plannedArrival: '2026-09-11T18:00:00.000Z',
+          })
+          .expect(201);
+        const retornoId = retornoRes.body.data.id as string;
+
+        await request(app.getHttpServer())
+          .patch(`/api/v1/trips/${retornoId}/status`)
+          .set('Authorization', auth)
+          .send({ status: 'IN_PROGRESS' })
+          .expect(200);
+
+        // Fecha exatamente como antes da Fase D (Fase B intocada):
+        // tripAfterId = retorno, endedAt = actualDeparture do retorno.
+        const closedPeriod = await prisma.vehicleIdlePeriod.findFirst({
+          where: { tenantId, vehicleId: idaPrereqs.vehicleId, id: openPeriods[0]!.id },
+        });
+        expect(closedPeriod?.endedAt).not.toBeNull();
+        expect(closedPeriod?.tripAfterId).toBe(retornoId);
+        expect(closedPeriod?.tripBeforeId).toBe(idaId);
+
+        // As duas fontes coexistem naturalmente, sem se substituir: o
+        // vinculo de negocio (previousTripId) e a fronteira de ociosidade
+        // (VehicleIdlePeriod.tripBefore/tripAfter) apontam para as MESMAS
+        // viagens, mas continuam sendo conceitos e campos independentes.
+        const retorno = await request(app.getHttpServer())
+          .get(`/api/v1/trips/${retornoId}`)
+          .set('Authorization', auth)
+          .expect(200);
+        expect(retorno.body.data.previousTripId).toBe(idaId);
+        expect(closedPeriod?.tripBeforeId).toBe(retorno.body.data.previousTripId);
+      });
+    });
+  });
 });

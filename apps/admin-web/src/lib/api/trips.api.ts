@@ -25,6 +25,7 @@ import type {
   TripMetricsEntity,
   TripOccurrenceEntity,
   TripOperationsListEntity,
+  TripReturnConsolidationEntity,
   TripRoutingSuggestionEntity,
   TripSettlementEntity,
   TripSummaryEntity,
@@ -33,6 +34,7 @@ import type {
 import type {
   LocationType,
   TripDeliveryStopStatus,
+  TripLoadStatus,
   TripOccurrenceSeverity,
   TripOccurrenceStatus,
   TripOccurrenceType,
@@ -67,12 +69,20 @@ export interface CreateTripPayload {
   plannedArrival: string;
   priority?: TripPriority | undefined;
   notes?: string | undefined;
+  // Fase D -- vinculo explicito ida -> retorno + intencao de carga.
+  previousTripId?: string | undefined;
+  plannedLoadStatus?: TripLoadStatus | undefined;
 }
 
-// tollRouteId aceita null (para desvincular a rota) alem de string/undefined
-// -- Partial<CreateTripPayload> sozinho nao permitiria expressar "limpar".
-export type UpdateTripPayload = Partial<Omit<CreateTripPayload, 'tollRouteId'>> & {
+// tollRouteId / previousTripId / plannedLoadStatus aceitam null (para
+// desvincular/limpar) alem de string/undefined -- Partial<CreateTripPayload>
+// sozinho nao permitiria expressar "limpar".
+export type UpdateTripPayload = Partial<
+  Omit<CreateTripPayload, 'tollRouteId' | 'previousTripId' | 'plannedLoadStatus'>
+> & {
   tollRouteId?: string | null | undefined;
+  previousTripId?: string | null | undefined;
+  plannedLoadStatus?: TripLoadStatus | null | undefined;
 };
 
 export function listTrips(query: FindTripsQuery, signal?: AbortSignal) {
@@ -294,6 +304,13 @@ export function getTripFinancialDashboard(id: string) {
 // receita contratada/faturada/recebida, custos e metricas por km.
 export function getTripFinancialResult(id: string) {
   return api.get<TripFinancialResultEntity>(`/trips/${id}/financial-result`);
+}
+
+// GET /trips/:id/return-consolidation (Fase E) -- consolidacao DERIVADA e
+// somente-leitura da operacao ida + retorno (vinculo explicito
+// Trip.previousTripId). Nunca persiste nem altera dado.
+export function getTripReturnConsolidation(id: string) {
+  return api.get<TripReturnConsolidationEntity>(`/trips/${id}/return-consolidation`);
 }
 
 // Conciliacao de pedagio (Fase 23) -- compara as pracas esperadas pela rota

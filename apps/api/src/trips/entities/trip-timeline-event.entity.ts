@@ -22,6 +22,11 @@ export type TripTimelineOrigin =
   | 'EXPENSE'
   | 'REVENUE'
   | 'OCCURRENCE'
+  // Fase B -- VehicleIdlePeriod (periodo ocioso persistido) aberto por esta
+  // viagem ao concluir (tripBeforeId) e/ou fechado por esta viagem ao
+  // iniciar (tripAfterId). Nunca uma segunda fonte de verdade -- so mais uma
+  // origem agregada na MESMA projecao em memoria.
+  | 'IDLE_PERIOD'
   | 'AUDIT';
 
 export const TRIP_TIMELINE_ORIGINS: TripTimelineOrigin[] = [
@@ -36,6 +41,7 @@ export const TRIP_TIMELINE_ORIGINS: TripTimelineOrigin[] = [
   'EXPENSE',
   'REVENUE',
   'OCCURRENCE',
+  'IDLE_PERIOD',
   'AUDIT',
 ];
 

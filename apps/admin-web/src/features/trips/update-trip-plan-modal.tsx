@@ -13,8 +13,8 @@ import { Select } from '../../components/ui/select';
 import { useToast } from '../../components/ui/toast';
 import { listTripCompositions } from '../../lib/api/fleet.api';
 import { toFriendlyMessage } from '../../lib/api/errors';
-import { TRIP_PRIORITY_LABELS } from '../../lib/labels';
-import { listCustomers, listLocations, updateTrip } from '../../lib/api/trips.api';
+import { TRIP_LOAD_STATUS_LABELS, TRIP_PRIORITY_LABELS } from '../../lib/labels';
+import { listCustomers, listLocations, listTrips, updateTrip } from '../../lib/api/trips.api';
 import { listTollRoutes } from '../../lib/api/toll-routes.api';
 import { listDrivers } from '../../lib/api/drivers.api';
 import type { TripEntity } from '../../types/entities';
@@ -67,6 +67,8 @@ export function UpdateTripPlanModal({
         plannedArrival: toDatetimeLocal(trip.plannedArrival),
         priority: trip.priority,
         notes: trip.notes ?? '',
+        previousTripId: trip.previousTripId ?? '',
+        plannedLoadStatus: trip.plannedLoadStatus ?? '',
       });
     }
   }, [open, trip, reset]);
@@ -77,6 +79,9 @@ export function UpdateTripPlanModal({
         ...values,
         customerId: values.customerId || undefined,
         tollRouteId: values.tollRouteId || null,
+        // Fase D -- string vazia = desvincular / limpar intencao (null).
+        previousTripId: values.previousTripId || null,
+        plannedLoadStatus: values.plannedLoadStatus || null,
         plannedDeparture: new Date(values.plannedDeparture).toISOString(),
         plannedArrival: new Date(values.plannedArrival).toISOString(),
       }),
@@ -249,6 +254,45 @@ export function UpdateTripPlanModal({
               />
             )}
           />
+        </FormField>
+
+        <FormField
+          label="Viagem de origem / viagem anterior"
+          htmlFor="update-previousTripId"
+          hint="Opcional — vincule explicitamente esta viagem como o retorno de uma viagem de ida. Deixe em branco para remover o vínculo."
+          className="sm:col-span-2"
+        >
+          <Controller
+            control={control}
+            name="previousTripId"
+            render={({ field }) => (
+              <EntitySelect
+                id="update-previousTripId"
+                queryKey={['trips', 'select-previous']}
+                queryFn={() => listTrips({ pageSize: 100, sortBy: 'createdAt', sortOrder: 'desc' })}
+                getOptionValue={(t) => t.id}
+                getOptionLabel={(t) => `${t.originName} → ${t.destinationName}`}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+                placeholder="Nenhuma"
+              />
+            )}
+          />
+        </FormField>
+
+        <FormField
+          label="Carga planejada"
+          htmlFor="update-plannedLoadStatus"
+          hint="Opcional — intenção do planejamento. Não substitui a carga real informada pelo motorista na largada."
+        >
+          <Select id="update-plannedLoadStatus" {...register('plannedLoadStatus')}>
+            <option value="">Não informado</option>
+            {Object.entries(TRIP_LOAD_STATUS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
         </FormField>
 
         <FormField

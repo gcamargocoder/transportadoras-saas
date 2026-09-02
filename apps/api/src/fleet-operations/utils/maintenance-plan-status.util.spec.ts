@@ -67,6 +67,61 @@ describe('evaluateMaintenancePlan', () => {
     expect(result.status).toBe('OVERDUE');
   });
 
+  // Fase 81 -- granularidade do vencimento (overdueReason).
+  describe('overdueReason (Fase 81)', () => {
+    it('null quando OK / DUE_SOON / UNKNOWN', () => {
+      const ok = evaluateMaintenancePlan(
+        { intervalKm: 10000, intervalDays: null, alertBeforeKm: 1000, alertBeforeDays: null },
+        { completedAt: null, odometerKm: 100000 },
+        105000,
+        NOW,
+      );
+      expect(ok.status).toBe('OK');
+      expect(ok.overdueReason).toBeNull();
+
+      const unknown = evaluateMaintenancePlan(
+        { intervalKm: 10000, intervalDays: null, alertBeforeKm: 1000, alertBeforeDays: null },
+        null,
+        50000,
+        NOW,
+      );
+      expect(unknown.overdueReason).toBeNull();
+    });
+
+    it("'KM' quando venceu so por quilometragem (data ainda OK)", () => {
+      const result = evaluateMaintenancePlan(
+        { intervalKm: 10000, intervalDays: 365, alertBeforeKm: 1000, alertBeforeDays: 5 },
+        { completedAt: new Date('2026-08-15T00:00:00.000Z'), odometerKm: 100000 },
+        111000,
+        NOW,
+      );
+      expect(result.status).toBe('OVERDUE');
+      expect(result.overdueReason).toBe('KM');
+    });
+
+    it("'DATE' quando venceu so por data (km ainda OK)", () => {
+      const result = evaluateMaintenancePlan(
+        { intervalKm: 100000, intervalDays: 30, alertBeforeKm: 1000, alertBeforeDays: 5 },
+        { completedAt: new Date('2026-07-01T00:00:00.000Z'), odometerKm: 100000 },
+        105000,
+        NOW,
+      );
+      expect(result.status).toBe('OVERDUE');
+      expect(result.overdueReason).toBe('DATE');
+    });
+
+    it("'BOTH' quando venceu por km E por data", () => {
+      const result = evaluateMaintenancePlan(
+        { intervalKm: 10000, intervalDays: 30, alertBeforeKm: 1000, alertBeforeDays: 5 },
+        { completedAt: new Date('2026-07-01T00:00:00.000Z'), odometerKm: 100000 },
+        111000,
+        NOW,
+      );
+      expect(result.status).toBe('OVERDUE');
+      expect(result.overdueReason).toBe('BOTH');
+    });
+  });
+
   it('sem nenhum intervalo utilizavel (dados faltando) retorna UNKNOWN, nunca inventa status', () => {
     const plan = { intervalKm: 10000, intervalDays: null, alertBeforeKm: 1000, alertBeforeDays: null };
     const lastService = { completedAt: new Date('2026-08-15T00:00:00.000Z'), odometerKm: null }; // sem odometro na ultima

@@ -85,20 +85,38 @@ export class TripTimelineService {
   }
 
   private async collectAllEvents(tenantId: string, tripId: string): Promise<TripTimelineEventEntity[]> {
-    const [stops, routeEvents, fuelSupplies, tollTransactions, axleEvents, checklists, fiscalDocuments, expenses, revenues, occurrences, auditLogs] =
-      await Promise.all([
-        this.prisma.tripStop.findMany({ where: { tenantId, tripId } }),
-        this.prisma.routeEvent.findMany({ where: { tenantId, tripId } }),
-        this.prisma.fuelSupply.findMany({ where: { tenantId, tripId } }),
-        this.prisma.tollTransaction.findMany({ where: { tenantId, tripId } }),
-        this.prisma.axleEvent.findMany({ where: { tenantId, tripId } }),
-        this.prisma.checklistExecution.findMany({ where: { tenantId, tripId } }),
-        this.prisma.fiscalDocument.findMany({ where: { tenantId, tripId } }),
-        this.prisma.tripExpense.findMany({ where: { tenantId, tripId } }),
-        this.prisma.tripRevenue.findMany({ where: { tenantId, tripId } }),
-        this.prisma.tripOccurrence.findMany({ where: { tenantId, tripId } }),
-        this.prisma.auditLog.findMany({ where: { tenantId, entityName: 'Trip', entityId: tripId } }),
-      ]);
+    const [
+      stops,
+      routeEvents,
+      fuelSupplies,
+      tollTransactions,
+      axleEvents,
+      checklists,
+      fiscalDocuments,
+      expenses,
+      revenues,
+      occurrences,
+      idlePeriods,
+      auditLogs,
+    ] = await Promise.all([
+      this.prisma.tripStop.findMany({ where: { tenantId, tripId } }),
+      this.prisma.routeEvent.findMany({ where: { tenantId, tripId } }),
+      this.prisma.fuelSupply.findMany({ where: { tenantId, tripId } }),
+      this.prisma.tollTransaction.findMany({ where: { tenantId, tripId } }),
+      this.prisma.axleEvent.findMany({ where: { tenantId, tripId } }),
+      this.prisma.checklistExecution.findMany({ where: { tenantId, tripId } }),
+      this.prisma.fiscalDocument.findMany({ where: { tenantId, tripId } }),
+      this.prisma.tripExpense.findMany({ where: { tenantId, tripId } }),
+      this.prisma.tripRevenue.findMany({ where: { tenantId, tripId } }),
+      this.prisma.tripOccurrence.findMany({ where: { tenantId, tripId } }),
+      // Fase B -- periodos ociosos abertos por esta viagem (tripBeforeId) ou
+      // fechados por ela (tripAfterId). Numero FIXO de queries (uma a mais),
+      // nunca 1 por evento.
+      this.prisma.vehicleIdlePeriod.findMany({
+        where: { tenantId, OR: [{ tripBeforeId: tripId }, { tripAfterId: tripId }] },
+      }),
+      this.prisma.auditLog.findMany({ where: { tenantId, entityName: 'Trip', entityId: tripId } }),
+    ]);
 
     const events: TripTimelineEventEntity[] = [];
 
@@ -176,6 +194,42 @@ export class TripTimelineService {
       );
       item.severity = occurrence.severity;
       events.push(item);
+    }
+
+    for (const period of idlePeriods) {
+      const durationLabel = period.durationMinutes !== null ? ` (${period.durationMinutes} min)` : '';
+      // Fase C -- quando o proprio motorista informou/confirmou o motivo pelo
+      // app, source=DRIVER_APP. Nao e um evento novo (rule 11 -- so os
+      // realmente necessarios): so enriquece a descricao do "iniciado".
+      const originLabel =
+        period.source === 'DRIVER_APP'
+          ? ' Motivo informado pelo motorista.'
+          : period.source === 'MANUAL_ADMIN'
+            ? ' Registrado manualmente pela operacao.'
+            : '';
+      if (period.tripBeforeId === tripId) {
+        events.push(
+          this.buildEvent(
+            period.id,
+            'IDLE_PERIOD',
+            period.reason,
+            'Periodo parado iniciado',
+            `Veiculo sem viagem apos a conclusao. Motivo: ${period.reason}${period.endedAt ? `. Encerrado depois${durationLabel}` : ' (em aberto)'}.${originLabel}`,
+            period.startedAt,
+          ),
+        );
+      } else if (period.tripAfterId === tripId && period.endedAt) {
+        events.push(
+          this.buildEvent(
+            period.id,
+            'IDLE_PERIOD',
+            period.reason,
+            'Periodo parado encerrado',
+            `Veiculo retomou operacao. Motivo do periodo: ${period.reason}${durationLabel}. Viagem anterior: ${period.tripBeforeId ?? '—'}.`,
+            period.endedAt,
+          ),
+        );
+      }
     }
 
     for (const log of auditLogs) {

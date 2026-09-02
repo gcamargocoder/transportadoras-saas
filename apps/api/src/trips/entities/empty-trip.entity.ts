@@ -62,6 +62,16 @@ export class EmptyTripEntity {
   @ApiProperty({ description: 'true quando a viagem tem pelo menos uma TripDeliveryStop cadastrada.' })
   hasDeliveryStops!: boolean;
 
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'Fase D -- CONTEXTO apenas: viagem de IDA vinculada (Trip.previousTripId), quando esta viagem ' +
+      'vazia foi marcada como retorno de outra. NUNCA usado para classificar a viagem como vazia -- ' +
+      'a semantica da Fase 92 (loadStatus === EMPTY) permanece o unico criterio.',
+  })
+  previousTripId!: string | null;
+
   @ApiProperty({ nullable: true, description: 'TripMetrics.actualDistanceKm -- somente quando ja calculado.' })
   distanceKm!: number | null;
 

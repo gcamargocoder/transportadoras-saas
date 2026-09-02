@@ -83,6 +83,41 @@ describe('syncQueue -- pause/resume/complete', () => {
       expect(result.queued).toBe(true);
       expect(await pendingCount()).toBe(1);
     });
+
+    // Fase C -- o motivo OPCIONAL da parada viaja junto na MESMA acao
+    // 'complete' (uma unica chamada HTTP conclui + aplica o motivo no
+    // VehicleIdlePeriod que o backend abre). Nunca uma acao separada
+    // dependente de ordem enquanto o 'complete' ainda esta na fila.
+    it('online: com idleReason repassa o motivo para completeTrip', async () => {
+      api.completeTrip.mockResolvedValue({} as never);
+
+      await submitOrQueue({ kind: 'complete', tripId: 'trip-1', finalOdometerKm: 150000, idleReason: 'DESCANSO' });
+
+      expect(api.completeTrip).toHaveBeenCalledWith('trip-1', { finalOdometerKm: 150000, idleReason: 'DESCANSO' });
+    });
+
+    it('online: sem idleReason nao envia a chave (motorista nao e obrigado a informar)', async () => {
+      api.completeTrip.mockResolvedValue({} as never);
+
+      await submitOrQueue({ kind: 'complete', tripId: 'trip-1', finalOdometerKm: 150000 });
+
+      expect(api.completeTrip).toHaveBeenCalledWith('trip-1', { finalOdometerKm: 150000 });
+      const [, payload] = api.completeTrip.mock.calls[0]!;
+      expect(Object.keys(payload ?? {})).not.toContain('idleReason');
+    });
+
+    it('offline -> reconexao: o retry no flush mantem o idleReason', async () => {
+      api.completeTrip.mockRejectedValueOnce(new Error('offline'));
+      await submitOrQueue({ kind: 'complete', tripId: 'trip-1', finalOdometerKm: 150000, idleReason: 'AGUARDANDO_CARGA' });
+      expect(await pendingCount()).toBe(1);
+
+      api.completeTrip.mockResolvedValue({} as never);
+      const result = await flushQueue();
+
+      expect(result.sent).toBe(1);
+      const [, payload] = api.completeTrip.mock.calls[1]!;
+      expect(payload).toMatchObject({ finalOdometerKm: 150000, idleReason: 'AGUARDANDO_CARGA' });
+    });
   });
 
   describe('sincronizacao (flushQueue)', () => {
@@ -562,6 +597,73 @@ describe('syncQueue -- pause/resume/complete', () => {
 
       expect(result.sent).toBe(1);
       expect(result.remaining).toBe(0);
+    });
+  });
+
+  // Fase C -- "Finalizar operacao" / alterar o motivo DEPOIS, pela Home
+  // (quando o VehicleIdlePeriod ja existe). Idempotente por ESTADO (nunca
+  // deviceEventId): PATCH /driver/idle-period repetido = mesmo efeito. O
+  // backend SEMPRE responde 200 (null quando nao ha periodo aberto), entao
+  // a acao nunca fica presa em retry infinito na fila.
+  describe('IDLE-REASON (Fase C)', () => {
+    it('online: envia imediatamente e nao enfileira', async () => {
+      api.setIdleReason.mockResolvedValue(null);
+
+      const result = await submitOrQueue({ kind: 'idle-reason', reason: 'PATIO' });
+
+      expect(result.queued).toBe(false);
+      expect(api.setIdleReason).toHaveBeenCalledWith('PATIO');
+      expect(await pendingCount()).toBe(0);
+    });
+
+    it('offline: entra na fila e nao lanca erro para quem chamou', async () => {
+      api.setIdleReason.mockRejectedValue(new Error('network down'));
+
+      const result = await submitOrQueue({ kind: 'idle-reason', reason: 'MANUTENCAO' });
+
+      expect(result.queued).toBe(true);
+      expect(await pendingCount()).toBe(1);
+    });
+
+    it('offline -> reconexao: flush reenvia o mesmo motivo e remove da fila', async () => {
+      api.setIdleReason.mockRejectedValueOnce(new Error('offline'));
+      await submitOrQueue({ kind: 'idle-reason', reason: 'DOCUMENTACAO' });
+      expect(await pendingCount()).toBe(1);
+
+      api.setIdleReason.mockResolvedValue(null);
+      const result = await flushQueue();
+
+      expect(result.sent).toBe(1);
+      expect(result.remaining).toBe(0);
+      expect(api.setIdleReason).toHaveBeenLastCalledWith('DOCUMENTACAO');
+    });
+
+    it('idempotencia de estado: informar o mesmo motivo 2x online chama a API 2x, nenhuma fica pendente', async () => {
+      api.setIdleReason.mockResolvedValue(null);
+
+      await submitOrQueue({ kind: 'idle-reason', reason: 'DESCANSO' });
+      await submitOrQueue({ kind: 'idle-reason', reason: 'DESCANSO' });
+
+      expect(api.setIdleReason).toHaveBeenCalledTimes(2);
+      expect(await pendingCount()).toBe(0);
+    });
+
+    it('FIFO: um complete enfileirado e processado antes de um idle-reason posterior', async () => {
+      api.completeTrip.mockRejectedValue(new Error('offline'));
+      await submitOrQueue({ kind: 'complete', tripId: 'trip-1', finalOdometerKm: 100 });
+      api.setIdleReason.mockRejectedValue(new Error('offline'));
+      await submitOrQueue({ kind: 'idle-reason', reason: 'OUTRO' });
+      expect(await pendingCount()).toBe(2);
+
+      api.completeTrip.mockResolvedValue({} as never);
+      api.setIdleReason.mockResolvedValue(null);
+      const result = await flushQueue();
+
+      expect(result.sent).toBe(2);
+      expect(result.remaining).toBe(0);
+      const completeOrder = api.completeTrip.mock.invocationCallOrder.at(-1)!;
+      const reasonOrder = api.setIdleReason.mock.invocationCallOrder.at(-1)!;
+      expect(completeOrder).toBeLessThan(reasonOrder);
     });
   });
 });

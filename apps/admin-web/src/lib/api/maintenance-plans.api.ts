@@ -1,5 +1,5 @@
 import type { Paginated, PaginationParams } from '../../types/api';
-import type { MaintenancePlanEntity } from '../../types/entities';
+import type { MaintenancePlanEntity, MaintenancePlanExecutionEntity } from '../../types/entities';
 import type { MaintenanceComponent, VehicleMaintenanceType } from '../../types/enums';
 import { api } from './http';
 
@@ -23,6 +23,15 @@ export interface MaintenancePlanPayload {
   alertBeforeKm?: number | undefined;
   alertBeforeDays?: number | undefined;
   active?: boolean | undefined;
+  notes?: string | undefined;
+}
+
+// Fase 81 -- "registrar execucao": o servico preventivo foi feito. Nunca
+// abre OS, nunca altera o odometro real do veiculo.
+export interface RegisterMaintenancePlanExecutionPayload {
+  executedAt?: string | undefined;
+  odometerKm?: number | undefined;
+  notes?: string | undefined;
 }
 
 export function listMaintenancePlans(query: FindMaintenancePlansQuery = {}, signal?: AbortSignal) {
@@ -39,4 +48,23 @@ export function updateMaintenancePlan(id: string, payload: Partial<MaintenancePl
 
 export function deleteMaintenancePlan(id: string) {
   return api.delete<void>(`/maintenance/plans/${id}`);
+}
+
+export function registerMaintenancePlanExecution(
+  id: string,
+  payload: RegisterMaintenancePlanExecutionPayload = {},
+) {
+  return api.post<MaintenancePlanEntity>(`/maintenance/plans/${id}/executions`, payload);
+}
+
+export function listMaintenancePlanExecutions(
+  id: string,
+  query: PaginationParams = {},
+  signal?: AbortSignal,
+) {
+  return api.get<Paginated<MaintenancePlanExecutionEntity>>(
+    `/maintenance/plans/${id}/executions`,
+    query,
+    signal,
+  );
 }

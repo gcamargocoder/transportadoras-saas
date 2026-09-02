@@ -85,6 +85,8 @@ import type {
   NotificationType,
   UserRole,
   VehicleFuelType,
+  VehicleIdlePeriodSource,
+  VehicleIdleReason,
   VehicleMaintenancePriority,
   VehicleMaintenanceStatus,
   VehicleMaintenanceType,
@@ -628,15 +630,35 @@ export interface MaintenancePlanEntity {
   alertBeforeKm: number | null;
   alertBeforeDays: number | null;
   active: boolean;
+  // Fase 81 -- observacoes livres do plano.
+  notes: string | null;
   createdAt: string;
   updatedAt: string;
   // Fase 108 -- avaliacao ao vivo do vencimento (mesma funcao pura do
   // dashboard de frota/centro de notificacoes, nunca uma segunda regra).
   status: 'OK' | 'DUE_SOON' | 'OVERDUE' | 'UNKNOWN';
+  // Fase 81 -- granularidade do vencimento (so quando status === 'OVERDUE').
+  overdueReason: 'KM' | 'DATE' | 'BOTH' | null;
   dueOdometerKm: number | null;
   dueDate: string | null;
   overdueByKm: number | null;
   overdueByDays: number | null;
+  // Fase 81 -- ultima execucao registrada (referencia do calculo acima).
+  lastExecution: { executedAt: string | null; odometerKm: number | null } | null;
+}
+
+// GET /maintenance/plans/:id/executions (Fase 81) -- historico append-only
+// de execucoes do plano preventivo (projecao de VehicleMaintenance COMPLETED
+// vinculada; nenhuma tabela nova).
+export interface MaintenancePlanExecutionEntity {
+  id: string;
+  maintenancePlanId: string;
+  vehicleId: string;
+  component: MaintenanceComponent | null;
+  executedAt: string | null;
+  odometerKm: number | null;
+  notes: string | null;
+  createdAt: string;
 }
 
 export interface CustomerEntity {
@@ -706,6 +728,17 @@ export interface LocationEntity {
   updatedAt: string;
 }
 
+// Fase D -- dados minimos da viagem de ida vinculada (Trip.previousTripId).
+export interface PreviousTripSummaryEntity {
+  id: string;
+  status: TripStatus;
+  originName: string;
+  destinationName: string;
+  plannedDeparture: string | null;
+  loadStatus: TripLoadStatus | null;
+  plannedLoadStatus: TripLoadStatus | null;
+}
+
 export interface TripEntity {
   id: string;
   tenantId: string;
@@ -729,6 +762,11 @@ export interface TripEntity {
   actualDeparture: string | null;
   actualArrival: string | null;
   loadStatus: TripLoadStatus | null;
+  // Fase D -- intencao de carga do planejamento (nunca substitui loadStatus).
+  plannedLoadStatus: TripLoadStatus | null;
+  // Fase D -- vinculo explicito ida -> retorno.
+  previousTripId: string | null;
+  previousTrip: PreviousTripSummaryEntity | null;
   initialOdometerKm: number | null;
   currentOdometerKm: number | null;
   defaultAxles: number | null;
@@ -814,6 +852,10 @@ export interface TripOperationEntity {
   vehiclePlate: string | null;
   originName: string;
   destinationName: string;
+  // Fase D -- carga real / intencao planejada / vinculo de retorno.
+  loadStatus: TripLoadStatus | null;
+  plannedLoadStatus: TripLoadStatus | null;
+  previousTripId: string | null;
   actualDeparture: string | null;
   initialOdometerKm: number | null;
   currentOdometerKm: number | null;
@@ -1274,6 +1316,45 @@ export interface TripFinancialResultEntity {
   revenuePerKm: number | null;
   costPerKm: number | null;
   profitPerKm: number | null;
+}
+
+// GET /trips/:id/return-consolidation (Fase E) -- consolidacao DERIVADA e
+// somente-leitura da operacao ida + retorno (vinculo explicito
+// Trip.previousTripId). Nunca persiste nada; o financeiro por perna e
+// identico a getTripFinancialResult.
+export interface ConsolidatedLegEntity {
+  tripId: string;
+  role: 'OUTBOUND' | 'RETURN';
+  status: TripStatus;
+  originName: string;
+  destinationName: string;
+  plannedDeparture: string | null;
+  actualDeparture: string | null;
+  actualArrival: string | null;
+  previousTripId: string | null;
+  loadStatus: TripLoadStatus | null;
+  plannedLoadStatus: TripLoadStatus | null;
+  // Derivada EXCLUSIVAMENTE de loadStatus real; plannedLoadStatus nunca entra.
+  loadCondition: 'LOADED' | 'EMPTY' | 'UNKNOWN';
+  financialResult: TripFinancialResultEntity;
+}
+
+export interface TripReturnConsolidationEntity {
+  outboundTripId: string;
+  legCount: number;
+  returnLegCount: number;
+  outbound: ConsolidatedLegEntity;
+  returns: ConsolidatedLegEntity[];
+  totalCompletedDistanceKm: number | null;
+  totalCost: number;
+  totalContractedRevenue: number | null;
+  totalInvoicedRevenue: number;
+  totalReceivedRevenue: number;
+  consolidatedOperatingResult: number | null;
+  consolidatedInvoicedResult: number;
+  consolidatedReceivedResult: number;
+  legsWithContractedRevenue: number;
+  revenueComplete: boolean;
 }
 
 export interface FuelStationEntity {
@@ -1902,6 +1983,8 @@ export interface EmptyTripEntity {
   hasDeliveryStops: boolean;
   distanceKm: number | null;
   totalCost: number | null;
+  // Fase D -- CONTEXTO apenas; nunca usado para classificar como vazia.
+  previousTripId: string | null;
 }
 
 export interface FleetEmptyTripsReasonBreakdownEntity {
@@ -2257,6 +2340,62 @@ export interface FleetDowntimeCostEntity {
   topVehiclesByDowntimeMinutes: FleetVehicleRankingEntryEntity[];
   monthlyTrendDowntimeMinutes: DashboardChartPointEntity[];
   downtimeCostAlerts: FleetAlertEntity[];
+}
+
+// Fase A -- GET /fleet-operations/idle-time. UM item = UM periodo ocioso
+// (veiculo SEM VIAGEM entre a chegada de uma viagem e a partida da
+// seguinte). Distinto de FleetDowntimeCostEntity (parada DENTRO da viagem).
+export interface FleetVehicleIdleTimeEntity {
+  vehicleId: string;
+  plate: string;
+  lastTripId: string;
+  lastArrival: string;
+  lastDestinationLabel: string | null;
+  nextTripId: string | null;
+  nextDeparture: string | null;
+  idleStart: string;
+  idleEnd: string | null;
+  totalMinutes: number;
+  maintenanceMinutes: number;
+  netIdleMinutes: number;
+  isCurrentlyIdle: boolean;
+  isEstimate: boolean;
+}
+
+export interface FleetIdleTimeEntity {
+  asOf: string;
+  items: FleetVehicleIdleTimeEntity[];
+  meta: PaginationMeta;
+}
+
+// Fase B -- periodo ocioso PERSISTIDO entre operacoes (GET /fleet-operations/
+// idle-periods). Distinto de FleetVehicleIdleTimeEntity (Fase A -- derivado
+// on-the-fly de Trip.actualArrival/actualDeparture, sem model). A Torre de
+// Controle prioriza este quando ha periodo ABERTO; a Fase A continua como
+// fallback para veiculos sem periodo persistido ainda.
+export type VehicleIdlePeriodStatus = 'OPEN' | 'CLOSED';
+
+export interface VehicleIdlePeriodEntity {
+  id: string;
+  vehicleId: string;
+  plate: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  durationMinutes: number | null;
+  reason: VehicleIdleReason;
+  source: VehicleIdlePeriodSource;
+  tripBeforeId: string | null;
+  tripAfterId: string | null;
+  previousDestinationLabel: string | null;
+  notes: string | null;
+  status: VehicleIdlePeriodStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaginatedVehicleIdlePeriodsEntity {
+  items: VehicleIdlePeriodEntity[];
+  meta: PaginationMeta;
 }
 
 // Dashboard "Composicao" -- uso de veiculo+carreta por viagem. Trailer nao

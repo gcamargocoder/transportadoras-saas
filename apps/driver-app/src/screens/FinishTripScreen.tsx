@@ -1,18 +1,34 @@
 import * as Location from 'expo-location';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useEffect, useState } from 'react';
-import { Text } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
 import { TextField } from '../components/TextField';
 import * as driverTripsApi from '../api/driverTrips.api';
-import { DriverTrip } from '../api/driverTrips.types';
+import { DriverTrip, VehicleIdleReason } from '../api/driverTrips.types';
 import { submitOrQueue } from '../storage/syncQueue';
 import { colors } from '../theme/colors';
 import { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'FinishTrip'>;
+
+// Fase C -- motivo OPCIONAL da parada do veiculo APOS esta viagem. Vai junto
+// na acao 'complete' e e aplicado ao VehicleIdlePeriod que o backend abre ao
+// concluir (Fase B) -- nunca cria um 2o periodo, nunca informa duracao. O
+// motorista NUNCA e obrigado a escolher: sem selecao, fica o default
+// automatico (e ele pode informar/alterar depois pela Home).
+const IDLE_REASON_LABELS: Record<VehicleIdleReason, string> = {
+  AGUARDANDO_CARGA: 'Aguardando carga',
+  AGUARDANDO_ORDEM: 'Aguardando ordem',
+  MANUTENCAO: 'Manutenção',
+  DOCUMENTACAO: 'Documentação',
+  DESCANSO: 'Descanso',
+  PATIO: 'Pátio',
+  OUTRO: 'Outro',
+};
+const IDLE_REASONS = Object.keys(IDLE_REASON_LABELS) as VehicleIdleReason[];
 
 // Tela "FINALIZAR VIAGEM" (Fase 28, secao 11) -- unico campo obrigatorio: KM
 // final. Nao pede nada que o sistema ja saiba (destino, veiculo). A posicao
@@ -25,6 +41,7 @@ export function FinishTripScreen({ route, navigation }: Props): React.JSX.Elemen
   const { tripId } = route.params;
   const [trip, setTrip] = useState<DriverTrip | null>(null);
   const [odometerKm, setOdometerKm] = useState('');
+  const [idleReason, setIdleReason] = useState<VehicleIdleReason | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -48,6 +65,7 @@ export function FinishTripScreen({ route, navigation }: Props): React.JSX.Elemen
         kind: 'complete',
         tripId,
         finalOdometerKm: parsedOdometer,
+        ...(idleReason ? { idleReason } : {}),
         ...(position
           ? { latitude: position.coords.latitude, longitude: position.coords.longitude }
           : {}),
@@ -87,6 +105,34 @@ export function FinishTripScreen({ route, navigation }: Props): React.JSX.Elemen
         keyboardType="numeric"
       />
 
+      <Card>
+        <Text style={{ color: colors.text, fontWeight: '700', marginBottom: 4 }}>
+          Motivo da parada do veiculo (opcional)
+        </Text>
+        <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>
+          Ao encerrar, o veiculo fica parado ate a proxima viagem. Voce pode informar o motivo agora
+          ou depois, pela tela inicial.
+        </Text>
+        <View style={styles.reasonGrid}>
+          {IDLE_REASONS.map((r) => (
+            <Pressable
+              key={r}
+              disabled={submitting}
+              onPress={() => setIdleReason((prev) => (prev === r ? null : r))}
+              style={({ pressed }) => [
+                styles.reasonChip,
+                idleReason === r && styles.reasonChipSelected,
+                { opacity: submitting ? 0.6 : pressed ? 0.8 : 1 },
+              ]}
+            >
+              <Text style={[styles.reasonChipLabel, idleReason === r && styles.reasonChipLabelSelected]}>
+                {IDLE_REASON_LABELS[r]}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </Card>
+
       {feedback ? <Text style={{ color: colors.textMuted }}>{feedback}</Text> : null}
 
       <Button label="FINALIZAR VIAGEM" onPress={handleFinish} loading={submitting} disabled={!canSubmit} />
@@ -94,3 +140,11 @@ export function FinishTripScreen({ route, navigation }: Props): React.JSX.Elemen
     </ScreenContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  reasonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  reasonChip: { backgroundColor: colors.surface, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 12 },
+  reasonChipSelected: { backgroundColor: colors.primary },
+  reasonChipLabel: { color: colors.text, fontSize: 13, fontWeight: '600' },
+  reasonChipLabelSelected: { color: colors.background },
+});

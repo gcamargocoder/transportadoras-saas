@@ -15,8 +15,11 @@ import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FLEET_READ_ROLES, FLEET_WRITE_ROLES } from '../../fleet/constants/fleet-roles.constants';
 import { CreateMaintenancePlanDto } from '../dto/create-maintenance-plan.dto';
+import { FindMaintenancePlanExecutionsQueryDto } from '../dto/find-maintenance-plan-executions-query.dto';
 import { FindMaintenancePlansQueryDto } from '../dto/find-maintenance-plans-query.dto';
+import { RegisterMaintenancePlanExecutionDto } from '../dto/register-maintenance-plan-execution.dto';
 import { UpdateMaintenancePlanDto } from '../dto/update-maintenance-plan.dto';
+import { PaginatedMaintenancePlanExecutionsEntity } from '../entities/maintenance-plan-execution.entity';
 import { MaintenancePlanEntity } from '../entities/maintenance-plan.entity';
 import { PaginatedMaintenancePlansEntity } from '../entities/paginated-maintenance-plans.entity';
 import { MaintenancePlansService } from '../services/maintenance-plans.service';
@@ -78,6 +81,42 @@ export class MaintenancePlansController {
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );
+  }
+
+  @Post(':id/executions')
+  @Roles(...FLEET_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase 81 -- registra uma execucao do plano preventivo (o servico foi feito). Grava como uma ' +
+      'manutencao COMPLETED vinculada ao plano (reaproveita o historico existente). NUNCA abre OS, ' +
+      'NUNCA altera o odometro real do veiculo. Recalcula automaticamente o proximo vencimento e ' +
+      'devolve o plano ja reavaliado.',
+  })
+  @ApiCreatedResponse({ type: MaintenancePlanEntity })
+  @ApiNotFoundResponse({ description: 'Plano nao encontrado nesta empresa.' })
+  registerExecution(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RegisterMaintenancePlanExecutionDto,
+  ): Promise<MaintenancePlanEntity> {
+    return this.maintenancePlansService.registerExecution(
+      this.tenantContext.requireTenantId(),
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/executions')
+  @Roles(...FLEET_READ_ROLES)
+  @ApiOperation({ summary: 'Fase 81 -- historico (append-only) de execucoes registradas para este plano, paginado.' })
+  @ApiOkResponse({ type: PaginatedMaintenancePlanExecutionsEntity })
+  @ApiNotFoundResponse({ description: 'Plano nao encontrado nesta empresa.' })
+  findExecutions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: FindMaintenancePlanExecutionsQueryDto,
+  ): Promise<PaginatedMaintenancePlanExecutionsEntity> {
+    return this.maintenancePlansService.findExecutions(this.tenantContext.requireTenantId(), id, query);
   }
 
   @Delete(':id')

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { TripPriority } from '@prisma/client';
+import { TripLoadStatus, TripPriority } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsDateString,
@@ -67,6 +67,28 @@ export class CreateTripDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Fase D -- viagem de IDA que originou este retorno (vinculo EXPLICITO, so quando o operador ' +
+      'informa). Cada retorno continua sendo uma Trip independente. Nao altera status, composicao, ' +
+      'actualDeparture/actualArrival nem loadStatus.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'previousTripId deve ser um UUID valido.' })
+  previousTripId?: string;
+
+  @ApiPropertyOptional({
+    enum: TripLoadStatus,
+    description:
+      'Fase D -- INTENCAO de carga do planejamento (LOADED = retorno planejado carregado; EMPTY = ' +
+      'retorno planejado vazio). NAO substitui loadStatus (valor real da largada) e nunca gera ' +
+      'inferencia automatica.',
+  })
+  @IsOptional()
+  @IsEnum(TripLoadStatus, { message: 'plannedLoadStatus invalido.' })
+  plannedLoadStatus?: TripLoadStatus;
 
   @ApiPropertyOptional({ type: PlannedTripMetricsDto })
   @IsOptional()

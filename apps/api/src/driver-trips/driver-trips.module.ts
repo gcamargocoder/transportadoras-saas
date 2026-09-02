@@ -10,6 +10,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RoutingModule } from '../routing/routing.module';
 import { TripOperationsModule } from '../trip-operations/trip-operations.module';
 import { TripsModule } from '../trips/trips.module';
+import { VehicleIdlePeriodsModule } from '../vehicle-idle-periods/vehicle-idle-periods.module';
 import { DriverTripsController } from './controllers/driver-trips.controller';
 import { DriverContext } from './context/driver-context';
 import { DriverGuard } from './guards/driver.guard';
@@ -39,6 +40,10 @@ import { DriverTripsService } from './services/driver-trips.service';
     ChecklistsModule,
     FiscalModule,
     NotificationsModule,
+    // Fase C -- GET/PATCH /driver/idle-period reaproveitam
+    // VehicleIdlePeriodsService (findCurrentForDriver/setReasonByDriver);
+    // nenhum service paralelo.
+    VehicleIdlePeriodsModule,
     MulterModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService<AppConfig, true>) =>

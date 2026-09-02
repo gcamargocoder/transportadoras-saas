@@ -273,6 +273,81 @@ describe('Viagens Vazias -- identificacao, listagem e resumo (e2e)', () => {
   });
 
   // ==========================================================================
+  // Fase D -- contexto de retorno (Trip.previousTripId) NUNCA muda a
+  // classificacao (loadStatus === EMPTY continua o UNICO criterio).
+  // ==========================================================================
+  describe('Fase D -- contexto de retorno (previousTripId) na mesma listagem, sem alterar a semantica', () => {
+    it('retorno vinculado (previousTripId) com loadStatus=EMPTY aparece na listagem, com o vinculo apenas como contexto', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PrevEmpty');
+      const ida = await setupPlannedTrip(adminAuth, tenantId);
+
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      const compositionId = await createComposition(adminAuth, vehicleId);
+      const originId = await createLocation(adminAuth, `Origem ${randomUUID()}`);
+      const destinationId = await createLocation(adminAuth, `Destino ${randomUUID()}`);
+      const retornoRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', adminAuth)
+        .send({
+          driverId,
+          compositionId,
+          originLocationId: originId,
+          destinationLocationId: destinationId,
+          previousTripId: ida.tripId,
+          plannedDeparture: '2026-09-01T08:00:00.000Z',
+          plannedArrival: '2026-09-02T18:00:00.000Z',
+        })
+        .expect(201);
+      const retornoDriverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${retornoRes.body.data.id}/start`)
+        .set('Authorization', retornoDriverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'EMPTY' })
+        .expect(201);
+
+      const list = await getEmptyRuns(adminAuth).expect(200);
+      const row = list.body.data.items.find((i: { id: string }) => i.id === retornoRes.body.data.id);
+      expect(row).toBeTruthy();
+      expect(row.previousTripId).toBe(ida.tripId);
+      expect(row.reason).toBe('NO_DELIVERIES_PLANNED');
+    });
+
+    it('retorno vinculado (previousTripId) com loadStatus=LOADED NAO aparece como vazia (vinculo nunca classifica)', async () => {
+      const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PrevLoaded');
+      const ida = await setupPlannedTrip(adminAuth, tenantId);
+
+      const vehicleId = await createVehicle(adminAuth);
+      const driverId = await createDriver(adminAuth);
+      const compositionId = await createComposition(adminAuth, vehicleId);
+      const originId = await createLocation(adminAuth, `Origem ${randomUUID()}`);
+      const destinationId = await createLocation(adminAuth, `Destino ${randomUUID()}`);
+      const retornoRes = await request(app.getHttpServer())
+        .post('/api/v1/trips')
+        .set('Authorization', adminAuth)
+        .send({
+          driverId,
+          compositionId,
+          originLocationId: originId,
+          destinationLocationId: destinationId,
+          previousTripId: ida.tripId,
+          plannedDeparture: '2026-09-01T08:00:00.000Z',
+          plannedArrival: '2026-09-02T18:00:00.000Z',
+        })
+        .expect(201);
+      const retornoDriverAuth = await loginAsDriver(tenantId, adminAuth, driverId);
+      await request(app.getHttpServer())
+        .post(`/api/v1/driver/trips/${retornoRes.body.data.id}/start`)
+        .set('Authorization', retornoDriverAuth)
+        .send({ odometerKm: 100000, loadStatus: 'LOADED' })
+        .expect(201);
+
+      const list = await getEmptyRuns(adminAuth).expect(200);
+      expect(list.body.data.items.map((i: { id: string }) => i.id)).not.toContain(retornoRes.body.data.id);
+    });
+  });
+
+  // ==========================================================================
   // Classificacao / motivo
   // ==========================================================================
   describe('classificacao/motivo', () => {

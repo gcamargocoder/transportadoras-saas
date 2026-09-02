@@ -10,6 +10,7 @@ import {
   TripOccurrenceSeverity,
   TripOccurrenceType,
   TripStopType,
+  VehicleIdleReason,
 } from '../api/driverTrips.types';
 import { compact } from '../utils/compact';
 
@@ -69,7 +70,25 @@ type PendingAction =
   // nunca por deviceEventId) -- nao precisam de um id de deduplicacao.
   | { kind: 'pause'; tripId: string; latitude?: number; longitude?: number }
   | { kind: 'resume'; tripId: string; latitude?: number; longitude?: number }
-  | { kind: 'complete'; tripId: string; finalOdometerKm?: number; latitude?: number; longitude?: number }
+  // Fase C -- `idleReason` opcional: motivo da parada do veiculo APOS a
+  // viagem, aplicado ao VehicleIdlePeriod que o backend abre ao concluir
+  // (nunca cria um 2o periodo). Vai junto na MESMA acao 'complete' (nao ha
+  // problema de ordem: uma unica chamada HTTP conclui + aplica o motivo).
+  | {
+      kind: 'complete';
+      tripId: string;
+      finalOdometerKm?: number;
+      latitude?: number;
+      longitude?: number;
+      idleReason?: VehicleIdleReason;
+    }
+  // Fase C -- o motorista informa/corrige o MOTIVO da parada DEPOIS, na tela
+  // pos-viagem (veiculo ja parado, periodo ja aberto pela Fase B). Idempotente
+  // por ESTADO no backend (mesmo principio de pause/resume/complete) -- nunca
+  // precisa de deviceEventId, definir o mesmo motivo 2x tem o mesmo efeito.
+  // O backend responde SEMPRE 200 (null quando nao ha periodo aberto) -- a
+  // acao nunca fica presa em retry.
+  | { kind: 'idle-reason'; reason: VehicleIdleReason }
   // Fase 106 -- transicao de status de parada/entrega planejada pelo
   // motorista. Idempotente por ESTADO no backend (mesmo principio de pause/
   // resume/complete acima, ver TripDeliveryStopsService.updateStatus: status
@@ -220,8 +239,12 @@ async function runAction(action: PendingAction): Promise<void> {
           finalOdometerKm: action.finalOdometerKm,
           latitude: action.latitude,
           longitude: action.longitude,
+          idleReason: action.idleReason,
         }),
       });
+      return;
+    case 'idle-reason':
+      await driverTripsApi.setIdleReason(action.reason);
       return;
     case 'delivery-stop-status':
       await driverTripsApi.updateDeliveryStopStatus(action.tripId, action.stopId, {

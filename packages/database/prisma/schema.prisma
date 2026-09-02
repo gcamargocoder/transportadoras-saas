@@ -753,6 +753,8 @@ model Tenant {
   pipelineOpportunities     PipelineOpportunity[]
   /// Fase 98 -- Renovacao de Contratos.
   contractRenewals          ContractRenewal[]
+  /// Fase B -- periodos ociosos persistidos (veiculo parado entre operacoes).
+  vehicleIdlePeriods        VehicleIdlePeriod[]
 
   @@map("tenants")
 }
@@ -1149,6 +1151,8 @@ model Vehicle {
   /// Fase 61 -- historico de motoristas (proprios/agregados) vinculados a
   /// este veiculo.
   driverAssignments       DriverVehicleAssignment[]
+  /// Fase B -- periodos ociosos persistidos deste veiculo (entre operacoes).
+  idlePeriods             VehicleIdlePeriod[]
 
   @@unique([tenantId, plate])
   @@unique([tenantId, renavam])
@@ -1158,6 +1162,87 @@ model Vehicle {
   @@index([tenantId, ownershipType])
   @@index([tenantId, status])
   @@map("vehicles")
+}
+
+/// Fase B -- motivo de um VehicleIdlePeriod. Enum PROPRIO (nao reaproveita
+/// TripStopType): a semantica e "por que o veiculo ficou parado ENTRE
+/// operacoes", distinta das paradas DENTRO da viagem (congestionamento,
+/// descanso na estrada, abastecimento em transito). Valores em pt-BR,
+/// alinhados a auditoria de downtime. Um periodo criado automaticamente
+/// (source=AUTO) nasce com um default seguro/configuravel
+/// (TenantSettings.preferences.defaultIdleReason, fallback AGUARDANDO_ORDEM)
+/// e pode ser corrigido depois pelo administrador -- nunca inventa um
+/// motivo que o sistema nao conhece.
+enum VehicleIdleReason {
+  AGUARDANDO_CARGA
+  AGUARDANDO_ORDEM
+  MANUTENCAO
+  DOCUMENTACAO
+  DESCANSO
+  PATIO
+  OUTRO
+
+  @@map("vehicle_idle_reason")
+}
+
+/// Fase B -- origem do registro de VehicleIdlePeriod. AUTO = criado/fechado
+/// automaticamente pela maquina de estados da viagem (COMPLETED abre,
+/// inicio da proxima viagem fecha). MANUAL_ADMIN = criado/ajustado pelo
+/// CRUD administrativo. DRIVER_APP = reservado para a acao "Cheguei a base"
+/// (NAO implementada nesta fase -- valor definido para evolucao futura,
+/// nunca um fluxo fake so pra existir).
+enum VehicleIdlePeriodSource {
+  AUTO
+  MANUAL_ADMIN
+  DRIVER_APP
+
+  @@map("vehicle_idle_period_source")
+}
+
+/// Fase B -- periodo PERSISTIDO em que um veiculo ficou parado ENTRE
+/// operacoes (da chegada de uma viagem ate a partida da seguinte). Existe
+/// independentemente de o veiculo estar associado a uma viagem. Distinto de
+/// TripStop (parada DENTRO da viagem, Fase 25/43) e de
+/// VehicleMaintenance.downtimeMinutes (tempo de oficina, manual, sem
+/// vinculo). A duracao e SEMPRE calculada no backend
+/// (computeDurationMinutesOrThrow, nunca negativa) no fechamento -- nunca
+/// aceita do cliente. Um veiculo nunca pode ter 2 periodos ABERTOS ao mesmo
+/// tempo: garantido por indice unico PARCIAL no Postgres
+/// (vehicle_idle_periods_one_open_per_vehicle, WHERE ended_at IS NULL,
+/// criado na migration -- mesmo padrao de toll_data_sync_runs, nao
+/// declarado aqui pois Prisma nao suporta indice parcial no schema, mas
+/// qualquer violacao vira P2002 automaticamente).
+model VehicleIdlePeriod {
+  id              String                  @id @default(uuid()) @db.Uuid
+  tenantId        String                  @map("tenant_id") @db.Uuid
+  vehicleId       String                  @map("vehicle_id") @db.Uuid
+  startedAt       DateTime                @map("started_at")
+  /// Nulo enquanto o periodo esta ABERTO (veiculo ainda parado).
+  endedAt         DateTime?               @map("ended_at")
+  /// SEMPRE calculado (endedAt - startedAt) no fechamento -- nunca aceito do
+  /// cliente, nunca negativo.
+  durationMinutes Int?                    @map("duration_minutes")
+  reason          VehicleIdleReason       @default(AGUARDANDO_ORDEM)
+  source          VehicleIdlePeriodSource
+  /// Viagem cuja conclusao abriu este periodo (nulo em periodos criados
+  /// manualmente sem viagem de referencia).
+  tripBeforeId    String?                 @map("trip_before_id") @db.Uuid
+  /// Viagem cujo inicio fechou este periodo (nulo enquanto aberto).
+  tripAfterId     String?                 @map("trip_after_id") @db.Uuid
+  notes           String?
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+
+  tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle    Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tripBefore Trip?   @relation("IdlePeriodTripBefore", fields: [tripBeforeId], references: [id], onDelete: SetNull)
+  tripAfter  Trip?   @relation("IdlePeriodTripAfter", fields: [tripAfterId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, startedAt])
+  @@index([tenantId, endedAt])
+  @@map("vehicle_idle_periods")
 }
 
 /// Registro de manutencao do veiculo (Fase 12: relacionamento basico +
@@ -1302,6 +1387,8 @@ model MaintenancePlan {
   alertBeforeKm   Int?                   @map("alert_before_km")
   alertBeforeDays Int?                   @map("alert_before_days")
   active          Boolean                @default(true)
+  /// Fase 81 -- observacoes livres do plano preventivo (aditivo, nullable).
+  notes           String?
   createdAt       DateTime               @default(now()) @map("created_at")
   updatedAt       DateTime               @updatedAt @map("updated_at")
 
@@ -2340,8 +2427,24 @@ model Trip {
   status                TripStatus      @default(PLANNED)
   priority              TripPriority    @default(NORMAL)
   /// Carregado ou vazio, informado pelo motorista na largada (Fase 27) --
-  /// nulo em viagens antigas/nao iniciadas por este fluxo.
+  /// nulo em viagens antigas/nao iniciadas por este fluxo. Sempre o valor
+  /// REAL da largada; NUNCA inferido de plannedLoadStatus.
   loadStatus            TripLoadStatus? @map("load_status")
+  /// Fase D -- INTENCAO de carga do planejamento administrativo (LOADED =
+  /// retorno planejado carregado; EMPTY = retorno planejado vazio; null =
+  /// nao informado). NAO substitui loadStatus: plannedLoadStatus=EMPTY com
+  /// loadStatus=LOADED e valido (escritorio planejou vazio, motorista saiu
+  /// carregado). Nunca gera inferencia/correcao automatica.
+  plannedLoadStatus     TripLoadStatus? @map("planned_load_status")
+  /// Fase D -- vinculo EXPLICITO ida -> retorno: a viagem de retorno aponta
+  /// para a viagem que a originou. Nunca criado automaticamente (nem por
+  /// mesmo veiculo/motorista, origem/destino invertidos, proximidade
+  /// temporal, VehicleIdlePeriod ou GPS) -- so quando o operador informa.
+  /// Cada retorno continua sendo uma Trip independente (sem Operation/
+  /// roundTrip agregado). Distinto de VehicleIdlePeriod.tripBeforeId/
+  /// tripAfterId, que continuam significando apenas a fronteira de
+  /// ociosidade entre operacoes.
+  previousTripId        String?         @map("previous_trip_id") @db.Uuid
   /// Odometro do veiculo no momento da largada, informado pelo motorista
   /// (Fase 27) -- distinto de Vehicle.odometerKm (que reflete a leitura MAIS
   /// RECENTE do veiculo, atualizada a cada abastecimento/conclusao). Gravado
@@ -2364,6 +2467,11 @@ model Trip {
   origin           Location   @relation("TripOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
   destination      Location   @relation("TripDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
   tollRoute        TollRoute? @relation(fields: [tollRouteId], references: [id], onDelete: SetNull)
+  /// Fase D -- viagem anterior (ida) que originou este retorno. FK
+  /// self-referential, onDelete: SetNull (excluir a ida nao apaga o
+  /// retorno, so desfaz o vinculo).
+  previousTrip     Trip?      @relation("TripReturnLink", fields: [previousTripId], references: [id], onDelete: SetNull)
+  returnTrips      Trip[]     @relation("TripReturnLink")
   // routePlanId aponta para a RoutePlan ATUAL entre as varias que a viagem
   // pode acumular (relation nomeada "CurrentRoutePlan", distinta da relation
   // 1:N "TripRoutePlans" abaixo, que e o historico completo via
@@ -2410,12 +2518,21 @@ model Trip {
   /// Fase 94 -- cotacao de origem, quando esta viagem foi criada a partir da
   /// conversao de uma cotacao aprovada (ver Quotation.convertedTripId).
   sourceQuotation     Quotation?
+  /// Fase B -- periodo(s) ocioso(s) ABERTO(S) por esta viagem ao ser
+  /// concluida (tripBeforeId) e FECHADO(S) por esta viagem ao iniciar
+  /// (tripAfterId). Na pratica no maximo 1 de cada, listas por nao haver
+  /// unique direto aqui.
+  idlePeriodsBefore   VehicleIdlePeriod[] @relation("IdlePeriodTripBefore")
+  idlePeriodsAfter    VehicleIdlePeriod[] @relation("IdlePeriodTripAfter")
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   /// Fase 93 -- historico de viagens por cliente (CRM), consulta ja
   /// existente (GET /trips?customerId=) que nunca tinha indice dedicado.
   @@index([tenantId, customerId])
+  /// Fase D -- consultar o retorno vinculado a uma ida (e vice-versa) sem
+  /// varredura.
+  @@index([tenantId, previousTripId])
   @@map("trips")
 }
 

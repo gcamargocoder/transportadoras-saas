@@ -22,7 +22,7 @@ import { listVehicles } from '../../../lib/api/fleet.api';
 import { listCustomers, listLocations, listTrips } from '../../../lib/api/trips.api';
 import { hasRole } from '../../../lib/auth/roles';
 import { useAuth } from '../../../hooks/use-auth';
-import { TRIP_PRIORITY_LABELS, TRIP_STATUS_LABELS } from '../../../lib/labels';
+import { TRIP_LOAD_STATUS_LABELS, TRIP_PRIORITY_LABELS, TRIP_STATUS_LABELS } from '../../../lib/labels';
 import { TRIP_STATUS_OPTIONS, TRIP_STATUS_TONE } from '../../../features/trips/status';
 import { TRIP_WRITE_ROLES } from '../../../lib/auth/roles';
 import type { TripEntity } from '../../../types/entities';
@@ -94,11 +94,30 @@ export default function TripsPage(): JSX.Element {
               {row.original.originName} → {row.original.destinationName}
             </p>
             <p className="text-xs text-ink-subtle">{row.original.vehiclePlate ?? 'Sem veículo'}</p>
+            {/* Fase D -- vinculo EXPLICITO ida -> retorno, so quando o operador informou. */}
+            {row.original.previousTripId && (
+              <p className="text-xs font-medium text-brand-600">↩ Retorno</p>
+            )}
           </div>
         ),
       },
       { header: 'Cliente', accessorFn: (row) => row.customerName ?? '-' },
       { header: 'Motorista', accessorFn: (row) => row.driverName ?? '-' },
+      {
+        header: 'Carga',
+        cell: ({ row }) => (
+          <div>
+            <p className="text-sm text-ink">
+              {row.original.loadStatus ? TRIP_LOAD_STATUS_LABELS[row.original.loadStatus] : '—'}
+            </p>
+            {row.original.plannedLoadStatus && (
+              <p className="text-xs text-ink-subtle">
+                Planejado: {TRIP_LOAD_STATUS_LABELS[row.original.plannedLoadStatus]}
+              </p>
+            )}
+          </div>
+        ),
+      },
       {
         header: 'Status',
         cell: ({ row }) => (

@@ -71,6 +71,7 @@ import {
   TripOccurrenceStatus,
   DriverShiftStatus,
   TripTimelineOrigin,
+  VehicleIdleReason,
   NotificationType,
   UserRole,
   VehicleFuelType,
@@ -851,7 +852,19 @@ export const TRIP_TIMELINE_ORIGIN_LABELS: Record<TripTimelineOrigin, string> = {
   EXPENSE: 'Despesa',
   REVENUE: 'Receita',
   OCCURRENCE: 'Ocorrência',
+  IDLE_PERIOD: 'Período parado',
   AUDIT: 'Auditoria',
+};
+
+// Fase B -- motivo de um periodo ocioso persistido (VehicleIdlePeriod).
+export const VEHICLE_IDLE_REASON_LABELS: Record<VehicleIdleReason, string> = {
+  AGUARDANDO_CARGA: 'Aguardando carga',
+  AGUARDANDO_ORDEM: 'Aguardando ordem',
+  MANUTENCAO: 'Manutenção',
+  DOCUMENTACAO: 'Documentação',
+  DESCANSO: 'Descanso',
+  PATIO: 'Pátio',
+  OUTRO: 'Outro',
 };
 
 // Fase 69 -- Centro de Alertas e Notificacoes.

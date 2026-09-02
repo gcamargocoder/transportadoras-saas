@@ -29,6 +29,11 @@ import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { detectOdometerRegression } from '../../common/utils/fuel-consumption.util';
 import { resolveDocumentExpiryStatus } from '../../fleet/utils/document-expiry.util';
 import { evaluateMaintenancePlan } from '../../fleet-operations/utils/maintenance-plan-status.util';
+import {
+  computeIdleSegments,
+  computeMaintenanceOverlapMinutes,
+  resolveIdleAlertThresholdMinutes,
+} from '../../fleet-operations/utils/idle-time.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NEAR_REPLACEMENT_LIFESPAN_USED_PERCENT, NEAR_REPLACEMENT_THRESHOLD_MM } from '../../tires/services/tires.service';
 import { computeTireDistanceLifespan } from '../../tires/utils/tire-lifecycle.util';
@@ -431,6 +436,7 @@ export class NotificationsService {
       deliveryProofPending,
       deliveryProofProblem,
       contractsExpiring,
+      idleVehicles,
     ] = await Promise.all([
       this.collectCriticalOccurrences(tenantId),
       this.collectVehicleUnavailable(tenantId),
@@ -448,6 +454,7 @@ export class NotificationsService {
       this.collectDeliveryProofPending(tenantId),
       this.collectDeliveryProofProblem(tenantId),
       this.collectContractsExpiring(tenantId),
+      this.collectIdleVehicles(tenantId),
     ]);
 
     return [
@@ -467,6 +474,7 @@ export class NotificationsService {
       ...deliveryProofPending,
       ...deliveryProofProblem,
       ...contractsExpiring,
+      ...idleVehicles,
     ];
   }
 
@@ -975,5 +983,133 @@ export class NotificationsService {
           entityId: row.id,
         };
       });
+  }
+
+  // Fase A -- "veiculo ocioso ha muito tempo" (tempo SEM VIAGEM entre
+  // operacoes). Limiar em TenantSettings.preferences.idleAlertThresholdMinutes
+  // (SEM migration -- so leitura da coluna preferences ja existente, mesmo
+  // padrao de resolveStopDurationThresholds/resolveRequirePreTripChecklist).
+  // Ausencia/valor invalido = NENHUM alerta (nunca um numero magico).
+  //
+  // Reaproveita a MESMA util pura do endpoint GET /fleet-operations/idle-time
+  // (computeIdleSegments/computeMaintenanceOverlapMinutes) -- nenhuma
+  // segunda logica de calculo. So o PERIODO CORRENTE (isCurrent) e avaliado
+  // e o tempo coberto por manutencao e descontado (regra 4/5: nao confundir
+  // manutencao com ociosidade).
+  //
+  // NotificationType.VEHICLE_UNAVAILABLE reutilizado (NENHUM enum novo);
+  // entityType='VehicleIdle' distingue de collectVehicleUnavailable
+  // (entityType='Vehicle'), MESMO padrao ja usado por collectMaintenancePlansDue
+  // (VEHICLE_MAINTENANCE + entityType='MaintenancePlan'). Deduplicacao pela
+  // chave unica (tenant+recipient+type+entityType+entityId=vehicleId): a
+  // mesma condicao ativa nunca gera 2 notificacoes; createMany+skipDuplicates
+  // (processTenant) e a barreira, nunca um findFirst-then-create.
+  private async collectIdleVehicles(tenantId: string): Promise<NotificationCandidate[]> {
+    const settings = await this.prisma.tenantSettings.findUnique({
+      where: { tenantId },
+      select: { preferences: true },
+    });
+    const thresholdMinutes = resolveIdleAlertThresholdMinutes(settings?.preferences);
+    if (thresholdMinutes === null) return [];
+
+    const now = new Date();
+    // Veiculo em manutencao/suspenso ja tem Vehicle.status != ACTIVE (via
+    // syncStatusForMaintenance) e nunca e "ocioso disponivel" -- fora daqui.
+    const vehicles = await this.prisma.vehicle.findMany({
+      where: { tenantId, deletedAt: null, status: VehicleStatus.ACTIVE },
+      select: { id: true, plate: true },
+    });
+    if (vehicles.length === 0) return [];
+    const vehicleIds = vehicles.map((v) => v.id);
+    const plateById = new Map(vehicles.map((v) => [v.id, v.plate]));
+
+    const [trips, maintenances] = await Promise.all([
+      this.prisma.trip.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          status: { in: [TripStatus.COMPLETED, TripStatus.IN_PROGRESS, TripStatus.PAUSED] },
+          composition: { vehicleId: { in: vehicleIds } },
+        },
+        select: {
+          id: true,
+          status: true,
+          actualDeparture: true,
+          actualArrival: true,
+          composition: { select: { vehicleId: true } },
+          destination: { select: { name: true } },
+        },
+      }),
+      this.prisma.vehicleMaintenance.findMany({
+        where: {
+          tenantId,
+          vehicleId: { in: vehicleIds },
+          status: { not: VehicleMaintenanceStatus.CANCELLED },
+        },
+        select: { vehicleId: true, openedAt: true, startedAt: true, completedAt: true },
+      }),
+    ]);
+
+    const tripsByVehicle = new Map<
+      string,
+      { tripId: string; status: TripStatus; actualDeparture: Date | null; actualArrival: Date | null; destinationLabel: string | null }[]
+    >();
+    for (const trip of trips) {
+      const vehicleId = trip.composition?.vehicleId;
+      if (!vehicleId) continue;
+      const list = tripsByVehicle.get(vehicleId) ?? [];
+      list.push({
+        tripId: trip.id,
+        status: trip.status,
+        actualDeparture: trip.actualDeparture,
+        actualArrival: trip.actualArrival,
+        destinationLabel: trip.destination?.name ?? null,
+      });
+      tripsByVehicle.set(vehicleId, list);
+    }
+
+    const maintByVehicle = new Map<string, { start: Date; end: Date | null }[]>();
+    for (const m of maintenances) {
+      const list = maintByVehicle.get(m.vehicleId) ?? [];
+      list.push({ start: m.startedAt ?? m.openedAt, end: m.completedAt ?? null });
+      maintByVehicle.set(m.vehicleId, list);
+    }
+
+    const candidates: NotificationCandidate[] = [];
+    for (const [vehicleId, list] of tripsByVehicle) {
+      const current = computeIdleSegments(list, now).find((s) => s.isCurrent);
+      if (!current) continue;
+      const maintenanceMinutes = computeMaintenanceOverlapMinutes(
+        current.idleStart,
+        now,
+        maintByVehicle.get(vehicleId) ?? [],
+      );
+      const netIdleMinutes = Math.max(0, current.totalMinutes - maintenanceMinutes);
+      if (netIdleMinutes < thresholdMinutes) continue;
+
+      const plate = plateById.get(vehicleId) ?? '—';
+      const hours = Math.floor(netIdleMinutes / 60);
+      const mins = netIdleMinutes % 60;
+      const sinceLabel = current.idleStart.toISOString().slice(0, 16).replace('T', ' ');
+      const destSuffix = current.previousDestinationLabel ? ` Último destino: ${current.previousDestinationLabel}.` : '';
+      candidates.push({
+        type: NotificationType.VEHICLE_UNAVAILABLE,
+        severity: AlertSeverity.MEDIUM,
+        title: `Veículo ocioso: ${plate}`,
+        message:
+          `Veículo ${plate} está sem viagem há aproximadamente ${hours}h${String(mins).padStart(2, '0')} ` +
+          `(estimativa, desde ${sinceLabel} UTC).${destSuffix}`,
+        entityType: 'VehicleIdle',
+        entityId: vehicleId,
+        metadata: {
+          plate,
+          idleSince: current.idleStart.toISOString(),
+          netIdleMinutes,
+          maintenanceMinutes,
+          thresholdMinutes,
+        },
+      });
+    }
+    return candidates;
   }
 }

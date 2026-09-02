@@ -52,6 +52,7 @@ import { TiresModule } from './tires/tires.module';
 import { TollDataModule } from './toll-data/toll-data.module';
 import { TripsModule } from './trips/trips.module';
 import { UsersModule } from './users/users.module';
+import { VehicleIdlePeriodsModule } from './vehicle-idle-periods/vehicle-idle-periods.module';
 
 @Module({
   imports: [
@@ -102,6 +103,7 @@ import { UsersModule } from './users/users.module';
     PartsModule,
     MaintenanceProvidersModule,
     FleetOperationsModule,
+    VehicleIdlePeriodsModule,
     NotificationsModule,
     BillingModule,
     FiscalModule,

@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { AlertTriangle, Gauge, Route as RouteIcon, Wallet } from 'lucide-react';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { Badge } from '../../../../../components/ui/badge';
 import { Card, CardHeader } from '../../../../../components/ui/card';
@@ -104,9 +105,22 @@ export default function EmptyTripsPage(): JSX.Element {
       {
         header: 'Motivo',
         cell: ({ row }) => (
-          <Badge tone={EMPTY_TRIP_REASON_TONE[row.original.reason]}>
-            {EMPTY_TRIP_REASON_LABELS[row.original.reason]}
-          </Badge>
+          <div>
+            <Badge tone={EMPTY_TRIP_REASON_TONE[row.original.reason]}>
+              {EMPTY_TRIP_REASON_LABELS[row.original.reason]}
+            </Badge>
+            {/* Fase D -- CONTEXTO apenas (vinculo explicito ida -> retorno);
+                nunca usado para classificar a viagem como vazia -- esse
+                criterio continua sendo somente loadStatus === EMPTY. */}
+            {row.original.previousTripId && (
+              <Link
+                href={`/trips/${row.original.previousTripId}`}
+                className="mt-1 block text-xs font-medium text-brand-600 hover:underline"
+              >
+                ↩ Retorno de outra viagem
+              </Link>
+            )}
+          </div>
         ),
       },
       { header: 'Distância', cell: ({ row }) => nullableKm(row.original.distanceKm) },

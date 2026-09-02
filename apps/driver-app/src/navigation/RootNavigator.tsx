@@ -11,6 +11,7 @@ import { DeliveryStopsScreen } from '../screens/DeliveryStopsScreen';
 import { FinishTripScreen } from '../screens/FinishTripScreen';
 import { FuelScreen } from '../screens/FuelScreen';
 import { HomeScreen } from '../screens/HomeScreen';
+import { IdleReasonScreen } from '../screens/IdleReasonScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
 import { OccurrenceScreen } from '../screens/OccurrenceScreen';
@@ -63,6 +64,11 @@ export function RootNavigator(): React.JSX.Element {
               name="FinishTrip"
               component={FinishTripScreen}
               options={{ headerShown: true, title: 'Finalizar viagem' }}
+            />
+            <Stack.Screen
+              name="IdleReason"
+              component={IdleReasonScreen}
+              options={{ headerShown: true, title: 'Finalizar operação' }}
             />
             <Stack.Screen
               name="Fuel"

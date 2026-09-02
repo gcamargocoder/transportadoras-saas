@@ -47,6 +47,7 @@ describe('HomeScreen -- pausa e retomada', () => {
     mockUseAuth.mockReturnValue({ logout: jest.fn(), driverName: 'Jose' });
     api.getRoute.mockResolvedValue(null);
     api.getNearbyTollPlazas.mockResolvedValue([]);
+    api.getCurrentIdlePeriod.mockResolvedValue(null);
     jest.spyOn(Location, 'getLastKnownPositionAsync').mockResolvedValue({
       coords: { latitude: -23.5, longitude: -46.6 },
     } as never);
@@ -141,6 +142,74 @@ describe('HomeScreen -- pausa e retomada', () => {
       fireEvent.press(await screen.findByText('ENCERRAR VIAGEM'));
 
       expect(navigation.navigate).toHaveBeenCalledWith('FinishTrip', { tripId: 'trip-1' });
+    });
+  });
+
+  // Fase C -- "fluxo pos-viagem": sem viagem ativa, se o veiculo tem um
+  // VehicleIdlePeriod ABERTO (Fase B), a Home mostra o card "VEICULO PARADO"
+  // com um atalho para confirmar/alterar o motivo. Nunca cria/fecha periodo.
+  describe('veiculo parado (sem viagem ativa)', () => {
+    const OPEN_IDLE_PERIOD = {
+      id: 'idle-1',
+      vehicleId: 'veh-1',
+      plate: 'ABC1D23',
+      startedAt: '2026-09-01T09:00:00.000Z',
+      endedAt: null,
+      durationMinutes: null,
+      reason: 'AGUARDANDO_ORDEM' as const,
+      source: 'AUTO' as const,
+      previousDestinationLabel: 'São Paulo/SP',
+      status: 'OPEN' as const,
+    };
+
+    beforeEach(() => {
+      mockUseTrip.mockReturnValue({
+        activeTrip: null,
+        config: null,
+        isLoading: false,
+        refresh: jest.fn().mockResolvedValue(undefined),
+      });
+    });
+
+    it('mostra o card VEICULO PARADO com placa e motivo quando ha periodo ABERTO', async () => {
+      api.getCurrentIdlePeriod.mockResolvedValue(OPEN_IDLE_PERIOD);
+      renderScreen();
+
+      expect(await screen.findByText('VEICULO PARADO')).toBeTruthy();
+      expect(screen.getByText('Veiculo: ABC1D23')).toBeTruthy();
+      expect(screen.getByText(/Motivo: Aguardando ordem/)).toBeTruthy();
+      expect(screen.getByText(/\(automatico\)/)).toBeTruthy();
+    });
+
+    it('o botao navega para a tela IdleReason (Finalizar operacao)', async () => {
+      api.getCurrentIdlePeriod.mockResolvedValue(OPEN_IDLE_PERIOD);
+      const { navigation } = renderScreen();
+
+      fireEvent.press(await screen.findByText('Finalizar operacao / informar motivo'));
+      expect(navigation.navigate).toHaveBeenCalledWith('IdleReason');
+    });
+
+    it('sem periodo aberto: nao mostra o card, so o estado "nenhuma viagem atribuida"', async () => {
+      api.getCurrentIdlePeriod.mockResolvedValue(null);
+      renderScreen();
+
+      expect(await screen.findByText('Nenhuma viagem atribuida no momento.')).toBeTruthy();
+      expect(screen.queryByText('VEICULO PARADO')).toBeNull();
+    });
+
+    it('com viagem ativa o card de veiculo parado nunca aparece (nem consulta o periodo)', async () => {
+      api.getCurrentIdlePeriod.mockResolvedValue(OPEN_IDLE_PERIOD);
+      mockUseTrip.mockReturnValue({
+        activeTrip: IN_PROGRESS_TRIP,
+        config: null,
+        isLoading: false,
+        refresh: jest.fn().mockResolvedValue(undefined),
+      });
+      renderScreen();
+
+      await screen.findByText('PAUSAR VIAGEM');
+      expect(screen.queryByText('VEICULO PARADO')).toBeNull();
+      expect(api.getCurrentIdlePeriod).not.toHaveBeenCalled();
     });
   });
 

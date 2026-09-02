@@ -117,4 +117,47 @@ describe('FinishTripScreen', () => {
     fireEvent.press(screen.getByText('FINALIZAR VIAGEM'));
     await waitFor(() => expect(mockedSubmitOrQueue).toHaveBeenCalledTimes(1));
   });
+
+  // Fase C -- motivo OPCIONAL da parada do veiculo apos esta viagem.
+  it('sem selecionar motivo: o complete NAO carrega idleReason (motorista nao e obrigado)', async () => {
+    mockedSubmitOrQueue.mockResolvedValue({ queued: false });
+    renderScreen();
+    await screen.findByText('São Paulo/SP');
+
+    fireEvent.changeText(screen.getByLabelText('KM final'), '100850');
+    fireEvent.press(screen.getByText('FINALIZAR VIAGEM'));
+
+    await waitFor(() => expect(mockedSubmitOrQueue).toHaveBeenCalledTimes(1));
+    const payload = mockedSubmitOrQueue.mock.calls[0]![0];
+    expect(payload).toMatchObject({ kind: 'complete', tripId: 'trip-1', finalOdometerKm: 100850 });
+    expect('idleReason' in payload).toBe(false);
+  });
+
+  it('selecionando um motivo: o complete carrega idleReason', async () => {
+    mockedSubmitOrQueue.mockResolvedValue({ queued: false });
+    renderScreen();
+    await screen.findByText('São Paulo/SP');
+
+    fireEvent.changeText(screen.getByLabelText('KM final'), '100850');
+    fireEvent.press(screen.getByText('Descanso'));
+    fireEvent.press(screen.getByText('FINALIZAR VIAGEM'));
+
+    await waitFor(() =>
+      expect(mockedSubmitOrQueue).toHaveBeenCalledWith(expect.objectContaining({ kind: 'complete', idleReason: 'DESCANSO' })),
+    );
+  });
+
+  it('tocar o mesmo motivo de novo desmarca -- volta a nao enviar idleReason', async () => {
+    mockedSubmitOrQueue.mockResolvedValue({ queued: false });
+    renderScreen();
+    await screen.findByText('São Paulo/SP');
+
+    fireEvent.changeText(screen.getByLabelText('KM final'), '100850');
+    fireEvent.press(screen.getByText('Pátio'));
+    fireEvent.press(screen.getByText('Pátio'));
+    fireEvent.press(screen.getByText('FINALIZAR VIAGEM'));
+
+    await waitFor(() => expect(mockedSubmitOrQueue).toHaveBeenCalledTimes(1));
+    expect('idleReason' in mockedSubmitOrQueue.mock.calls[0]![0]).toBe(false);
+  });
 });

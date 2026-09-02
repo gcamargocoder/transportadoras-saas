@@ -4,6 +4,7 @@ import { TollRoutesModule } from '../toll-routes/toll-routes.module';
 import { TripOperationsModule } from '../trip-operations/trip-operations.module';
 import { TripExpensesModule } from '../trip-expenses/trip-expenses.module';
 import { TripSettlementsModule } from '../trip-settlements/trip-settlements.module';
+import { VehicleIdlePeriodsModule } from '../vehicle-idle-periods/vehicle-idle-periods.module';
 import { CustomersController } from './controllers/customers.controller';
 import { DeliveryStopsController } from './controllers/delivery-stops.controller';
 import { LocationsController } from './controllers/locations.controller';
@@ -19,6 +20,7 @@ import { RouteVersionsService } from './services/route-versions.service';
 import { TripDeliveryStopsService } from './services/trip-delivery-stops.service';
 import { TripEtaService } from './services/trip-eta.service';
 import { TripMetricsService } from './services/trip-metrics.service';
+import { TripReturnConsolidationService } from './services/trip-return-consolidation.service';
 import { TripRoutingService } from './services/trip-routing.service';
 import { TripTimelineService } from './services/trip-timeline.service';
 import { TripsService } from './services/trips.service';
@@ -29,7 +31,16 @@ import { TripsService } from './services/trips.service';
 // acionar deteccao de desvio; nenhuma dependencia circular (RoutingModule
 // nunca importa TripsModule).
 @Module({
-  imports: [TripExpensesModule, TripSettlementsModule, TollRoutesModule, TripOperationsModule, RoutingModule],
+  imports: [
+    TripExpensesModule,
+    TripSettlementsModule,
+    TollRoutesModule,
+    TripOperationsModule,
+    RoutingModule,
+    // Fase B -- abertura/fechamento AUTOMATICO de VehicleIdlePeriod na
+    // MESMA transacao da transicao de status da viagem (updateStatus).
+    VehicleIdlePeriodsModule,
+  ],
   controllers: [TripsController, CustomersController, LocationsController, DeliveryStopsController],
   providers: [
     TripsService,
@@ -41,6 +52,9 @@ import { TripsService } from './services/trips.service';
     FleetOptimizationService,
     EmptyTripsService,
     TripMetricsService,
+    // Fase E -- consolidacao DERIVADA ida -> retorno (somente leitura),
+    // reaproveita TripSettlementsService.getFinancialResult por perna.
+    TripReturnConsolidationService,
     TripTimelineService,
     CustomersService,
     CustomerContactsService,

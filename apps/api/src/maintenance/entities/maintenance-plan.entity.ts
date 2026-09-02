@@ -1,6 +1,20 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { MaintenanceComponent, VehicleMaintenanceType } from '@prisma/client';
-import { MaintenancePlanEvaluationStatus } from '../../fleet-operations/utils/maintenance-plan-status.util';
+import {
+  MaintenancePlanEvaluationStatus,
+  MaintenancePlanOverdueReason,
+} from '../../fleet-operations/utils/maintenance-plan-status.util';
+
+// Fase 81 -- resumo da ULTIMA execucao considerada como referencia para o
+// calculo do proximo vencimento (a VehicleMaintenance COMPLETED mais
+// recente vinculada ao plano). null quando o plano nunca teve execucao.
+export class MaintenancePlanLastExecutionEntity {
+  @ApiProperty({ nullable: true })
+  executedAt!: Date | null;
+
+  @ApiProperty({ nullable: true })
+  odometerKm!: number | null;
+}
 
 export class MaintenancePlanEntity {
   @ApiProperty({ format: 'uuid' })
@@ -36,6 +50,9 @@ export class MaintenancePlanEntity {
   @ApiProperty()
   active!: boolean;
 
+  @ApiProperty({ nullable: true, description: 'Fase 81 -- observacoes livres do plano.' })
+  notes!: string | null;
+
   @ApiProperty()
   createdAt!: Date;
 
@@ -51,6 +68,12 @@ export class MaintenancePlanEntity {
   @ApiProperty({ enum: ['OK', 'DUE_SOON', 'OVERDUE', 'UNKNOWN'] })
   status!: MaintenancePlanEvaluationStatus;
 
+  // Fase 81 -- granularidade do vencimento. So preenchido quando
+  // status === 'OVERDUE': 'KM' (vencida por KM), 'DATE' (vencida por data),
+  // 'BOTH' (vencida pelos dois criterios). null nos demais status.
+  @ApiProperty({ enum: ['KM', 'DATE', 'BOTH'], nullable: true })
+  overdueReason!: MaintenancePlanOverdueReason;
+
   @ApiProperty({ nullable: true })
   dueOdometerKm!: number | null;
 
@@ -62,4 +85,9 @@ export class MaintenancePlanEntity {
 
   @ApiProperty({ nullable: true })
   overdueByDays!: number | null;
+
+  // Fase 81 -- ultima execucao registrada para este plano (referencia do
+  // calculo acima). null quando nunca houve execucao.
+  @ApiProperty({ type: MaintenancePlanLastExecutionEntity, nullable: true })
+  lastExecution!: MaintenancePlanLastExecutionEntity | null;
 }

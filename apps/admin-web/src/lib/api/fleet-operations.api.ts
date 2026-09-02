@@ -1,10 +1,11 @@
-import type { QueryableParams } from '../../types/api';
+import type { PaginationParams, QueryableParams } from '../../types/api';
 import type {
   FleetCostsEntity,
   FleetCompositionsOverviewEntity,
   FleetEmptyTripsSummaryEntity,
   FleetFinancialDashboardEntity,
   FleetFuelAnalyticsEntity,
+  FleetIdleTimeEntity,
   FleetMaintenanceDashboardEntity,
   FleetOccurrencesDashboardEntity,
   FleetOperationalIndicatorsEntity,
@@ -13,6 +14,8 @@ import type {
   FleetStopsDashboardEntity,
   FleetTiresOverviewEntity,
   FleetVehiclesOverviewEntity,
+  PaginatedVehicleIdlePeriodsEntity,
+  VehicleIdlePeriodEntity,
 } from '../../types/entities';
 import type {
   ExpenseCategory,
@@ -25,6 +28,7 @@ import type {
   TripOccurrenceType,
   TripStopStatus,
   TripStopType,
+  VehicleIdleReason,
   VehicleStatus,
   VehicleType,
 } from '../../types/enums';
@@ -125,6 +129,65 @@ export function getFleetOperationsCompositions(query: FleetOperationsQuery = {},
 // categoria/status).
 export function getFleetOperationsFinancial(query: FleetOperationsQuery = {}, signal?: AbortSignal) {
   return api.get<FleetFinancialDashboardEntity>('/fleet-operations/financial', query, signal);
+}
+
+// Fase A -- tempo OCIOSO entre operacoes (veiculo SEM VIAGEM entre a
+// chegada de uma viagem e a partida da seguinte). Distinto de
+// getFleetOperationsDowntimeCost (parada DENTRO da viagem, via TripStop).
+// Um item = um periodo ocioso; a Torre de Controle usa so os itens com
+// isCurrentlyIdle=true ("Frota parada agora").
+export interface FleetIdleTimeQuery extends PaginationParams {
+  from?: string | undefined;
+  to?: string | undefined;
+  vehicleId?: string | undefined;
+}
+
+export function getFleetOperationsIdleTime(query: FleetIdleTimeQuery = {}, signal?: AbortSignal) {
+  return api.get<FleetIdleTimeEntity>('/fleet-operations/idle-time', query, signal);
+}
+
+// Fase B -- periodos ociosos PERSISTIDOS (VehicleIdlePeriod). Abertura/
+// fechamento AUTOMATICO acontece na maquina de estados da viagem (backend);
+// estes endpoints sao leitura + CRUD administrativo (criacao retroativa,
+// correcao de motivo, fechamento manual).
+export interface FleetIdlePeriodsQuery extends PaginationParams {
+  vehicleId?: string | undefined;
+  from?: string | undefined;
+  to?: string | undefined;
+  reason?: VehicleIdleReason | undefined;
+  open?: boolean | undefined;
+}
+
+export function getFleetOperationsIdlePeriods(query: FleetIdlePeriodsQuery = {}, signal?: AbortSignal) {
+  return api.get<PaginatedVehicleIdlePeriodsEntity>('/fleet-operations/idle-periods', query, signal);
+}
+
+export function getFleetOperationsIdlePeriod(id: string, signal?: AbortSignal) {
+  return api.get<VehicleIdlePeriodEntity>(`/fleet-operations/idle-periods/${id}`, undefined, signal);
+}
+
+export interface CreateIdlePeriodInput {
+  vehicleId: string;
+  startedAt: string;
+  endedAt?: string;
+  reason?: VehicleIdleReason;
+  tripBeforeId?: string;
+  tripAfterId?: string;
+  notes?: string;
+}
+
+export function createFleetOperationsIdlePeriod(input: CreateIdlePeriodInput) {
+  return api.post<VehicleIdlePeriodEntity>('/fleet-operations/idle-periods', input);
+}
+
+export interface UpdateIdlePeriodInput {
+  reason?: VehicleIdleReason;
+  endedAt?: string;
+  notes?: string;
+}
+
+export function updateFleetOperationsIdlePeriod(id: string, input: UpdateIdlePeriodInput) {
+  return api.patch<VehicleIdlePeriodEntity>(`/fleet-operations/idle-periods/${id}`, input);
 }
 
 // Fase 68 -- dashboard de ocorrencias (TripOccurrence, Fase 67). DTO proprio

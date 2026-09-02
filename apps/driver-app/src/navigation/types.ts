@@ -22,6 +22,10 @@ export type RootStackParamList = {
   // Fase 70 -- lista as notificacoes do motorista (independe de viagem
   // ativa, por isso sem params -- reaproveita GET driver/notifications).
   Notifications: undefined;
+  // Fase C -- "Finalizar operacao": confirmar/alterar o MOTIVO do periodo
+  // ocioso ABERTO do veiculo apos a viagem. Sem params -- consulta
+  // GET /driver/idle-period (o periodo do proprio motorista).
+  IdleReason: undefined;
   // Fase 39 -- tela de selecao/criacao (lista templates PUBLISHED do tipo
   // pedido, cria ou retoma a execucao).
   Checklist: { tripId: string; type: ChecklistType };

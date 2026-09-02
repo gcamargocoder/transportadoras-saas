@@ -30,12 +30,58 @@ import {
 } from '../../../../features/trips/status';
 import { RECONCILIATION_STATUS_TONE } from '../../../../features/tolls/reconciliation-verdict';
 import { listDrivers } from '../../../../lib/api/drivers.api';
+import { getFleetOperationsIdlePeriods, getFleetOperationsIdleTime } from '../../../../lib/api/fleet-operations.api';
 import { listVehicles } from '../../../../lib/api/fleet.api';
 import { getActiveOperations } from '../../../../lib/api/trips.api';
-import { TRIP_PRIORITY_LABELS, TRIP_STATUS_LABELS } from '../../../../lib/labels';
+import {
+  TRIP_LOAD_STATUS_LABELS,
+  TRIP_PRIORITY_LABELS,
+  TRIP_STATUS_LABELS,
+  VEHICLE_IDLE_REASON_LABELS,
+} from '../../../../lib/labels';
 import type { TripOperationEntity } from '../../../../types/entities';
-import type { TripPriority } from '../../../../types/enums';
+import type { TripPriority, VehicleIdlePeriodSource, VehicleIdleReason } from '../../../../types/enums';
 import { formatDateTime } from '../../../../utils/format';
+
+// Fase A + B -- linha unificada da secao "Frota parada agora". `persisted`
+// indica que veio de um VehicleIdlePeriod real (com motivo); caso contrario
+// e a estimativa derivada da Fase A.
+interface IdleFleetRow {
+  vehicleId: string;
+  plate: string | null;
+  since: string;
+  minutes: number;
+  lastDestination: string | null;
+  nextTripId: string | null;
+  maintenanceBadge: string | null;
+  reason: VehicleIdleReason | null;
+  // Fase C -- origem do periodo: DRIVER_APP (motorista informou), MANUAL_ADMIN
+  // (operacao registrou), AUTO (abertura automatica na conclusao). null = a
+  // linha veio do fallback derivado da Fase A (nao ha periodo persistido).
+  origin: VehicleIdlePeriodSource | null;
+  persisted: boolean;
+}
+
+const IDLE_ORIGIN_LABEL: Record<VehicleIdlePeriodSource, string> = {
+  AUTO: 'Automático',
+  MANUAL_ADMIN: 'Operação',
+  DRIVER_APP: 'Motorista',
+};
+
+// Fase A -- "Frota parada agora". Duracao ociosa liquida (ja descontada a
+// manutencao) em formato curto. Sempre estimativa ("parado desde ... ate
+// agora"), nunca um fim confirmado.
+function formatIdleDuration(minutes: number): string {
+  if (minutes < 1) return 'menos de 1 min';
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = Math.round(minutes % 60);
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (mins > 0 && days === 0) parts.push(`${mins}min`);
+  return parts.join(' ') || `${mins}min`;
+}
 
 // Fase 105 -- Torre de Controle Operacional. Auditoria previa confirmou que
 // o painel de monitoramento (Fase 29, GET /trips/operations/active,
@@ -87,6 +133,120 @@ export default function ControlTowerPage(): JSX.Element {
     refetchInterval: OPERATIONS_POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,
   });
+
+  // "Frota parada agora" (Fase A + Fase B). Duas fontes, mesma cadencia de
+  // polling: (B) periodos ociosos PERSISTIDOS ABERTOS -- prioridade quando
+  // existem, trazem o MOTIVO real; (A) tempo ocioso DERIVADO on-the-fly --
+  // fallback para veiculos que ainda nao tem periodo persistido (viagens
+  // concluidas antes da Fase B). Persistido sempre vence por veiculo.
+  const idleTimeQuery = useQuery({
+    queryKey: ['fleet-operations', 'idle-time', 'control-tower'],
+    queryFn: ({ signal }) => getFleetOperationsIdleTime({ pageSize: 100 }, signal),
+    refetchInterval: OPERATIONS_POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+  });
+  const idlePeriodsQuery = useQuery({
+    queryKey: ['fleet-operations', 'idle-periods', 'control-tower', 'open'],
+    queryFn: ({ signal }) => getFleetOperationsIdlePeriods({ open: true, pageSize: 100 }, signal),
+    refetchInterval: OPERATIONS_POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+  });
+
+  const idleRows = useMemo<IdleFleetRow[]>(() => {
+    const byVehicle = new Map<string, IdleFleetRow>();
+    for (const r of idleTimeQuery.data?.items ?? []) {
+      if (!r.isCurrentlyIdle) continue;
+      byVehicle.set(r.vehicleId, {
+        vehicleId: r.vehicleId,
+        plate: r.plate,
+        since: r.idleStart,
+        minutes: r.netIdleMinutes,
+        lastDestination: r.lastDestinationLabel,
+        nextTripId: r.nextTripId,
+        maintenanceBadge: r.maintenanceMinutes > 0 ? `${formatIdleDuration(r.maintenanceMinutes)} em manutenção` : null,
+        reason: null,
+        origin: null,
+        persisted: false,
+      });
+    }
+    // Fase B tem prioridade: substitui/insere a linha do veiculo.
+    for (const p of idlePeriodsQuery.data?.items ?? []) {
+      byVehicle.set(p.vehicleId, {
+        vehicleId: p.vehicleId,
+        plate: p.plate,
+        since: p.startedAt,
+        minutes: Math.max(0, Math.round((Date.now() - new Date(p.startedAt).getTime()) / 60000)),
+        lastDestination: p.previousDestinationLabel,
+        nextTripId: null,
+        maintenanceBadge: p.reason === 'MANUTENCAO' ? 'Em manutenção' : null,
+        reason: p.reason,
+        origin: p.source,
+        persisted: true,
+      });
+    }
+    return [...byVehicle.values()].sort((a, b) => b.minutes - a.minutes);
+  }, [idleTimeQuery.data, idlePeriodsQuery.data]);
+
+  const idleColumns = useMemo<ColumnDef<IdleFleetRow, unknown>[]>(
+    () => [
+      { header: 'Veículo', accessorFn: (row) => row.plate },
+      {
+        header: 'Parado há',
+        cell: ({ row }) => (
+          <div>
+            <p className="text-sm text-ink">{formatIdleDuration(row.original.minutes)}</p>
+            <p className="text-xs text-ink-subtle">{row.original.persisted ? 'período registrado' : 'estimativa'}</p>
+          </div>
+        ),
+      },
+      { header: 'Desde', cell: ({ row }) => <span className="text-sm">{formatDateTime(row.original.since)}</span> },
+      {
+        header: 'Motivo',
+        cell: ({ row }) =>
+          row.original.reason ? (
+            <Badge tone="neutral">{VEHICLE_IDLE_REASON_LABELS[row.original.reason]}</Badge>
+          ) : (
+            <span className="text-xs text-ink-subtle">—</span>
+          ),
+      },
+      {
+        header: 'Origem',
+        cell: ({ row }) =>
+          row.original.origin ? (
+            <Badge tone={row.original.origin === 'DRIVER_APP' ? 'success' : 'neutral'}>
+              {IDLE_ORIGIN_LABEL[row.original.origin]}
+            </Badge>
+          ) : (
+            <span className="text-xs text-ink-subtle">Estimativa</span>
+          ),
+      },
+      {
+        header: 'Último destino',
+        cell: ({ row }) => <span className="text-sm">{row.original.lastDestination ?? '—'}</span>,
+      },
+      {
+        header: 'Próxima viagem',
+        cell: ({ row }) =>
+          row.original.nextTripId ? (
+            <Link href={`/trips/${row.original.nextTripId}`} onClick={(e) => e.stopPropagation()} className="text-brand-600 hover:underline">
+              Ver viagem
+            </Link>
+          ) : (
+            <span className="text-xs text-ink-subtle">Nenhuma</span>
+          ),
+      },
+      {
+        header: 'Manutenção',
+        cell: ({ row }) =>
+          row.original.maintenanceBadge ? (
+            <Badge tone="warning">{row.original.maintenanceBadge}</Badge>
+          ) : (
+            <span className="text-xs text-ink-subtle">—</span>
+          ),
+      },
+    ],
+    [],
+  );
 
   const items = query.data?.items ?? [];
 
@@ -163,6 +323,22 @@ export default function ControlTowerPage(): JSX.Element {
                 <Badge tone={TRIP_PRIORITY_TONE[row.original.priority]}>
                   {TRIP_PRIORITY_LABELS[row.original.priority]}
                 </Badge>
+              )}
+              {/* Fase D -- carga REAL da largada + vinculo explicito de
+                  retorno. Nunca substitui/duplica Frota parada agora, a
+                  prioridade do VehicleIdlePeriod, o fallback da Fase A, o
+                  motivo ou a origem AUTO/MANUAL_ADMIN/DRIVER_APP acima. */}
+              {row.original.loadStatus && (
+                <Badge tone="neutral">{TRIP_LOAD_STATUS_LABELS[row.original.loadStatus]}</Badge>
+              )}
+              {row.original.previousTripId && (
+                <Link
+                  href={`/trips/${row.original.previousTripId}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-xs font-medium text-brand-600 hover:underline"
+                >
+                  ↩ Retorno
+                </Link>
               )}
             </div>
           </div>
@@ -325,6 +501,34 @@ export default function ControlTowerPage(): JSX.Element {
         <StatCard label="Entregas pendentes/em andamento" value={String(summary.pendingDeliveries)} icon={PackageCheck} />
         <StatCard label="Alertas em aberto" value={String(summary.openAlerts)} icon={Truck} tone={summary.openAlerts > 0 ? 'warning' : 'success'} />
         <StatCard label="Manutenção vencida" value={String(summary.overdueMaintenance)} icon={Truck} tone={summary.overdueMaintenance > 0 ? 'danger' : 'success'} />
+      </div>
+
+      <div className="mt-6">
+        <div className="mb-2 flex items-center gap-2">
+          <Truck size={16} className="text-ink-subtle" />
+          <h2 className="text-sm font-semibold text-ink">Frota parada agora</h2>
+          <Badge tone={idleRows.length > 0 ? 'warning' : 'success'}>{idleRows.length}</Badge>
+        </div>
+        <div className="overflow-hidden rounded-lg border border-border bg-white">
+          <DataTable
+            columns={idleColumns}
+            data={idleRows}
+            isLoading={idleTimeQuery.isLoading || idlePeriodsQuery.isLoading}
+            isError={idleTimeQuery.isError && idlePeriodsQuery.isError}
+            onRetry={() => {
+              void idleTimeQuery.refetch();
+              void idlePeriodsQuery.refetch();
+            }}
+            getRowId={(row) => row.vehicleId}
+            emptyTitle="Nenhum veículo parado"
+            emptyDescription="Todos os veículos com viagens registradas estão em operação ou já saíram para a próxima."
+          />
+        </div>
+        <p className="mt-2 text-xs text-ink-subtle">
+          Tempo sem viagem entre a chegada da última viagem e a próxima partida. Linhas marcadas &ldquo;período registrado&rdquo;
+          vêm de um período ocioso persistido (com motivo, corrigível pelo administrador); as demais são a estimativa
+          derivada até o instante da consulta.
+        </p>
       </div>
 
       <div className="mt-6">

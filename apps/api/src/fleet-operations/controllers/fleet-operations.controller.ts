@@ -6,6 +6,7 @@ import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FLEET_OPERATIONS_READ_ROLES } from '../constants/fleet-operations-roles.constants';
 import { FindFleetOccurrencesQueryDto } from '../dto/find-fleet-occurrences-query.dto';
+import { FindIdleTimeQueryDto } from '../dto/find-idle-time-query.dto';
 import { FleetOperationsQueryDto } from '../dto/fleet-operations-query.dto';
 import { FleetCostsEntity } from '../entities/fleet-costs.entity';
 import { FleetFuelAnalyticsEntity } from '../entities/fleet-fuel-analytics.entity';
@@ -15,11 +16,13 @@ import { FleetOperationalIndicatorsEntity } from '../entities/fleet-operational-
 import { FleetOperationsDashboardEntity } from '../entities/fleet-operations-dashboard.entity';
 import { FleetStopsDashboardEntity } from '../entities/fleet-stops-dashboard.entity';
 import { FleetDowntimeCostEntity } from '../entities/fleet-downtime-cost.entity';
+import { FleetIdleTimeEntity } from '../entities/fleet-idle-time.entity';
 import { FleetEmptyTripsSummaryEntity } from '../entities/fleet-empty-trips-summary.entity';
 import { FleetCompositionsOverviewEntity } from '../entities/fleet-compositions-overview.entity';
 import { FleetFinancialDashboardEntity } from '../entities/fleet-financial-dashboard.entity';
 import { FleetTiresOverviewEntity } from '../entities/fleet-tires-overview.entity';
 import { FleetVehiclesOverviewEntity } from '../entities/fleet-vehicles-overview.entity';
+import { FleetIdleTimeService } from '../services/fleet-idle-time.service';
 import { FleetOccurrencesMetricsService } from '../services/fleet-occurrences-metrics.service';
 import { FleetOperationsMetricsService } from '../services/fleet-operations-metrics.service';
 
@@ -34,6 +37,7 @@ export class FleetOperationsController {
   constructor(
     private readonly metricsService: FleetOperationsMetricsService,
     private readonly occurrencesMetricsService: FleetOccurrencesMetricsService,
+    private readonly idleTimeService: FleetIdleTimeService,
     private readonly tenantContext: TenantContext,
   ) {}
 
@@ -157,6 +161,22 @@ export class FleetOperationsController {
   @ApiOkResponse({ type: FleetDowntimeCostEntity })
   getDowntimeCost(@Query() query: FleetOperationsQueryDto): Promise<FleetDowntimeCostEntity> {
     return this.metricsService.getDowntimeCost(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('idle-time')
+  @Roles(...FLEET_OPERATIONS_READ_ROLES)
+  @ApiOperation({
+    summary:
+      'Fase A -- tempo OCIOSO entre operacoes: periodo em que cada veiculo ficou SEM VIAGEM entre a ' +
+      'chegada de uma viagem (Trip.actualArrival) e a partida da seguinte (Trip.actualDeparture). ' +
+      'Distinto de /downtime-cost (parada DENTRO da viagem, via TripStop). Um item = um periodo ' +
+      'ocioso; itens com isCurrentlyIdle=true sao "parado desde ... ate agora" (estimativa). ' +
+      'maintenanceMinutes = parte do periodo coberta por VehicleMaintenance (sem duplicar minutos). ' +
+      'Filtros: from/to (sobreposicao), vehicleId, page/pageSize.',
+  })
+  @ApiOkResponse({ type: FleetIdleTimeEntity })
+  getIdleTime(@Query() query: FindIdleTimeQueryDto): Promise<FleetIdleTimeEntity> {
+    return this.idleTimeService.getIdleTime(this.tenantContext.requireTenantId(), query);
   }
 
   @Get('financial')

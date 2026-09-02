@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { Badge } from '../../../components/ui/badge';
 import { Card, CardBody, CardHeader } from '../../../components/ui/card';
 import { EntitySelect } from '../../../components/ui/entity-select';
@@ -12,6 +13,7 @@ import { useAuth } from '../../../hooks/use-auth';
 import { toFriendlyMessage } from '../../../lib/api/errors';
 import {
   getTripMetrics,
+  getTripReturnConsolidation,
   getTripSummary,
   updateTrip,
   updateTripStatus,
@@ -38,6 +40,17 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
     queryKey: ['trips', trip.id, 'metrics'],
     queryFn: () => getTripMetrics(trip.id),
   });
+  // Fase E -- consolidacao DERIVADA ida + retorno (somente leitura). O card
+  // so aparece quando ha retornos vinculados OU quando esta viagem e, ela
+  // propria, o retorno de outra (previousTripId). Uma consulta por pagina de
+  // detalhe -- nunca em lista.
+  const consolidationQuery = useQuery({
+    queryKey: ['trips', trip.id, 'return-consolidation'],
+    queryFn: () => getTripReturnConsolidation(trip.id),
+  });
+  const consolidation = consolidationQuery.data;
+  const showConsolidation =
+    !!consolidation && (consolidation.returns.length > 0 || !!consolidation.outbound.previousTripId);
 
   const statusMutation = useMutation({
     mutationFn: (status: TripStatus) => updateTripStatus(trip.id, status),
@@ -89,6 +102,16 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
           }
         />
         <CardBody>
+          {/* Fase D -- vinculo EXPLICITO ida -> retorno. So aparece quando o
+              operador de fato informou previousTripId; nunca inferido. */}
+          {trip.previousTrip && (
+            <Link
+              href={`/trips/${trip.previousTrip.id}`}
+              className="mb-3 inline-flex w-fit items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 hover:underline"
+            >
+              ↩ Retorno da viagem {trip.previousTrip.originName} → {trip.previousTrip.destinationName}
+            </Link>
+          )}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Cliente" value={trip.customerName ?? '-'} />
             <Field label="Motorista" value={trip.driverName ?? '-'} />
@@ -98,8 +121,12 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
             <Field label="Saída real" value={formatDateTime(trip.actualDeparture)} />
             <Field label="Chegada real" value={formatDateTime(trip.actualArrival)} />
             <Field
-              label="Carga"
+              label="Carga (real, na largada)"
               value={trip.loadStatus ? TRIP_LOAD_STATUS_LABELS[trip.loadStatus] : '-'}
+            />
+            <Field
+              label="Carga planejada"
+              value={trip.plannedLoadStatus ? TRIP_LOAD_STATUS_LABELS[trip.plannedLoadStatus] : '-'}
             />
             <Field
               label="KM inicial"
@@ -142,6 +169,89 @@ export function OverviewTab({ trip }: { trip: TripEntity }): JSX.Element {
           {trip.notes && <p className="mt-4 text-sm text-ink-muted">{trip.notes}</p>}
         </CardBody>
       </Card>
+
+      {/* Fase E -- resumo "Operação ida + retorno" (derivado, somente leitura;
+          nunca altera dado, financeiro por perna = /financial-result). */}
+      {showConsolidation && consolidation && (
+        <Card>
+          <CardHeader title="Operação ida + retorno" />
+          <CardBody>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Field label="Pernas" value={`${consolidation.legCount} (1 ida + ${consolidation.returnLegCount} retorno(s))`} />
+              <Field
+                label="Distância concluída"
+                value={
+                  consolidation.totalCompletedDistanceKm !== null
+                    ? `${formatNumber(consolidation.totalCompletedDistanceKm, 1)} km`
+                    : '—'
+                }
+              />
+              <Field label="Custo total" value={formatCurrency(consolidation.totalCost)} />
+              <Field
+                label="Receita contratada"
+                value={
+                  consolidation.totalContractedRevenue !== null
+                    ? formatCurrency(consolidation.totalContractedRevenue)
+                    : '—'
+                }
+              />
+              <Field label="Receita faturada" value={formatCurrency(consolidation.totalInvoicedRevenue)} />
+              <Field label="Receita recebida" value={formatCurrency(consolidation.totalReceivedRevenue)} />
+              <Field
+                label="Resultado operacional"
+                value={
+                  consolidation.consolidatedOperatingResult !== null
+                    ? formatCurrency(consolidation.consolidatedOperatingResult)
+                    : '—'
+                }
+              />
+              <Field label="Resultado faturado" value={formatCurrency(consolidation.consolidatedInvoicedResult)} />
+            </div>
+
+            {!consolidation.revenueComplete && (
+              <p className="mt-3 text-xs text-warning-700">
+                Resultado operacional parcial: apenas {consolidation.legsWithContractedRevenue} de{' '}
+                {consolidation.legCount} pernas têm receita contratada. O custo é o total; a receita, só das pernas com valor comercial.
+              </p>
+            )}
+
+            <div className="mt-4 flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
+              {[consolidation.outbound, ...consolidation.returns].map((leg) => (
+                <div key={leg.tripId} className="flex flex-wrap items-center justify-between gap-2 p-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Badge tone={leg.role === 'OUTBOUND' ? 'brand' : 'neutral'}>
+                        {leg.role === 'OUTBOUND' ? 'Ida' : 'Retorno'}
+                      </Badge>
+                      <Link href={`/trips/${leg.tripId}`} className="text-sm font-medium text-brand-600 hover:underline">
+                        {leg.originName} → {leg.destinationName}
+                      </Link>
+                      <span className="text-xs text-ink-subtle">{TRIP_STATUS_LABELS[leg.status]}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-ink-subtle">
+                      Carga real:{' '}
+                      {leg.loadCondition === 'UNKNOWN'
+                        ? 'não informada'
+                        : TRIP_LOAD_STATUS_LABELS[leg.loadCondition]}
+                      {leg.plannedLoadStatus &&
+                        ` · Planejado: ${TRIP_LOAD_STATUS_LABELS[leg.plannedLoadStatus]}`}
+                    </p>
+                  </div>
+                  <div className="text-right text-xs text-ink-subtle">
+                    <p>Custo: {formatCurrency(leg.financialResult.totalCost)}</p>
+                    <p>
+                      Resultado:{' '}
+                      {leg.financialResult.operatingResult !== null
+                        ? formatCurrency(leg.financialResult.operatingResult)
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {summaryQuery.isLoading && <LoadingState label="Carregando resumo" />}
       {summaryQuery.isError && <ErrorState onRetry={() => summaryQuery.refetch()} />}

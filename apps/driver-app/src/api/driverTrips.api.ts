@@ -6,6 +6,7 @@ import {
   DeliveryProof,
   DriverActiveTrip,
   DriverConfig,
+  DriverIdlePeriod,
   DriverRoute,
   DriverShift,
   DriverTrip,
@@ -25,6 +26,7 @@ import {
   TripOccurrence,
   TripStop,
   TripStopType,
+  VehicleIdleReason,
 } from './driverTrips.types';
 
 export function getConfig(): Promise<DriverConfig> {
@@ -80,11 +82,27 @@ export function resumeTrip(
 // preenche o formulario de encerramento.
 export function completeTrip(
   tripId: string,
-  input?: { finalOdometerKm?: number; latitude?: number; longitude?: number },
+  input?: { finalOdometerKm?: number; latitude?: number; longitude?: number; idleReason?: VehicleIdleReason },
 ): Promise<DriverTrip> {
   return apiRequest<DriverTrip>(`/driver/trips/${tripId}/complete`, {
     method: 'POST',
     body: input ?? {},
+  });
+}
+
+// Fase C -- periodo ocioso ABERTO do veiculo que este motorista acabou de
+// operar (ou null). Datas/duracao sempre do backend.
+export function getCurrentIdlePeriod(): Promise<DriverIdlePeriod | null> {
+  return apiRequest<DriverIdlePeriod | null>('/driver/idle-period', { method: 'GET' });
+}
+
+// Fase C -- o motorista informa/corrige o MOTIVO do periodo ocioso aberto.
+// SEMPRE 200; devolve null (no-op) quando nao ha periodo aberto (proxima
+// viagem ja iniciou). NUNCA envia duracao/datas.
+export function setIdleReason(reason: VehicleIdleReason): Promise<DriverIdlePeriod | null> {
+  return apiRequest<DriverIdlePeriod | null>('/driver/idle-period', {
+    method: 'PATCH',
+    body: { reason },
   });
 }
 

@@ -13,6 +13,7 @@ import { TrackingPointsService } from '../../trip-operations/services/tracking-p
 import { TripEntity } from '../../trips/entities/trip.entity';
 import { TripWithRelations } from '../../trips/mappers/trip.mapper';
 import { TripsService } from '../../trips/services/trips.service';
+import { VehicleIdlePeriodsService } from '../../vehicle-idle-periods/services/vehicle-idle-periods.service';
 import { DriverActiveTripEntity } from '../entities/driver-active-trip.entity';
 import { DriverConfigEntity } from '../entities/driver-config.entity';
 import { NearbyTollPlazaEntity } from '../entities/nearby-toll-plaza.entity';
@@ -42,6 +43,7 @@ export class DriverTripsService {
     private readonly tripsService: TripsService,
     private readonly trackingPointsService: TrackingPointsService,
     private readonly routingService: RoutingService,
+    private readonly idlePeriodsService: VehicleIdlePeriodsService,
   ) {}
 
   // GET /driver/trips/active -- unica fonte de verdade ao abrir o app.
@@ -233,17 +235,34 @@ export class DriverTripsService {
     metadata: RequestMetadata,
   ): Promise<TripEntity> {
     const trip = await this.assertOwnedByDriver(tenantId, driverId, tripId);
+
+    let result: TripEntity;
     if (trip.status === TripStatus.COMPLETED) {
-      return this.tripsService.findOne(tenantId, tripId);
+      result = await this.tripsService.findOne(tenantId, tripId);
+    } else {
+      await this.recordPositionIfProvided(tenantId, tripId, dto.latitude, dto.longitude);
+      result = await this.tripsService.updateStatus(
+        tenantId,
+        tripId,
+        { status: TripStatus.COMPLETED, ...compact({ finalOdometerKm: dto.finalOdometerKm }) },
+        actor,
+        metadata,
+      );
     }
-    await this.recordPositionIfProvided(tenantId, tripId, dto.latitude, dto.longitude);
-    return this.tripsService.updateStatus(
-      tenantId,
-      tripId,
-      { status: TripStatus.COMPLETED, ...compact({ finalOdometerKm: dto.finalOdometerKm }) },
-      actor,
-      metadata,
-    );
+
+    // Fase C -- motivo OPCIONAL da parada: aplicado ao VehicleIdlePeriod que
+    // a Fase B abre ao concluir (source -> DRIVER_APP). No-op quando nao ha
+    // periodo aberto (proxima viagem ja iniciou / viagem sem veiculo). Roda
+    // FORA da transacao da conclusao e nunca desfaz a conclusao ja
+    // confirmada; e re-executado no retry (idempotente por estado) porque
+    // esta apos o early-return de "ja concluida".
+    if (dto.idleReason) {
+      await this.idlePeriodsService
+        .setReasonByDriver(tenantId, driverId, dto.idleReason, actor, metadata)
+        .catch(() => undefined);
+    }
+
+    return result;
   }
 
   // Registra uma unica posicao GPS "operacional" (pausa/retomada/finalizacao)

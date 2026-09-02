@@ -67,10 +67,13 @@ import { FindNotificationsQueryDto } from '../../notifications/dto/find-notifica
 import { NotificationEntity, PaginatedNotificationsEntity, UnreadNotificationCountEntity } from '../../notifications/entities/notification.entity';
 import { NotificationsService } from '../../notifications/services/notifications.service';
 import { TripEntity } from '../../trips/entities/trip.entity';
+import { VehicleIdlePeriodEntity } from '../../vehicle-idle-periods/entities/vehicle-idle-period.entity';
+import { VehicleIdlePeriodsService } from '../../vehicle-idle-periods/services/vehicle-idle-periods.service';
 import { DRIVER_TRIP_ROLES } from '../constants/driver-trip-roles.constants';
 import { buildDriverDeliveryProofMulterOptions } from '../config/driver-delivery-proof-storage.config';
 import { DriverContext } from '../context/driver-context';
 import { NearbyTollPlazasQueryDto } from '../dto/nearby-toll-plazas-query.dto';
+import { SetIdleReasonDto } from '../dto/set-idle-reason.dto';
 import { StartTripDto } from '../dto/start-trip.dto';
 import { PauseTripDto } from '../dto/pause-trip.dto';
 import { ResumeTripDto } from '../dto/resume-trip.dto';
@@ -110,6 +113,7 @@ export class DriverTripsController {
     private readonly checklistExecutionsService: ChecklistExecutionsService,
     private readonly fiscalDocumentsService: FiscalDocumentsService,
     private readonly notificationsService: NotificationsService,
+    private readonly vehicleIdlePeriodsService: VehicleIdlePeriodsService,
     private readonly tenantContext: TenantContext,
     private readonly driverContext: DriverContext,
   ) {}
@@ -221,6 +225,47 @@ export class DriverTripsController {
       this.driverContext.requireDriverId(),
       id,
       dto ?? {},
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  // Fase C -- "Finalizar operacao" / motivo da parada. Opera SOBRE o
+  // VehicleIdlePeriod ABERTO ja criado pela Fase B ao concluir a ultima
+  // viagem deste motorista -- nunca cria um 2o periodo, nunca altera datas/
+  // duracao (geridas pelo backend). Sem @RequireModule (mesmo padrao das
+  // demais rotas /driver).
+  @Get('idle-period')
+  @ApiOperation({
+    summary:
+      'Fase C -- periodo ocioso ABERTO do veiculo que este motorista acabou de operar (ou null). ' +
+      'Para a tela pos-viagem "Finalizar operacao": mostra desde quando o veiculo esta parado e o ' +
+      'motivo atual (default automatico da Fase B ate o motorista confirmar/alterar).',
+  })
+  @ApiOkResponse({ type: VehicleIdlePeriodEntity })
+  getCurrentIdlePeriod(): Promise<VehicleIdlePeriodEntity | null> {
+    return this.vehicleIdlePeriodsService.findCurrentForDriver(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+    );
+  }
+
+  @Patch('idle-period')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Fase C -- o motorista informa/corrige o MOTIVO do periodo ocioso ABERTO do seu veiculo ' +
+      '(source passa a DRIVER_APP). Idempotente por estado; SEMPRE 200. Devolve null (no-op) quando ' +
+      'nao ha periodo aberto -- ex: a proxima viagem ja iniciou e o backend ja fechou o periodo. ' +
+      'Nunca 4xx nesse caso (a acao sobrevive na fila offline e nunca fica presa em retry). ' +
+      'Nunca aceita duracao/datas do celular.',
+  })
+  @ApiOkResponse({ type: VehicleIdlePeriodEntity })
+  setIdleReason(@Body() dto: SetIdleReasonDto): Promise<VehicleIdlePeriodEntity | null> {
+    return this.vehicleIdlePeriodsService.setReasonByDriver(
+      this.tenantContext.requireTenantId(),
+      this.driverContext.requireDriverId(),
+      dto.reason,
       { userId: this.tenantContext.requireUserId() },
       this.tenantContext.requestMetadata,
     );

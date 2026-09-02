@@ -1,5 +1,10 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { MaintenancePlan, Prisma, VehicleMaintenanceStatus } from '@prisma/client';
+import {
+  MaintenancePlan,
+  Prisma,
+  VehicleMaintenanceStatus,
+  VehicleMaintenanceType,
+} from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
@@ -13,11 +18,22 @@ import {
 } from '../../fleet-operations/utils/maintenance-plan-status.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateMaintenancePlanDto } from '../dto/create-maintenance-plan.dto';
+import { FindMaintenancePlanExecutionsQueryDto } from '../dto/find-maintenance-plan-executions-query.dto';
 import { FindMaintenancePlansQueryDto } from '../dto/find-maintenance-plans-query.dto';
+import { RegisterMaintenancePlanExecutionDto } from '../dto/register-maintenance-plan-execution.dto';
 import { UpdateMaintenancePlanDto } from '../dto/update-maintenance-plan.dto';
+import {
+  MaintenancePlanExecutionEntity,
+  PaginatedMaintenancePlanExecutionsEntity,
+} from '../entities/maintenance-plan-execution.entity';
 import { MaintenancePlanEntity } from '../entities/maintenance-plan.entity';
 import { PaginatedMaintenancePlansEntity } from '../entities/paginated-maintenance-plans.entity';
-import { toMaintenancePlanEntity } from '../mappers/maintenance-plan.mapper';
+import { MaintenancePlanLastExecution, toMaintenancePlanEntity } from '../mappers/maintenance-plan.mapper';
+
+interface PlanEvaluationResult {
+  evaluation: MaintenancePlanEvaluation;
+  lastExecution: MaintenancePlanLastExecution | null;
+}
 
 // Fase 45 -- CRUD de planos de manutencao preventiva. Nao gera
 // VehicleMaintenance sozinho -- so alimenta o calculo de vencidas/proximas
@@ -48,7 +64,7 @@ export class MaintenancePlansService {
 
     const evaluations = await this.evaluatePlansInBatch(tenantId, items);
     const result = new PaginatedMaintenancePlansEntity();
-    result.items = items.map((plan) => toMaintenancePlanEntity(plan, evaluations.get(plan.id)));
+    result.items = items.map((plan) => this.toEntity(plan, evaluations.get(plan.id)));
     result.meta = buildPaginationMeta(total, query.page, query.pageSize);
     return result;
   }
@@ -56,7 +72,11 @@ export class MaintenancePlansService {
   async findOne(tenantId: string, id: string): Promise<MaintenancePlanEntity> {
     const plan = await this.findOwnedOrThrow(tenantId, id);
     const evaluations = await this.evaluatePlansInBatch(tenantId, [plan]);
-    return toMaintenancePlanEntity(plan, evaluations.get(plan.id));
+    return this.toEntity(plan, evaluations.get(plan.id));
+  }
+
+  private toEntity(plan: MaintenancePlan, result: PlanEvaluationResult | undefined): MaintenancePlanEntity {
+    return toMaintenancePlanEntity(plan, result?.evaluation, result?.lastExecution ?? null);
   }
 
   // Fase 108 -- MESMO padrao de lote (nunca 1 query por plano) ja usado por
@@ -68,8 +88,8 @@ export class MaintenancePlansService {
   private async evaluatePlansInBatch(
     tenantId: string,
     plans: MaintenancePlan[],
-  ): Promise<Map<string, MaintenancePlanEvaluation>> {
-    const result = new Map<string, MaintenancePlanEvaluation>();
+  ): Promise<Map<string, PlanEvaluationResult>> {
+    const result = new Map<string, PlanEvaluationResult>();
     if (plans.length === 0) return result;
 
     const planIds = plans.map((p) => p.id);
@@ -93,13 +113,17 @@ export class MaintenancePlansService {
 
     const now = new Date();
     for (const plan of plans) {
+      const last = lastByPlan.get(plan.id) ?? null;
       const evaluation = evaluateMaintenancePlan(
         { intervalKm: plan.intervalKm, intervalDays: plan.intervalDays, alertBeforeKm: plan.alertBeforeKm, alertBeforeDays: plan.alertBeforeDays },
-        lastByPlan.get(plan.id) ?? null,
+        last,
         odometerByVehicle.get(plan.vehicleId) ?? null,
         now,
       );
-      result.set(plan.id, evaluation);
+      result.set(plan.id, {
+        evaluation,
+        lastExecution: last ? { executedAt: last.completedAt, odometerKm: last.odometerKm } : null,
+      });
     }
     return result;
   }
@@ -127,6 +151,7 @@ export class MaintenancePlansService {
           alertBeforeKm: dto.alertBeforeKm,
           alertBeforeDays: dto.alertBeforeDays,
           active: dto.active,
+          notes: dto.notes,
         }),
       },
     });
@@ -176,6 +201,7 @@ export class MaintenancePlansService {
         alertBeforeKm: dto.alertBeforeKm,
         alertBeforeDays: dto.alertBeforeDays,
         active: dto.active,
+        notes: dto.notes,
       }),
     });
 
@@ -192,7 +218,112 @@ export class MaintenancePlansService {
     });
 
     const evaluations = await this.evaluatePlansInBatch(tenantId, [plan]);
-    return toMaintenancePlanEntity(plan, evaluations.get(plan.id));
+    return this.toEntity(plan, evaluations.get(plan.id));
+  }
+
+  // Fase 81 -- "registrar execucao": grava que o servico preventivo foi
+  // FEITO, como uma VehicleMaintenance COMPLETED vinculada ao plano
+  // (maintenancePlanId). Reaproveita o historico ja existente -- NENHUMA
+  // tabela nova, NENHUMA OS aberta (nunca status OPEN, nunca aciona
+  // VehiclesService.syncStatusForMaintenance -> Vehicle.status intocado),
+  // NENHUMA alteracao no odometro real do veiculo. Append-only: cada
+  // execucao e uma linha nova; as anteriores permanecem. O proximo
+  // vencimento e recalculado automaticamente (evaluateMaintenancePlan ja le
+  // a VehicleMaintenance COMPLETED mais recente vinculada).
+  async registerExecution(
+    tenantId: string,
+    planId: string,
+    dto: RegisterMaintenancePlanExecutionDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<MaintenancePlanEntity> {
+    const plan = await this.findOwnedOrThrow(tenantId, planId);
+    const executedAt = dto.executedAt ? new Date(dto.executedAt) : new Date();
+
+    const execution = await this.prisma.vehicleMaintenance.create({
+      data: {
+        tenantId,
+        vehicleId: plan.vehicleId,
+        type: VehicleMaintenanceType.PREVENTIVE,
+        status: VehicleMaintenanceStatus.COMPLETED,
+        component: plan.component,
+        maintenancePlanId: plan.id,
+        openedAt: executedAt,
+        completedAt: executedAt,
+        description: plan.name,
+        ...compact({ odometerKm: dto.odometerKm, notes: dto.notes }),
+      },
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'maintenance_plan.execution_registered',
+      entityName: 'MaintenancePlan',
+      entityId: plan.id,
+      newValue: toJsonSafe({
+        executionId: execution.id,
+        executedAt: execution.completedAt,
+        odometerKm: toNumberOrNull(execution.odometerKm),
+      }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    const evaluations = await this.evaluatePlansInBatch(tenantId, [plan]);
+    return this.toEntity(plan, evaluations.get(plan.id));
+  }
+
+  // Fase 81 -- historico (append-only) de execucoes do plano: as
+  // VehicleMaintenance COMPLETED vinculadas por maintenancePlanId. Projecao
+  // SOMENTE-LEITURA, sem tabela nova.
+  async findExecutions(
+    tenantId: string,
+    planId: string,
+    query: FindMaintenancePlanExecutionsQueryDto,
+  ): Promise<PaginatedMaintenancePlanExecutionsEntity> {
+    await this.findOwnedOrThrow(tenantId, planId);
+
+    const where: Prisma.VehicleMaintenanceWhereInput = {
+      tenantId,
+      maintenancePlanId: planId,
+      status: VehicleMaintenanceStatus.COMPLETED,
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.vehicleMaintenance.findMany({
+        where,
+        orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: {
+          id: true,
+          maintenancePlanId: true,
+          vehicleId: true,
+          component: true,
+          completedAt: true,
+          odometerKm: true,
+          notes: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.vehicleMaintenance.count({ where }),
+    ]);
+
+    const result = new PaginatedMaintenancePlanExecutionsEntity();
+    result.items = rows.map((row) => {
+      const entity = new MaintenancePlanExecutionEntity();
+      entity.id = row.id;
+      entity.maintenancePlanId = row.maintenancePlanId as string;
+      entity.vehicleId = row.vehicleId;
+      entity.component = row.component;
+      entity.executedAt = row.completedAt;
+      entity.odometerKm = toNumberOrNull(row.odometerKm);
+      entity.notes = row.notes;
+      entity.createdAt = row.createdAt;
+      return entity;
+    });
+    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
+    return result;
   }
 
   async remove(tenantId: string, id: string, actor: AuditActor, metadata: RequestMetadata): Promise<void> {

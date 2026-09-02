@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, Min } from 'class-validator';
+import { VehicleIdleReason } from '@prisma/client';
+import { IsEnum, IsNumber, IsOptional, Min } from 'class-validator';
 
 // Fase 28, secao 11/12 -- tela "FINALIZAR VIAGEM": so pede o KM final (opcional
 // no contrato HTTP, mesmo principio da Fase 27 -- a obrigatoriedade e regra
@@ -25,4 +26,14 @@ export class CompleteTripDto {
   @IsOptional()
   @IsNumber()
   longitude?: number;
+
+  // Fase C -- motivo OPCIONAL da parada do veiculo apos esta viagem. Quando
+  // informado, e aplicado ao VehicleIdlePeriod que o backend abre ao
+  // concluir (Fase B) -- source passa a DRIVER_APP. NUNCA cria um 2o
+  // periodo. Omitir mantem o motivo default (AGUARDANDO_ORDEM ou o
+  // configurado pelo tenant) -- o motorista nunca e obrigado a informar.
+  @ApiPropertyOptional({ enum: VehicleIdleReason, description: 'Motivo da parada do veiculo apos a viagem (opcional).' })
+  @IsOptional()
+  @IsEnum(VehicleIdleReason, { message: 'idleReason invalido.' })
+  idleReason?: VehicleIdleReason;
 }

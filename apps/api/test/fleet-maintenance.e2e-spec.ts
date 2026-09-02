@@ -376,6 +376,204 @@ describe('Fleet Maintenance -- planos e dashboard (e2e)', () => {
         }
       });
     });
+
+    // ========================================================================
+    // Fase 81 -- observacoes, status granular (5 valores) e "registrar
+    // execucao" (reaproveita o historico VehicleMaintenance COMPLETED --
+    // nenhuma tabela nova, nenhuma OS aberta, odometro real intocado).
+    // ========================================================================
+    describe('registro de execucao + status granular (Fase 81)', () => {
+      const DAY = 24 * 60 * 60 * 1000;
+
+      async function createPlan(adminAuth: string, vehicleId: string, body: Record<string, unknown>) {
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/maintenance/plans')
+          .set('Authorization', adminAuth)
+          .send({ vehicleId, name: 'Troca de óleo', component: 'ENGINE_OIL', ...body })
+          .expect(201);
+        return res.body.data.id as string;
+      }
+
+      const registerExecution = (auth: string, planId: string, body: Record<string, unknown> = {}) =>
+        request(app.getHttpServer())
+          .post(`/api/v1/maintenance/plans/${planId}/executions`)
+          .set('Authorization', auth)
+          .send(body);
+
+      it('notes: round-trip no create, no PATCH e no GET', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanNotes');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000, notes: 'Usar óleo 15W40 sintético' });
+
+        const getRes = await request(app.getHttpServer())
+          .get(`/api/v1/maintenance/plans/${planId}`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(getRes.body.data.notes).toBe('Usar óleo 15W40 sintético');
+
+        const patchRes = await request(app.getHttpServer())
+          .patch(`/api/v1/maintenance/plans/${planId}`)
+          .set('Authorization', adminAuth)
+          .send({ notes: 'Trocar também o filtro' })
+          .expect(200);
+        expect(patchRes.body.data.notes).toBe('Trocar também o filtro');
+      });
+
+      it('status granular: OVERDUE por KM => overdueReason "KM"', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanOverdueKm');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000, intervalDays: 3650, alertBeforeKm: 1000 });
+        await registerExecution(adminAuth, planId, { executedAt: new Date(Date.now() - 10 * DAY).toISOString(), odometerKm: 100000 }).expect(201);
+        await setVehicleOdometer(adminAuth, vehicleId, 111000); // +11000 > intervalKm
+
+        const res = await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${planId}`).set('Authorization', adminAuth).expect(200);
+        expect(res.body.data.status).toBe('OVERDUE');
+        expect(res.body.data.overdueReason).toBe('KM');
+      });
+
+      it('status granular: OVERDUE por DATA => overdueReason "DATE"', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanOverdueDate');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 1000000, intervalDays: 30, alertBeforeDays: 5 });
+        await registerExecution(adminAuth, planId, { executedAt: new Date(Date.now() - 90 * DAY).toISOString(), odometerKm: 100000 }).expect(201);
+        await setVehicleOdometer(adminAuth, vehicleId, 100500); // KM ainda OK
+
+        const res = await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${planId}`).set('Authorization', adminAuth).expect(200);
+        expect(res.body.data.status).toBe('OVERDUE');
+        expect(res.body.data.overdueReason).toBe('DATE');
+      });
+
+      it('status granular: OVERDUE pelos DOIS => overdueReason "BOTH"', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanOverdueBoth');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000, intervalDays: 30, alertBeforeKm: 1000, alertBeforeDays: 5 });
+        await registerExecution(adminAuth, planId, { executedAt: new Date(Date.now() - 90 * DAY).toISOString(), odometerKm: 100000 }).expect(201);
+        await setVehicleOdometer(adminAuth, vehicleId, 115000);
+
+        const res = await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${planId}`).set('Authorization', adminAuth).expect(200);
+        expect(res.body.data.status).toBe('OVERDUE');
+        expect(res.body.data.overdueReason).toBe('BOTH');
+      });
+
+      it('status granular: DUE_SOON / OK / UNKNOWN tem overdueReason null', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanReasonNull');
+        const vehicleId = await createVehicle(adminAuth);
+
+        const unknownPlan = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+        const unknownRes = await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${unknownPlan}`).set('Authorization', adminAuth).expect(200);
+        expect(unknownRes.body.data.status).toBe('UNKNOWN');
+        expect(unknownRes.body.data.overdueReason).toBeNull();
+
+        const okPlan = await createPlan(adminAuth, vehicleId, { intervalKm: 10000, alertBeforeKm: 1000 });
+        await registerExecution(adminAuth, okPlan, { odometerKm: 100000 }).expect(201);
+        await setVehicleOdometer(adminAuth, vehicleId, 105000);
+        const okRes = await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${okPlan}`).set('Authorization', adminAuth).expect(200);
+        expect(okRes.body.data.status).toBe('OK');
+        expect(okRes.body.data.overdueReason).toBeNull();
+      });
+
+      it('registrar execucao: recalcula o proximo vencimento e devolve o plano reavaliado (OVERDUE -> OK)', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanExecRecalc');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000, alertBeforeKm: 1000 });
+        await registerExecution(adminAuth, planId, { odometerKm: 90000 }).expect(201);
+        await setVehicleOdometer(adminAuth, vehicleId, 105000); // vencido: proximo era 100000
+
+        const overdue = await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${planId}`).set('Authorization', adminAuth).expect(200);
+        expect(overdue.body.data.status).toBe('OVERDUE');
+
+        // registra a execucao AGORA, com o KM atual
+        const execRes = await registerExecution(adminAuth, planId, { odometerKm: 105000 }).expect(201);
+        expect(execRes.body.data.status).toBe('OK');
+        expect(execRes.body.data.dueOdometerKm).toBe(115000); // 105000 + 10000
+        expect(execRes.body.data.lastExecution.odometerKm).toBe(105000);
+      });
+
+      it('historico: append-only -- registrar novas execucoes nunca apaga as anteriores', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanExecHistory');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+
+        await registerExecution(adminAuth, planId, { executedAt: new Date(Date.now() - 60 * DAY).toISOString(), odometerKm: 80000, notes: 'primeira' }).expect(201);
+        await registerExecution(adminAuth, planId, { executedAt: new Date(Date.now() - 30 * DAY).toISOString(), odometerKm: 90000, notes: 'segunda' }).expect(201);
+        await registerExecution(adminAuth, planId, { odometerKm: 100000, notes: 'terceira' }).expect(201);
+
+        const histRes = await request(app.getHttpServer())
+          .get(`/api/v1/maintenance/plans/${planId}/executions`)
+          .set('Authorization', adminAuth)
+          .expect(200);
+        expect(histRes.body.data.meta.total).toBe(3);
+        // mais recente primeiro
+        expect(histRes.body.data.items.map((e: { odometerKm: number }) => e.odometerKm)).toEqual([100000, 90000, 80000]);
+        expect(histRes.body.data.items[0].notes).toBe('terceira');
+      });
+
+      it('validacao: odometerKm negativo -> 400', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanExecNeg');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+        await registerExecution(adminAuth, planId, { odometerKm: -1 }).expect(400);
+      });
+
+      it('isolamento multi-tenant: registrar/consultar execucao de plano de outro tenant -> 404', async () => {
+        const { adminAuth } = await createTenantAndLoginAsAdmin('PlanExecIsoA');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+        const { adminAuth: authB } = await createTenantAndLoginAsAdmin('PlanExecIsoB');
+
+        await registerExecution(authB, planId, { odometerKm: 100000 }).expect(404);
+        await request(app.getHttpServer()).get(`/api/v1/maintenance/plans/${planId}/executions`).set('Authorization', authB).expect(404);
+      });
+
+      it('RBAC: DRIVER nao registra execucao (403); leitura de plano ja e bloqueada para DRIVER', async () => {
+        const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PlanExecRbac');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+        const driverAuth = await createUserWithRole(tenantId, adminAuth, 'DRIVER');
+        await registerExecution(driverAuth, planId, { odometerKm: 100000 }).expect(403);
+      });
+
+      it('registrar execucao NAO altera odometro do veiculo, nem Trip/TripMetrics/VehicleIdlePeriod, e audita', async () => {
+        const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PlanExecNoSideEffect');
+        const vehicleId = await createVehicle(adminAuth);
+        await setVehicleOdometer(adminAuth, vehicleId, 123456);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+
+        const tripsBefore = await prisma.trip.count({ where: { tenantId } });
+        const metricsBefore = await prisma.tripMetrics.count({ where: { tenantId } });
+        const idleBefore = await prisma.vehicleIdlePeriod.count({ where: { tenantId } });
+
+        await registerExecution(adminAuth, planId, { odometerKm: 100000 }).expect(201);
+
+        const vehicle = await prisma.vehicle.findFirst({ where: { id: vehicleId } });
+        expect(Number(vehicle?.odometerKm)).toBe(123456); // odometro REAL intocado
+        expect(await prisma.trip.count({ where: { tenantId } })).toBe(tripsBefore);
+        expect(await prisma.tripMetrics.count({ where: { tenantId } })).toBe(metricsBefore);
+        expect(await prisma.vehicleIdlePeriod.count({ where: { tenantId } })).toBe(idleBefore);
+
+        // veiculo NAO entrou em manutencao (nenhuma OS OPEN foi criada)
+        const refreshed = await request(app.getHttpServer()).get(`/api/v1/vehicles/${vehicleId}`).set('Authorization', adminAuth).expect(200);
+        expect(refreshed.body.data.status).toBe('ACTIVE');
+
+        const auditLogs = await prisma.auditLog.findMany({
+          where: { tenantId, entityName: 'MaintenancePlan', entityId: planId, action: 'maintenance_plan.execution_registered' },
+        });
+        expect(auditLogs).toHaveLength(1);
+        expect(auditLogs[0]!.userId).toBeTruthy();
+      });
+
+      it('a execucao registrada e uma manutencao PREVENTIVE COMPLETED (distinta de corretiva)', async () => {
+        const { tenantId, adminAuth } = await createTenantAndLoginAsAdmin('PlanExecPreventive');
+        const vehicleId = await createVehicle(adminAuth);
+        const planId = await createPlan(adminAuth, vehicleId, { intervalKm: 10000 });
+        await registerExecution(adminAuth, planId, { odometerKm: 100000 }).expect(201);
+
+        const rows = await prisma.vehicleMaintenance.findMany({ where: { tenantId, maintenancePlanId: planId } });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.type).toBe('PREVENTIVE');
+        expect(rows[0]!.status).toBe('COMPLETED');
+      });
+    });
   });
 
   // ==========================================================================

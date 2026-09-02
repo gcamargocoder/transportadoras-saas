@@ -6,10 +6,17 @@ import type { TripOperationEntity } from '../../../../types/entities';
 import ControlTowerPage from './page';
 
 const getActiveOperationsMock = vi.fn();
+const getIdleTimeMock = vi.fn();
+const getIdlePeriodsMock = vi.fn();
 const pushMock = vi.fn();
 
 vi.mock('../../../../lib/api/trips.api', () => ({
   getActiveOperations: () => getActiveOperationsMock(),
+}));
+
+vi.mock('../../../../lib/api/fleet-operations.api', () => ({
+  getFleetOperationsIdleTime: () => getIdleTimeMock(),
+  getFleetOperationsIdlePeriods: () => getIdlePeriodsMock(),
 }));
 
 vi.mock('../../../../lib/api/fleet.api', () => ({
@@ -43,6 +50,9 @@ function buildItem(overrides: Partial<TripOperationEntity> = {}): TripOperationE
     vehiclePlate: 'ABC1D23',
     originName: 'Catanduva/SP',
     destinationName: 'São Paulo/SP',
+    loadStatus: null,
+    plannedLoadStatus: null,
+    previousTripId: null,
     actualDeparture: '2026-09-01T08:00:00.000Z',
     initialOdometerKm: 100000,
     currentOdometerKm: 100120,
@@ -88,9 +98,54 @@ function buildItem(overrides: Partial<TripOperationEntity> = {}): TripOperationE
   };
 }
 
+function buildIdleRow(overrides: Partial<import('../../../../types/entities').FleetVehicleIdleTimeEntity> = {}) {
+  return {
+    vehicleId: 'vehicle-idle-1',
+    plate: 'XYZ4E56',
+    lastTripId: 'trip-prev',
+    lastArrival: '2026-09-01T06:00:00.000Z',
+    lastDestinationLabel: 'CD Ribeirão Preto/SP',
+    nextTripId: null,
+    nextDeparture: null,
+    idleStart: '2026-09-01T06:00:00.000Z',
+    idleEnd: null,
+    totalMinutes: 1500,
+    maintenanceMinutes: 0,
+    netIdleMinutes: 1500,
+    isCurrentlyIdle: true,
+    isEstimate: true,
+    ...overrides,
+  };
+}
+
+function buildPeriodRow(overrides: Partial<import('../../../../types/entities').VehicleIdlePeriodEntity> = {}) {
+  return {
+    id: 'period-1',
+    vehicleId: 'vehicle-idle-1',
+    plate: 'XYZ4E56',
+    startedAt: '2026-09-01T06:00:00.000Z',
+    endedAt: null,
+    durationMinutes: null,
+    reason: 'AGUARDANDO_CARGA',
+    source: 'AUTO',
+    tripBeforeId: 'trip-prev',
+    tripAfterId: null,
+    previousDestinationLabel: 'CD Ribeirão Preto/SP',
+    notes: null,
+    status: 'OPEN',
+    createdAt: '2026-09-01T06:00:00.000Z',
+    updatedAt: '2026-09-01T06:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('ControlTowerPage', () => {
   beforeEach(() => {
     getActiveOperationsMock.mockReset();
+    getIdleTimeMock.mockReset();
+    getIdleTimeMock.mockResolvedValue({ asOf: '2026-09-02T00:00:00.000Z', items: [], meta: { total: 0, page: 1, pageSize: 100, totalPages: 0 } });
+    getIdlePeriodsMock.mockReset();
+    getIdlePeriodsMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 100, totalPages: 0 } });
     pushMock.mockReset();
   });
 
@@ -99,6 +154,120 @@ describe('ControlTowerPage', () => {
     renderPage();
 
     expect(await screen.findByText(/Nenhuma viagem nesta situação/i)).toBeInTheDocument();
+  });
+
+  // Fase A -- "Frota parada agora" consome GET /fleet-operations/idle-time
+  // e mostra so os periodos EM ABERTO (isCurrentlyIdle).
+  it('mostra a secao "Frota parada agora" com veiculo, tempo ocioso, desde quando e ultimo destino', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    getIdleTimeMock.mockResolvedValue({
+      asOf: '2026-09-02T09:00:00.000Z',
+      items: [
+        buildIdleRow(),
+        // periodo historico (nao corrente) -> nunca aparece nesta secao
+        buildIdleRow({ vehicleId: 'v-hist', plate: 'HIS0T01', isCurrentlyIdle: false, idleEnd: '2026-08-20T00:00:00.000Z' }),
+      ],
+      meta: { total: 2, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    renderPage();
+
+    expect(await screen.findByText('Frota parada agora')).toBeInTheDocument();
+    expect((await screen.findAllByText('XYZ4E56')).length).toBeGreaterThan(0);
+    // 1500 min = 1d 1h
+    expect(screen.getAllByText('1d 1h').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('CD Ribeirão Preto/SP').length).toBeGreaterThan(0);
+    expect(screen.queryByText('HIS0T01')).not.toBeInTheDocument();
+  });
+
+  it('destaca o tempo coberto por manutencao a parte, sem contar como ociosidade liquida', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    getIdleTimeMock.mockResolvedValue({
+      asOf: '2026-09-02T09:00:00.000Z',
+      items: [buildIdleRow({ totalMinutes: 1500, maintenanceMinutes: 300, netIdleMinutes: 1200 })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    renderPage();
+
+    expect((await screen.findAllByText('XYZ4E56')).length).toBeGreaterThan(0);
+    // netIdle 1200 min = 20h
+    expect(screen.getAllByText('20h').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/5h em manutenção/i).length).toBeGreaterThan(0);
+  });
+
+  // Fase B -- quando ha um periodo ocioso PERSISTIDO aberto, ele tem
+  // prioridade sobre a estimativa da Fase A e traz o MOTIVO.
+  it('prioriza o periodo persistido (Fase B) sobre a estimativa da Fase A, exibindo o motivo', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    getIdleTimeMock.mockResolvedValue({
+      asOf: '2026-09-02T09:00:00.000Z',
+      items: [buildIdleRow({ vehicleId: 'vehicle-idle-1', plate: 'XYZ4E56' })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    getIdlePeriodsMock.mockResolvedValue({
+      items: [buildPeriodRow({ vehicleId: 'vehicle-idle-1', plate: 'XYZ4E56', reason: 'AGUARDANDO_CARGA' })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    renderPage();
+
+    expect((await screen.findAllByText('XYZ4E56')).length).toBeGreaterThan(0);
+    // uma unica linha para o veiculo (merge por vehicleId, persistido vence)
+    expect(screen.getAllByText('XYZ4E56').length).toBe(2); // desktop + mobile, 1 linha logica
+    expect(screen.getAllByText('Aguardando carga').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/período registrado/i).length).toBeGreaterThan(0);
+  });
+
+  it('marca periodo persistido com motivo MANUTENCAO com badge de manutencao', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    getIdlePeriodsMock.mockResolvedValue({
+      items: [buildPeriodRow({ reason: 'MANUTENCAO' })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    renderPage();
+
+    expect((await screen.findAllByText('XYZ4E56')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Manutenção').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Em manutenção').length).toBeGreaterThan(0);
+  });
+
+  // Fase C -- coluna "Origem" na "Frota parada agora": DRIVER_APP quando o
+  // motorista informou o motivo, "Automático" para o periodo aberto pela
+  // Fase B, e "Estimativa" para o fallback da Fase A (sem periodo persistido).
+  it('coluna Origem: periodo com source DRIVER_APP aparece como "Motorista"', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    getIdlePeriodsMock.mockResolvedValue({
+      items: [buildPeriodRow({ source: 'DRIVER_APP', reason: 'DESCANSO' })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    renderPage();
+
+    expect((await screen.findAllByText('XYZ4E56')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Motorista').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Descanso').length).toBeGreaterThan(0);
+  });
+
+  it('coluna Origem: periodo com source AUTO aparece como "Automático"; fallback Fase A aparece como "Estimativa"', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    getIdleTimeMock.mockResolvedValue({
+      asOf: '2026-09-02T09:00:00.000Z',
+      items: [buildIdleRow({ vehicleId: 'v-est', plate: 'EST0A01' })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    getIdlePeriodsMock.mockResolvedValue({
+      items: [buildPeriodRow({ vehicleId: 'v-auto', plate: 'AUT0O01', source: 'AUTO' })],
+      meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 },
+    });
+    renderPage();
+
+    expect((await screen.findAllByText('AUT0O01')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Automático').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Estimativa').length).toBeGreaterThan(0);
+  });
+
+  it('sem veiculos parados mostra estado vazio proprio da secao', async () => {
+    getActiveOperationsMock.mockResolvedValue({ items: [] });
+    renderPage();
+
+    expect(await screen.findByText(/Nenhum veículo parado/i)).toBeInTheDocument();
   });
 
   it('mostra os indicadores resumidos no topo (viagens ativas, atrasadas, criticas, intervencao)', async () => {
@@ -151,6 +320,32 @@ describe('ControlTowerPage', () => {
     expect(screen.getAllByText('1 falha(s)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1 crítica(s)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('2 em aberto').length).toBeGreaterThan(0);
+  });
+
+  // Fase D -- carga real (loadStatus) e vinculo explicito de retorno
+  // (previousTripId) na tabela de viagens ativas. Nunca substitui/duplica
+  // Frota parada agora, a prioridade do VehicleIdlePeriod, o fallback da
+  // Fase A, o motivo nem a origem AUTO/MANUAL_ADMIN/DRIVER_APP.
+  it('mostra a carga real (loadStatus) e o indicador "↩ Retorno" quando previousTripId existe', async () => {
+    getActiveOperationsMock.mockResolvedValue({
+      items: [buildItem({ tripId: 'trip-return', loadStatus: 'EMPTY', previousTripId: 'trip-ida-1' })],
+    });
+    renderPage();
+
+    await screen.findAllByText('José da Silva');
+    expect(screen.getAllByText('Vazio').length).toBeGreaterThan(0);
+    const link = screen.getAllByText('↩ Retorno')[0]!;
+    expect(link.closest('a')).toHaveAttribute('href', '/trips/trip-ida-1');
+  });
+
+  it('sem previousTripId nao mostra nenhum indicador de retorno', async () => {
+    getActiveOperationsMock.mockResolvedValue({
+      items: [buildItem({ tripId: 'trip-no-return' })],
+    });
+    renderPage();
+
+    await screen.findAllByText('José da Silva');
+    expect(screen.queryByText('↩ Retorno')).toBeNull();
   });
 
   // Fase 111 -- checklist pre-viagem com item critico tambem conta em

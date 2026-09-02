@@ -18,25 +18,31 @@ import { listVehicles } from '../../lib/api/fleet.api';
 import {
   createMaintenancePlan,
   deleteMaintenancePlan,
+  listMaintenancePlanExecutions,
   listMaintenancePlans,
+  registerMaintenancePlanExecution,
   updateMaintenancePlan,
 } from '../../lib/api/maintenance-plans.api';
 import { MAINTENANCE_COMPONENT_LABELS } from '../../lib/labels';
 import type { MaintenancePlanEntity } from '../../types/entities';
 import type { MaintenanceComponent } from '../../types/enums';
-import { formatDate, formatNumber } from '../../utils/format';
+import { formatDate, formatDateTime, formatNumber } from '../../utils/format';
 
 const COMPONENT_OPTIONS = Object.entries(MAINTENANCE_COMPONENT_LABELS) as [MaintenanceComponent, string][];
 
-// Fase 108 -- avaliacao ao vivo (MaintenancePlanEntity.status), MESMA
-// classificacao ja usada pelo dashboard de frota (OVERDUE/DUE_SOON/OK/
-// UNKNOWN) -- so um label/tone local, escopo unico desta secao.
-const PLAN_STATUS_LABELS: Record<MaintenancePlanEntity['status'], string> = {
-  OVERDUE: 'Vencida',
-  DUE_SOON: 'Próxima',
-  OK: 'Em dia',
-  UNKNOWN: 'Sem histórico',
-};
+// Fase 81 -- rotulo do status calculado no BACKEND (5 valores). "Vencida"
+// (status === 'OVERDUE') e detalhada por overdueReason: KM / data / os dois.
+function planStatusLabel(plan: MaintenancePlanEntity): string {
+  if (plan.status === 'OVERDUE') {
+    if (plan.overdueReason === 'BOTH') return 'Vencida pelos dois critérios';
+    if (plan.overdueReason === 'KM') return 'Vencida por KM';
+    if (plan.overdueReason === 'DATE') return 'Vencida por data';
+    return 'Vencida';
+  }
+  if (plan.status === 'DUE_SOON') return 'Próxima';
+  if (plan.status === 'OK') return 'Em dia';
+  return 'Sem histórico';
+}
 const PLAN_STATUS_TONE: Record<MaintenancePlanEntity['status'], 'success' | 'warning' | 'danger' | 'neutral'> = {
   OVERDUE: 'danger',
   DUE_SOON: 'warning',
@@ -65,6 +71,7 @@ interface PlanFormState {
   intervalDays: string;
   alertBeforeKm: string;
   alertBeforeDays: string;
+  notes: string;
 }
 
 const EMPTY_FORM: PlanFormState = {
@@ -75,46 +82,70 @@ const EMPTY_FORM: PlanFormState = {
   intervalDays: '',
   alertBeforeKm: '',
   alertBeforeDays: '',
+  notes: '',
 };
 
-// Fase 45, secao 11 do pedido -- "gestao dos planos preventivos" dentro da
-// propria pagina de Gestao Operacional de manutencao (nunca uma pagina
-// separada). Formulario pequeno de proposito: so os campos que definem a
-// recorrencia, sem sobrecarregar a tela.
+function toForm(plan: MaintenancePlanEntity): PlanFormState {
+  return {
+    vehicleId: plan.vehicleId,
+    name: plan.name,
+    component: plan.component,
+    intervalKm: plan.intervalKm !== null ? String(plan.intervalKm) : '',
+    intervalDays: plan.intervalDays !== null ? String(plan.intervalDays) : '',
+    alertBeforeKm: plan.alertBeforeKm !== null ? String(plan.alertBeforeKm) : '',
+    alertBeforeDays: plan.alertBeforeDays !== null ? String(plan.alertBeforeDays) : '',
+    notes: plan.notes ?? '',
+  };
+}
+
+// Fase 45/81 -- "gestao dos planos preventivos" dentro da propria pagina de
+// Gestao Operacional de manutencao. Formulario pequeno de proposito: so os
+// campos que definem a recorrencia + observacoes.
 export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
-  const [createOpen, setCreateOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<PlanFormState>(EMPTY_FORM);
+  const [execPlan, setExecPlan] = useState<MaintenancePlanEntity | null>(null);
+  const [execForm, setExecForm] = useState({ executedAt: '', odometerKm: '', notes: '' });
+  const [historyPlan, setHistoryPlan] = useState<MaintenancePlanEntity | null>(null);
 
   const query = useQuery({
     queryKey: ['maintenance-plans', vehicleId],
     queryFn: ({ signal }) => listMaintenancePlans({ vehicleId: vehicleId || undefined, pageSize: 50 }, signal),
   });
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      createMaintenancePlan({
-        vehicleId: form.vehicleId,
-        name: form.name,
-        component: form.component as MaintenanceComponent,
-        intervalKm: form.intervalKm ? Number(form.intervalKm) : undefined,
-        intervalDays: form.intervalDays ? Number(form.intervalDays) : undefined,
-        alertBeforeKm: form.alertBeforeKm ? Number(form.alertBeforeKm) : undefined,
-        alertBeforeDays: form.alertBeforeDays ? Number(form.alertBeforeDays) : undefined,
-      }),
+  function invalidate() {
+    queryClient.invalidateQueries({ queryKey: ['maintenance-plans'] });
+  }
+
+  const savePayload = () => ({
+    vehicleId: form.vehicleId,
+    name: form.name,
+    component: form.component as MaintenanceComponent,
+    intervalKm: form.intervalKm ? Number(form.intervalKm) : undefined,
+    intervalDays: form.intervalDays ? Number(form.intervalDays) : undefined,
+    alertBeforeKm: form.alertBeforeKm ? Number(form.alertBeforeKm) : undefined,
+    alertBeforeDays: form.alertBeforeDays ? Number(form.alertBeforeDays) : undefined,
+    notes: form.notes ? form.notes : undefined,
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: () => (editingId ? updateMaintenancePlan(editingId, savePayload()) : createMaintenancePlan(savePayload())),
     onSuccess: () => {
-      toast.success('Plano de manutenção criado.');
-      queryClient.invalidateQueries({ queryKey: ['maintenance-plans'] });
+      toast.success(editingId ? 'Plano atualizado.' : 'Plano de manutenção criado.');
+      invalidate();
       setForm(EMPTY_FORM);
-      setCreateOpen(false);
+      setEditingId(null);
+      setFormOpen(false);
     },
-    onError: (error) => toast.error('Não foi possível criar o plano.', toFriendlyMessage(error)),
+    onError: (error) => toast.error('Não foi possível salvar o plano.', toFriendlyMessage(error)),
   });
 
   const toggleMutation = useMutation({
     mutationFn: (plan: MaintenancePlanEntity) => updateMaintenancePlan(plan.id, { active: !plan.active }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maintenance-plans'] }),
+    onSuccess: invalidate,
     onError: (error) => toast.error('Não foi possível atualizar o plano.', toFriendlyMessage(error)),
   });
 
@@ -122,10 +153,44 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
     mutationFn: (id: string) => deleteMaintenancePlan(id),
     onSuccess: () => {
       toast.success('Plano excluído.');
-      queryClient.invalidateQueries({ queryKey: ['maintenance-plans'] });
+      invalidate();
     },
     onError: (error) => toast.error('Não foi possível excluir o plano.', toFriendlyMessage(error)),
   });
+
+  const executionMutation = useMutation({
+    mutationFn: () =>
+      registerMaintenancePlanExecution(execPlan!.id, {
+        executedAt: execForm.executedAt ? new Date(execForm.executedAt).toISOString() : undefined,
+        odometerKm: execForm.odometerKm ? Number(execForm.odometerKm) : undefined,
+        notes: execForm.notes ? execForm.notes : undefined,
+      }),
+    onSuccess: () => {
+      toast.success('Execução registrada. Próxima manutenção recalculada.');
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ['maintenance-plan-executions'] });
+      setExecPlan(null);
+      setExecForm({ executedAt: '', odometerKm: '', notes: '' });
+    },
+    onError: (error) => toast.error('Não foi possível registrar a execução.', toFriendlyMessage(error)),
+  });
+
+  const historyQuery = useQuery({
+    queryKey: ['maintenance-plan-executions', historyPlan?.id],
+    queryFn: ({ signal }) => listMaintenancePlanExecutions(historyPlan!.id, { pageSize: 50 }, signal),
+    enabled: historyPlan !== null,
+  });
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setFormOpen(true);
+  }
+  function openEdit(plan: MaintenancePlanEntity) {
+    setEditingId(plan.id);
+    setForm(toForm(plan));
+    setFormOpen(true);
+  }
 
   return (
     <Card>
@@ -133,7 +198,7 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
         title="Planos de manutenção preventiva"
         description="Recorrência por veículo/componente, usada para calcular vencidas e próximas."
         action={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" onClick={openCreate}>
             <Plus size={16} />
             Novo plano
           </Button>
@@ -151,14 +216,14 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
                 .join(' / ') || '—',
           },
           {
-            header: 'Status',
+            header: 'Ativo',
             cell: ({ row }) => <Badge tone={row.original.active ? 'success' : 'neutral'}>{row.original.active ? 'Ativo' : 'Inativo'}</Badge>,
           },
           {
             header: 'Vencimento',
             cell: ({ row }) => (
               <div className="flex flex-col gap-0.5">
-                <Badge tone={PLAN_STATUS_TONE[row.original.status]}>{PLAN_STATUS_LABELS[row.original.status]}</Badge>
+                <Badge tone={PLAN_STATUS_TONE[row.original.status]}>{planStatusLabel(row.original)}</Badge>
                 {row.original.status !== 'UNKNOWN' && (
                   <span className="text-xs text-ink-subtle">{planDueLabel(row.original)}</span>
                 )}
@@ -166,10 +231,32 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
             ),
           },
           {
+            header: 'Última execução',
+            cell: ({ row }) =>
+              row.original.lastExecution?.executedAt ? (
+                <span className="text-xs text-ink-subtle">
+                  {formatDate(row.original.lastExecution.executedAt)}
+                  {row.original.lastExecution.odometerKm !== null &&
+                    ` · ${formatNumber(row.original.lastExecution.odometerKm, 0)} km`}
+                </span>
+              ) : (
+                <span className="text-xs text-ink-subtle">—</span>
+              ),
+          },
+          {
             id: 'actions',
             header: '',
             cell: ({ row }) => (
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button size="sm" variant="outline" onClick={() => setExecPlan(row.original)}>
+                  Registrar execução
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setHistoryPlan(row.original)}>
+                  Histórico
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => openEdit(row.original)}>
+                  Editar
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => toggleMutation.mutate(row.original)}>
                   {row.original.active ? 'Desativar' : 'Ativar'}
                 </Button>
@@ -189,20 +276,20 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
       />
 
       <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title="Novo plano de manutenção"
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title={editingId ? 'Editar plano de manutenção' : 'Novo plano de manutenção'}
         footer={
           <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>
+            <Button variant="outline" onClick={() => setFormOpen(false)} disabled={saveMutation.isPending}>
               Cancelar
             </Button>
             <Button
-              loading={createMutation.isPending}
+              loading={saveMutation.isPending}
               disabled={!form.vehicleId || !form.name || !form.component || (!form.intervalKm && !form.intervalDays)}
-              onClick={() => createMutation.mutate()}
+              onClick={() => saveMutation.mutate()}
             >
-              Criar
+              {editingId ? 'Salvar' : 'Criar'}
             </Button>
           </>
         }
@@ -219,10 +306,10 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
               onChange={(v) => setForm((prev) => ({ ...prev, vehicleId: v }))}
             />
           </FormField>
-          <FormField label="Nome" htmlFor="plan-name" required className="sm:col-span-2">
+          <FormField label="Descrição / serviço" htmlFor="plan-name" required className="sm:col-span-2">
             <Input id="plan-name" value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} />
           </FormField>
-          <FormField label="Componente" htmlFor="plan-component" required>
+          <FormField label="Categoria / componente" htmlFor="plan-component" required>
             <Select
               id="plan-component"
               value={form.component}
@@ -269,7 +356,86 @@ export function MaintenancePlansSection({ vehicleId }: { vehicleId: string }): J
               onChange={(e) => setForm((prev) => ({ ...prev, alertBeforeDays: e.target.value }))}
             />
           </FormField>
+          <FormField label="Observações" htmlFor="plan-notes" hint="Opcional" className="sm:col-span-2">
+            <Input id="plan-notes" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} />
+          </FormField>
         </div>
+      </Modal>
+
+      <Modal
+        open={execPlan !== null}
+        onClose={() => setExecPlan(null)}
+        title="Registrar execução"
+        description="Registra que o serviço preventivo foi feito. Não abre OS nem altera o odômetro do veículo."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setExecPlan(null)} disabled={executionMutation.isPending}>
+              Cancelar
+            </Button>
+            <Button loading={executionMutation.isPending} onClick={() => executionMutation.mutate()}>
+              Registrar
+            </Button>
+          </>
+        }
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Data da execução" htmlFor="exec-date" hint="Opcional — padrão: agora">
+            <Input
+              id="exec-date"
+              type="datetime-local"
+              value={execForm.executedAt}
+              onChange={(e) => setExecForm((prev) => ({ ...prev, executedAt: e.target.value }))}
+            />
+          </FormField>
+          <FormField label="Odômetro (km)" htmlFor="exec-odometer" hint="Opcional">
+            <Input
+              id="exec-odometer"
+              type="number"
+              value={execForm.odometerKm}
+              onChange={(e) => setExecForm((prev) => ({ ...prev, odometerKm: e.target.value }))}
+            />
+          </FormField>
+          <FormField label="Observações" htmlFor="exec-notes" hint="Opcional" className="sm:col-span-2">
+            <Input
+              id="exec-notes"
+              value={execForm.notes}
+              onChange={(e) => setExecForm((prev) => ({ ...prev, notes: e.target.value }))}
+            />
+          </FormField>
+        </div>
+      </Modal>
+
+      <Modal
+        open={historyPlan !== null}
+        onClose={() => setHistoryPlan(null)}
+        title="Histórico de execuções"
+        footer={
+          <Button variant="outline" onClick={() => setHistoryPlan(null)}>
+            Fechar
+          </Button>
+        }
+      >
+        {historyQuery.isLoading ? (
+          <p className="text-sm text-ink-subtle">Carregando…</p>
+        ) : (historyQuery.data?.items.length ?? 0) === 0 ? (
+          <p className="text-sm text-ink-subtle">Nenhuma execução registrada.</p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-border">
+            {historyQuery.data?.items.map((exec) => (
+              <li key={exec.id} className="flex items-start justify-between gap-3 py-2 text-sm">
+                <div>
+                  <p className="font-medium text-ink">
+                    {exec.executedAt ? formatDateTime(exec.executedAt) : '—'}
+                  </p>
+                  {exec.notes && <p className="text-xs text-ink-subtle">{exec.notes}</p>}
+                </div>
+                <span className="text-xs text-ink-subtle">
+                  {exec.odometerKm !== null ? `${formatNumber(exec.odometerKm, 0)} km` : '—'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </Modal>
     </Card>
   );
