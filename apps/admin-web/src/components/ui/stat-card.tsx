@@ -1,6 +1,15 @@
 import type { LucideIcon } from 'lucide-react';
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { Card } from './card';
+
+export interface StatCardTrend {
+  value: string;
+  /** Direção real do número (sempre honesta — nunca invertida por conveniência). */
+  direction: 'up' | 'down';
+  /** Se essa direção é boa para o negócio (ex.: despesa caindo = favorável). */
+  favorable: boolean;
+}
 
 export function StatCard({
   label,
@@ -14,9 +23,9 @@ export function StatCard({
   label: string;
   value: string;
   icon?: LucideIcon;
-  trend?: { value: string; positive: boolean };
+  trend?: StatCardTrend;
   tone?: 'brand' | 'success' | 'warning' | 'danger' | 'info';
-  /** 'gradient' = card de destaque com fundo escuro (uso pontual, 1 metrica por dashboard). */
+  /** 'gradient' = card de destaque com fundo escuro (uso pontual, 1-2 métricas por dashboard). */
   variant?: 'default' | 'gradient';
   className?: string;
 }): JSX.Element {
@@ -38,22 +47,22 @@ export function StatCard({
         </div>
         <p className="mt-3 text-2xl font-semibold tracking-tight text-white">{value}</p>
         {trend && (
-          <p
+          <div
             className={cn(
               'mt-1.5 flex items-center gap-1 text-xs font-medium',
-              trend.positive ? 'text-success-300' : 'text-danger-300',
+              trend.favorable ? 'text-success-300' : 'text-danger-300',
             )}
           >
-            {trend.positive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-            {trend.value}
-          </p>
+            {trend.direction === 'up' ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+            <span>{trend.value}</span>
+          </div>
         )}
       </div>
     );
   }
 
   return (
-    <div className={cn('rounded-lg border border-border bg-white p-5 shadow-xs', className)}>
+    <Card interactive className={cn('p-5', className)}>
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-ink-muted">{label}</p>
         {Icon && (
@@ -75,16 +84,16 @@ export function StatCard({
       </div>
       <p className="mt-3 text-2xl font-semibold tracking-tight text-ink">{value}</p>
       {trend && (
-        <p
+        <div
           className={cn(
             'mt-1.5 flex items-center gap-1 text-xs font-medium',
-            trend.positive ? 'text-success-600' : 'text-danger-600',
+            trend.favorable ? 'text-success-600' : 'text-danger-600',
           )}
         >
-          {trend.positive ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-          {trend.value}
-        </p>
+          {trend.direction === 'up' ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+          <span>{trend.value}</span>
+        </div>
       )}
-    </div>
+    </Card>
   );
 }
