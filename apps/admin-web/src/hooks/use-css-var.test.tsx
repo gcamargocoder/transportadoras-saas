@@ -28,4 +28,9 @@ describe('useCssVar', () => {
     expect(getByTestId('value').textContent).toBe('rgb(79 70 229)');
     document.documentElement.style.removeProperty('--color-teste');
   });
+
+  it('não lança erro e usa o fallback quando não há ThemeProvider ancestral (ex.: teste de outra página que renderiza um gráfico isoladamente)', () => {
+    const { getByTestId } = render(<Probe name="--color-nao-existe" fallback="rgb(1 2 3)" />);
+    expect(getByTestId('value').textContent).toBe('rgb(1 2 3)');
+  });
 });
