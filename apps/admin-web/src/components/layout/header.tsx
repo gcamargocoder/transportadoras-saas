@@ -9,6 +9,7 @@ import { getMyTenant } from '../../lib/api/admin.api';
 import { getUnreadNotificationCount } from '../../lib/api/notifications.api';
 import { ROLE_LABELS } from '../../lib/labels';
 import { Dropdown } from '../ui/dropdown';
+import { ThemeToggle } from '../ui/theme-toggle';
 
 export function Header({ onMenuClick }: { onMenuClick: () => void }): JSX.Element {
   const { user, logout } = useAuth();
@@ -47,7 +48,7 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }): JSX.Elemen
     .toUpperCase();
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-border bg-white/85 px-4 backdrop-blur sm:px-6">
+    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-border bg-surface/85 px-4 backdrop-blur sm:px-6">
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -66,6 +67,8 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }): JSX.Elemen
       </div>
 
       <div className="flex items-center gap-1">
+        <ThemeToggle />
+
         <Link
           href="/notifications"
           className="relative rounded-md p-2 text-ink-muted hover:bg-surface-muted hover:text-ink"
