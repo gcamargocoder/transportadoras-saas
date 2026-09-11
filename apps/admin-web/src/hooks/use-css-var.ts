@@ -27,7 +27,6 @@ export function useCssVar(name: string, fallback: string): string {
     setValue(raw ? `rgb(${raw})` : fallback);
     // fallback intencionalmente fora das deps: e uma constante de chamada,
     // recalcular por causa dela geraria loop de renderizacao sem motivo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, resolvedTheme]);
 
   return value;
