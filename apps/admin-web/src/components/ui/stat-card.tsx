@@ -50,7 +50,7 @@ export function StatCard({
           <div
             className={cn(
               'mt-1.5 flex items-center gap-1 text-xs font-medium',
-              trend.favorable ? 'text-success-300' : 'text-danger-300',
+              trend.favorable ? 'text-success-500' : 'text-danger-500',
             )}
           >
             {trend.direction === 'up' ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}

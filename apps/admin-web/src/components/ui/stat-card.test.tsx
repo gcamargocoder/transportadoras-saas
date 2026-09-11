@@ -45,4 +45,18 @@ describe('StatCard', () => {
     trendText = screen.getByText('+20.0% vs mês anterior');
     expect(trendText.parentElement?.className).toMatch(/text-success-600/);
   });
+
+  it('variante gradient com trend usa classes de cor que realmente existem na paleta (text-success-500/text-danger-500, nunca -300)', () => {
+    render(
+      <StatCard
+        label="Receita"
+        value="R$ 1.000"
+        variant="gradient"
+        trend={{ value: '+10%', direction: 'up', favorable: true }}
+      />,
+    );
+    const trendText = screen.getByText('+10%');
+    expect(trendText.parentElement?.className).toMatch(/text-success-500/);
+    expect(trendText.parentElement?.className).not.toMatch(/text-success-300|text-danger-300/);
+  });
 });
