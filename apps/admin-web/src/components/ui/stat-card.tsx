@@ -23,7 +23,7 @@ export function StatCard({
   label: string;
   value: string;
   icon?: LucideIcon;
-  trend?: StatCardTrend;
+  trend?: StatCardTrend | undefined;
   tone?: 'brand' | 'success' | 'warning' | 'danger' | 'info';
   /** 'gradient' = card de destaque com fundo escuro (uso pontual, 1-2 métricas por dashboard). */
   variant?: 'default' | 'gradient';

@@ -82,7 +82,7 @@ export default function DashboardPage(): JSX.Element {
                 label="Viagens totais"
                 value={formatNumber(query.data.overview.totalTrips)}
                 icon={RouteIcon}
-                trend={computeMonthOverMonthTrend(query.data.charts.monthlyTrips) as any}
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyTrips) ?? undefined}
               />
               <StatCard
                 label="Viagens ativas"
@@ -136,14 +136,14 @@ export default function DashboardPage(): JSX.Element {
                 value={formatCurrency(query.data.financial.totalRevenue)}
                 icon={TrendingUp}
                 variant="gradient"
-                trend={computeMonthOverMonthTrend(query.data.charts.monthlyRevenue) as any}
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyRevenue) ?? undefined}
               />
               <StatCard
                 label="Despesas aprovadas"
                 value={formatCurrency(query.data.financial.approvedExpenses)}
                 icon={Wallet}
                 tone="danger"
-                trend={computeMonthOverMonthTrend(query.data.charts.monthlyExpenses, 'lowerIsBetter') as any}
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyExpenses, 'lowerIsBetter') ?? undefined}
               />
               <StatCard
                 label="Adiantamentos"
@@ -216,7 +216,7 @@ export default function DashboardPage(): JSX.Element {
               <StatCard
                 label="Custo com combustível"
                 value={formatCurrency(query.data.fleet.fuelCost)}
-                trend={computeMonthOverMonthTrend(query.data.charts.monthlyFuelCost, 'lowerIsBetter') as any}
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyFuelCost, 'lowerIsBetter') ?? undefined}
               />
               <StatCard
                 label="Consumo médio"
