@@ -1,7 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-// @ts-ignore - needed to suppress console.error from React errors during test
-global.console.error = vi.fn();
 import { ThemeProvider } from './theme-context';
 import { useTheme } from '../../hooks/use-theme';
 
