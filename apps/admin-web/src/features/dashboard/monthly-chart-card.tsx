@@ -10,6 +10,8 @@ import {
   YAxis,
 } from 'recharts';
 import { Card, CardHeader } from '../../components/ui/card';
+import { ChartTooltip } from '../../components/charts/chart-tooltip';
+import { useCssVar } from '../../hooks/use-css-var';
 import type { DashboardChartPointEntity } from '../../types/entities';
 import { formatCurrency, formatNumber } from '../../utils/format';
 
@@ -26,6 +28,9 @@ export function MonthlyChartCard({
   color?: string;
   valueFormatter?: (value: number) => string;
 }): JSX.Element {
+  const gridColor = useCssVar('--color-border', 'rgb(226 232 240)');
+  const axisColor = useCssVar('--color-ink-subtle', 'rgb(148 163 184)');
+
   return (
     <Card>
       <CardHeader title={title} description={description} />
@@ -38,29 +43,21 @@ export function MonthlyChartCard({
                 <stop offset="100%" stopColor={color} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} stroke="#e2e8f0" />
+            <CartesianGrid vertical={false} stroke={gridColor} />
             <XAxis
               dataKey="month"
               tickLine={false}
               axisLine={false}
-              tick={{ fontSize: 11, fill: '#94a3b8' }}
+              tick={{ fontSize: 11, fill: axisColor }}
             />
             <YAxis
               tickLine={false}
               axisLine={false}
               width={48}
-              tick={{ fontSize: 11, fill: '#94a3b8' }}
+              tick={{ fontSize: 11, fill: axisColor }}
               tickFormatter={(value: number) => formatNumber(value)}
             />
-            <Tooltip
-              formatter={(value: number) => valueFormatter(value)}
-              contentStyle={{
-                borderRadius: 8,
-                borderColor: '#e2e8f0',
-                fontSize: 12,
-                boxShadow: '0 8px 24px -4px rgb(15 23 42 / 0.14)',
-              }}
-            />
+            <Tooltip content={<ChartTooltip valueFormatter={valueFormatter} />} />
             <Area
               type="monotone"
               dataKey="value"
