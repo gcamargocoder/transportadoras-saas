@@ -45,7 +45,7 @@ export function Dropdown({
         <div
           role="menu"
           className={cn(
-            'absolute z-20 mt-1.5 min-w-[180px] rounded-md border border-border bg-white p-1 shadow-popover animate-fade-in',
+            'absolute z-20 mt-1.5 min-w-[180px] rounded-md border border-border bg-surface p-1 shadow-popover animate-fade-in',
             align === 'end' ? 'right-0' : 'left-0',
           )}
         >

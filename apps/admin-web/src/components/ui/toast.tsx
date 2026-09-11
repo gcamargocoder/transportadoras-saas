@@ -63,7 +63,7 @@ export function ToastProvider({ children }: { children: ReactNode }): JSX.Elemen
               key={toast.id}
               role="status"
               className={cn(
-                'pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-popover animate-slide-up bg-white',
+                'pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-popover animate-slide-up bg-surface',
                 classes,
               )}
             >

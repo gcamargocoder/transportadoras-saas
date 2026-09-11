@@ -65,7 +65,7 @@ export function SearchCombobox<T>({
 
   if (selectedItem && !open) {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-border-strong bg-white px-3 py-2 text-sm">
+      <div className="flex items-center gap-2 rounded-md border border-border-strong bg-surface px-3 py-2 text-sm">
         <Check size={14} className="shrink-0 text-success-600" />
         <span className="min-w-0 flex-1 truncate text-ink">{getDisplayText(selectedItem)}</span>
         {!disabled && (
@@ -104,7 +104,7 @@ export function SearchCombobox<T>({
           }}
           placeholder={placeholder}
           className={cn(
-            'h-9 w-full rounded-md border bg-white pl-9 pr-8 text-sm text-ink placeholder:text-ink-subtle',
+            'h-9 w-full rounded-md border bg-surface pl-9 pr-8 text-sm text-ink placeholder:text-ink-subtle',
             'transition-shadow duration-150 focus:border-brand-500',
             invalid ? 'border-danger-500' : 'border-border-strong',
             'disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-ink-subtle',
@@ -117,7 +117,7 @@ export function SearchCombobox<T>({
       </div>
 
       {open && (
-        <div className="absolute z-20 mt-1.5 max-h-72 w-full overflow-y-auto rounded-md border border-border bg-white shadow-popover">
+        <div className="absolute z-20 mt-1.5 max-h-72 w-full overflow-y-auto rounded-md border border-border bg-surface shadow-popover">
           {debouncedSearch.length < minChars && (
             <p className="px-3 py-3 text-xs text-ink-subtle">
               Digite pelo menos {minChars} caracteres para buscar.

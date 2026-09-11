@@ -10,7 +10,7 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-subtle">
-      <aside className="hidden w-64 shrink-0 border-r border-border bg-white lg:block">
+      <aside className="hidden w-64 shrink-0 border-r border-border bg-surface lg:block">
         <SidebarNav />
       </aside>
 

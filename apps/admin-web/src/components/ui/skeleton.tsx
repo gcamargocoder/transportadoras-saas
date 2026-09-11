@@ -49,7 +49,7 @@ export function SkeletonCards({ count = 4 }: { count?: number }): JSX.Element {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {Array.from({ length: count }).map((_, index) => (
-        <div key={index} className="rounded-lg border border-border bg-white p-5">
+        <div key={index} className="rounded-lg border border-border bg-surface p-5">
           <Skeleton className="h-3 w-1/2" />
           <Skeleton className="mt-4 h-7 w-2/3" />
         </div>

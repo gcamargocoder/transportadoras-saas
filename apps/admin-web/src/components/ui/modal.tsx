@@ -51,7 +51,7 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          'relative flex max-h-[90vh] w-full flex-col rounded-lg bg-white shadow-lg animate-slide-up',
+          'relative flex max-h-[90vh] w-full flex-col rounded-lg bg-surface shadow-lg animate-slide-up',
           sizeClass,
         )}
       >

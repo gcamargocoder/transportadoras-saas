@@ -38,7 +38,7 @@ export function Drawer({
       <div
         role="dialog"
         aria-modal="true"
-        className={`relative flex h-full w-full max-w-sm flex-col bg-white shadow-lg animate-slide-in-right ${
+        className={`relative flex h-full w-full max-w-sm flex-col bg-surface shadow-lg animate-slide-in-right ${
           side === 'left' ? 'mr-auto' : 'ml-auto'
         }`}
       >

@@ -58,4 +58,13 @@ describe('DataTable', () => {
     expect(screen.getAllByText('Viagem A').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Viagem B').length).toBeGreaterThan(0);
   });
+
+  it('card mobile usa bg-surface (reage ao dark mode), nunca bg-white fixo', () => {
+    const { container } = render(
+      <DataTable columns={columns} data={[{ id: '1', name: 'Item 1' }]} getRowId={(r) => r.id} />,
+    );
+    const mobileCard = container.querySelector('.md\\:hidden > div') as HTMLElement;
+    expect(mobileCard.className).toMatch(/bg-surface\b/);
+    expect(mobileCard.className).not.toMatch(/bg-white/);
+  });
 });

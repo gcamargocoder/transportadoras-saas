@@ -94,7 +94,7 @@ export function DataTable<T>({
             key={row.id}
             onClick={onRowClick ? () => onRowClick(row.original) : undefined}
             className={cn(
-              'rounded-lg border border-border bg-white p-3.5',
+              'rounded-lg border border-border bg-surface p-3.5',
               onRowClick && 'cursor-pointer active:bg-surface-subtle',
             )}
           >
