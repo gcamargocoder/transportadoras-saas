@@ -26,6 +26,7 @@ import { SkeletonCards } from '../../../components/ui/skeleton';
 import { StatCard } from '../../../components/ui/stat-card';
 import { MonthlyChartCard } from '../../../features/dashboard/monthly-chart-card';
 import { getDashboard } from '../../../lib/api/dashboard.api';
+import { computeMonthOverMonthTrend } from '../../../utils/trend.util';
 import { formatCurrency, formatNumber, formatPercent } from '../../../utils/format';
 
 export default function DashboardPage(): JSX.Element {
@@ -81,6 +82,7 @@ export default function DashboardPage(): JSX.Element {
                 label="Viagens totais"
                 value={formatNumber(query.data.overview.totalTrips)}
                 icon={RouteIcon}
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyTrips) as any}
               />
               <StatCard
                 label="Viagens ativas"
@@ -133,13 +135,15 @@ export default function DashboardPage(): JSX.Element {
                 label="Receita total"
                 value={formatCurrency(query.data.financial.totalRevenue)}
                 icon={TrendingUp}
-                tone="success"
+                variant="gradient"
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyRevenue) as any}
               />
               <StatCard
                 label="Despesas aprovadas"
                 value={formatCurrency(query.data.financial.approvedExpenses)}
                 icon={Wallet}
                 tone="danger"
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyExpenses, 'lowerIsBetter') as any}
               />
               <StatCard
                 label="Adiantamentos"
@@ -150,7 +154,7 @@ export default function DashboardPage(): JSX.Element {
                 label="Resultado líquido"
                 value={formatCurrency(query.data.financial.netResult)}
                 icon={PiggyBank}
-                tone={query.data.financial.netResult >= 0 ? 'success' : 'danger'}
+                variant="gradient"
               />
               <StatCard label="Lucro" value={formatCurrency(query.data.financial.profit)} />
               <StatCard label="Margem" value={formatPercent(query.data.financial.margin)} />
@@ -212,6 +216,7 @@ export default function DashboardPage(): JSX.Element {
               <StatCard
                 label="Custo com combustível"
                 value={formatCurrency(query.data.fleet.fuelCost)}
+                trend={computeMonthOverMonthTrend(query.data.charts.monthlyFuelCost, 'lowerIsBetter') as any}
               />
               <StatCard
                 label="Consumo médio"
