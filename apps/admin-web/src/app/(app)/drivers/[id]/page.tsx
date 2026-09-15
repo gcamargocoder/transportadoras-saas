@@ -15,6 +15,7 @@ import { Tabs } from '../../../../components/ui/tabs';
 import { useToast } from '../../../../components/ui/toast';
 import { AssignVehicleModal } from '../../../../features/drivers/assign-vehicle-modal';
 import { CreateDriverModal } from '../../../../features/drivers/create-driver-modal';
+import { HelpHint } from '../../../../features/help/help-hint';
 import { useAuth } from '../../../../hooks/use-auth';
 import {
   endDriverVehicleAssignment,
@@ -28,6 +29,8 @@ import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { listTrips } from '../../../../lib/api/trips.api';
 import { DRIVER_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import {
+  DOCUMENT_EXPIRY_STATUS_LABELS,
+  DOCUMENT_EXPIRY_STATUS_TONE,
   DOCUMENT_TYPE_LABELS,
   DRIVER_STATUS_LABELS,
   DRIVER_STATUS_TONE,
@@ -257,7 +260,12 @@ export default function DriverDetailPage(): JSX.Element {
         {tab === 'documents' && (
           <div className="flex flex-col gap-6 p-5">
             <div>
-              <CardHeader title="Documentos" description="Documentos cadastrados do motorista (CNH, exame médico, MOPP, ANTT, outros)." className="px-0" />
+              <CardHeader
+                title="Documentos"
+                description="Documentos cadastrados do motorista (CNH, exame médico, MOPP, ANTT, outros)."
+                action={<HelpHint articleSlug="documentos-de-frota" />}
+                className="px-0"
+              />
               {documentsQuery.isLoading && <LoadingState label="Carregando documentos" />}
               {documentsQuery.data && documentsQuery.data.length === 0 && (
                 <EmptyState title="Nenhum documento cadastrado" />
@@ -272,6 +280,9 @@ export default function DriverDetailPage(): JSX.Element {
                       <span className="font-medium text-ink">{DOCUMENT_TYPE_LABELS[doc.type]}</span>
                       <span className="text-ink-muted">{doc.number ?? '-'}</span>
                       <span className="text-ink-subtle">Vence em {formatDate(doc.expiresAt)}</span>
+                      <Badge tone={DOCUMENT_EXPIRY_STATUS_TONE[doc.expiryStatus]}>
+                        {DOCUMENT_EXPIRY_STATUS_LABELS[doc.expiryStatus]}
+                      </Badge>
                     </li>
                   ))}
                 </ul>

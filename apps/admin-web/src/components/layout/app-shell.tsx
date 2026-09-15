@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { OnboardingLauncher } from '../../features/help/onboarding-launcher';
 import { Drawer } from '../ui/drawer';
 import { Header } from './header';
 import { SidebarNav } from './sidebar-nav';
@@ -10,6 +11,7 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-subtle">
+      <OnboardingLauncher />
       <aside className="hidden w-64 shrink-0 border-r border-border bg-white lg:block">
         <SidebarNav />
       </aside>

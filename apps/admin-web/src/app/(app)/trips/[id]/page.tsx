@@ -17,6 +17,7 @@ import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { cancelTrip, getTrip } from '../../../../lib/api/trips.api';
 import { TRIP_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { TRIP_STATUS_TONE } from '../../../../features/trips/status';
+import { HelpHint } from '../../../../features/help/help-hint';
 import { UpdateTripPlanModal } from '../../../../features/trips/update-trip-plan-modal';
 import { AdvancesTab } from '../../../../features/trips/tabs/advances-tab';
 import { DeliveryStopsTab } from '../../../../features/trips/tabs/delivery-stops-tab';
@@ -143,6 +144,7 @@ export default function TripDetailPage(): JSX.Element {
         ]}
         actions={
           <>
+            <HelpHint articleSlug="ciclo-de-vida-da-viagem" />
             <Badge tone={TRIP_STATUS_TONE[trip.status]}>{TRIP_STATUS_LABELS[trip.status]}</Badge>
             {canEditPlan && (
               <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>

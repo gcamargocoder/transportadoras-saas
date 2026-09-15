@@ -457,6 +457,54 @@ describe('Drivers (e2e)', () => {
         .send({ type: 'CNH' })
         .expect(404);
     });
+
+    // Fase 119 -- corrige a assimetria encontrada na auditoria: VehicleDocumentEntity
+    // ja expunha expiryStatus (calculado por resolveDocumentExpiryStatus) desde a
+    // Fase 62, mas DriverDocumentMapper nunca chamava a mesma funcao. Mesmo padrao
+    // exato do equivalente de veiculo (ver 'documentos do veiculo -- cadastra e lista
+    // documentos, calculando expiryStatus corretamente' em vehicle-management.e2e-spec.ts).
+    it('lista documentos calculando expiryStatus (Fase 119 -- corrige assimetria com VehicleDocumentEntity)', async () => {
+      const { adminAccessToken } = await createTenantAndLoginAsAdmin('DocsExpiryStatus');
+      const auth = `Bearer ${adminAccessToken}`;
+
+      const driverRes = await request(app.getHttpServer())
+        .post('/api/v1/drivers')
+        .set('Authorization', auth)
+        .send(buildDriverPayload())
+        .expect(201);
+      const driverId = driverRes.body.data.id;
+
+      const future = new Date();
+      future.setFullYear(future.getFullYear() + 2);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/drivers/${driverId}/documents`)
+        .set('Authorization', auth)
+        .send({ type: 'CNH', expiresAt: future.toISOString().slice(0, 10) })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/drivers/${driverId}/documents`)
+        .set('Authorization', auth)
+        .send({ type: 'MOPP', expiresAt: '2020-01-01' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/v1/drivers/${driverId}/documents`)
+        .set('Authorization', auth)
+        .send({ type: 'MEDICAL_EXAM' })
+        .expect(201);
+
+      const listRes = await request(app.getHttpServer())
+        .get(`/api/v1/drivers/${driverId}/documents`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      const valid = listRes.body.data.find((d: { type: string }) => d.type === 'CNH');
+      const expired = listRes.body.data.find((d: { type: string }) => d.type === 'MOPP');
+      const noExpiry = listRes.body.data.find((d: { type: string }) => d.type === 'MEDICAL_EXAM');
+      expect(valid.expiryStatus).toBe('VALID');
+      expect(expired.expiryStatus).toBe('EXPIRED');
+      expect(noExpiry.expiryStatus).toBe('NO_EXPIRY');
+    });
   });
 
   describe('motorista inexistente', () => {

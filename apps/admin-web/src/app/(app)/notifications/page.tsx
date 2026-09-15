@@ -17,6 +17,7 @@ import { PageHeader } from '../../../components/ui/page-header';
 import { Select } from '../../../components/ui/select';
 import { useToast } from '../../../components/ui/toast';
 import { resolveNotificationLink } from '../../../features/notifications/notification-links';
+import { HelpHint } from '../../../features/help/help-hint';
 import { toFriendlyMessage } from '../../../lib/api/errors';
 import {
   listNotifications,
@@ -121,10 +122,13 @@ export default function NotificationsPage(): JSX.Element {
         title="Notificações"
         description="Alertas operacionais que exigem atenção: ocorrências críticas, veículos, manutenção, fiscal, faturamento e mais."
         actions={
-          <Button variant="outline" onClick={() => readAllMutation.mutate()} loading={readAllMutation.isPending}>
-            <CheckCheck size={14} />
-            Marcar todas como lidas
-          </Button>
+          <>
+            <HelpHint articleSlug="alertas-e-notificacoes" />
+            <Button variant="outline" onClick={() => readAllMutation.mutate()} loading={readAllMutation.isPending}>
+              <CheckCheck size={14} />
+              Marcar todas como lidas
+            </Button>
+          </>
         }
       />
 

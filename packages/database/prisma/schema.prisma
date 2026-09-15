@@ -3074,6 +3074,15 @@ enum NotificationType {
   /// (NotificationsService.resolveTollDataSyncAlerts) marcar como lida
   /// assim que a mesma fonte tiver uma execucao SUCCESS/PARTIAL.
   TOLL_DATA_SYNC_FAILURE
+  /// Fase 119 -- reaproveita o MESMO limiar de resolveDocumentExpiryStatus
+  /// (fleet/utils/document-expiry.util.ts, 30 dias) ja usado por
+  /// CONTRACT_EXPIRING -- nunca um segundo limiar. Document (CRLV/ANTT/CNH/
+  /// INSURANCE) de VEHICLE/DRIVER com expiresAt dentro do limiar (inclusive
+  /// ja vencido). entityType='Document', entityId=Document.id (nunca
+  /// Vehicle/Driver -- um mesmo veiculo/motorista pode ter mais de um
+  /// documento vencendo ao mesmo tempo, e o id do dono colidiria na
+  /// deduplicacao).
+  DOCUMENT_EXPIRING
 
   @@map("notification_type")
 }

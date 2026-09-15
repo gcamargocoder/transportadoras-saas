@@ -22,6 +22,7 @@ import { useToast } from '../../../components/ui/toast';
 import { useAuth } from '../../../hooks/use-auth';
 import { useDebounce } from '../../../hooks/use-debounce';
 import { CreateMaintenanceModal } from '../../../features/fleet/create-maintenance-modal';
+import { HelpHint } from '../../../features/help/help-hint';
 import { UpdateMaintenanceModal } from '../../../features/fleet/update-maintenance-modal';
 import { MAINTENANCE_STATUS_TONE } from '../../../features/fleet/status';
 import { toFriendlyMessage } from '../../../lib/api/errors';
@@ -225,12 +226,15 @@ export default function MaintenancesPage(): JSX.Element {
         title="Manutenções"
         description="Ordens de manutenção da frota."
         actions={
-          hasRole(user?.role, FLEET_WRITE_ROLES) && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus size={16} />
-              Nova manutenção
-            </Button>
-          )
+          <>
+            <HelpHint articleSlug="manutencao" />
+            {hasRole(user?.role, FLEET_WRITE_ROLES) && (
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus size={16} />
+                Nova manutenção
+              </Button>
+            )}
+          </>
         }
       />
 

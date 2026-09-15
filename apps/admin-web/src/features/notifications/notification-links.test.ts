@@ -79,6 +79,26 @@ describe('resolveNotificationLink', () => {
     expect(link).toBeNull();
   });
 
+  // Fase 119 -- documento de conformidade de frota.
+  it('Document com vehicleId no metadata leva para /vehicles/:vehicleId', () => {
+    const link = resolveNotificationLink(
+      buildNotification({ type: 'DOCUMENT_EXPIRING', entityType: 'Document', entityId: 'doc-1', metadata: { vehicleId: 'veh-3' } }),
+    );
+    expect(link).toBe('/vehicles/veh-3');
+  });
+
+  it('Document com driverId no metadata leva para /drivers/:driverId', () => {
+    const link = resolveNotificationLink(
+      buildNotification({ type: 'DOCUMENT_EXPIRING', entityType: 'Document', entityId: 'doc-2', metadata: { driverId: 'drv-3' } }),
+    );
+    expect(link).toBe('/drivers/drv-3');
+  });
+
+  it('Document sem vehicleId/driverId no metadata nao tem link', () => {
+    const link = resolveNotificationLink(buildNotification({ entityType: 'Document', metadata: null }));
+    expect(link).toBeNull();
+  });
+
   // Fase "Alertas de sincronizacao".
   it('TollDataSource leva para o painel de status do Super Admin, independente do entityId (id da execucao, sem tela propria)', () => {
     const link = resolveNotificationLink(

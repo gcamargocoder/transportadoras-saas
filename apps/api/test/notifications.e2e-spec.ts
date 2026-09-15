@@ -1047,6 +1047,211 @@ describe('Notifications (e2e)', () => {
   });
 
   // ==========================================================================
+  // Integracao: documentos de conformidade de frota (Fase 119) -- fecha o GAP
+  // identificado na auditoria pos-Fase 118: resolveDocumentExpiryStatus ja
+  // existia (Fase 62) e ja era reaproveitado por Contract/collectContractsExpiring
+  // (Fase 98, ver suite acima), mas Document (CRLV/ANTT/CNH/seguro de veiculo
+  // e motorista) nunca gerava notificacao, so aparecia no overview de UM
+  // veiculo por vez (VehicleOverviewService.buildAlerts). Escopo desta fase:
+  // apenas CRLV/ANTT/CNH/INSURANCE de VEHICLE/DRIVER -- TRAILER/TENANT e os
+  // demais DocumentType (MEDICAL_EXAM/MOPP/LICENSING/OTHER) ficam fora (ver
+  // docs/notifications.md).
+  // ==========================================================================
+  describe('integracao -- documentos de conformidade de frota (Fase 119)', () => {
+    async function createVehicleDocument(auth: string, vehicleId: string, type: string, expiresAt: string | null) {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vehicles/${vehicleId}/documents`)
+        .set('Authorization', auth)
+        .send({ type, ...(expiresAt ? { expiresAt } : {}) })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    async function createDriverDocument(auth: string, driverId: string, type: string, expiresAt: string | null) {
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/drivers/${driverId}/documents`)
+        .set('Authorization', auth)
+        .send({ type, ...(expiresAt ? { expiresAt } : {}) })
+        .expect(201);
+      return res.body.data.id as string;
+    }
+
+    function inDays(days: number): string {
+      return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    it('CRLV de veiculo vencendo em breve gera DOCUMENT_EXPIRING severity MEDIUM com entityType=Document e metadata.vehicleId', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocCrlvSoon');
+      const vehicleId = await createVehicle(adminAuth);
+      const documentId = await createVehicleDocument(adminAuth, vehicleId, 'CRLV', inDays(10));
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === documentId);
+      expect(notif).toBeTruthy();
+      expect(notif.entityType).toBe('Document');
+      expect(notif.severity).toBe('MEDIUM');
+      expect(notif.metadata).toMatchObject({ vehicleId, documentType: 'CRLV', ownerType: 'VEHICLE' });
+    });
+
+    it('CNH de motorista vencida gera DOCUMENT_EXPIRING severity CRITICAL com metadata.driverId', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocCnhExpired');
+      const driverId = await createDriver(adminAuth);
+      const documentId = await createDriverDocument(adminAuth, driverId, 'CNH', '2020-01-01T00:00:00.000Z');
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      const notif = res.body.data.items.find((n: { entityId: string }) => n.entityId === documentId);
+      expect(notif).toBeTruthy();
+      expect(notif.severity).toBe('CRITICAL');
+      expect(notif.metadata).toMatchObject({ driverId, documentType: 'CNH', ownerType: 'DRIVER' });
+    });
+
+    it('ANTT e seguro (INSURANCE) tambem geram DOCUMENT_EXPIRING (cobrindo os 4 tipos do escopo)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocAnttInsurance');
+      const vehicleId = await createVehicle(adminAuth);
+      const anttId = await createVehicleDocument(adminAuth, vehicleId, 'ANTT', inDays(5));
+      const insuranceId = await createVehicleDocument(adminAuth, vehicleId, 'INSURANCE', '2020-06-01T00:00:00.000Z');
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      expect(res.body.data.items.some((n: { entityId: string }) => n.entityId === anttId)).toBe(true);
+      expect(res.body.data.items.some((n: { entityId: string }) => n.entityId === insuranceId)).toBe(true);
+    });
+
+    it('documento VALID (vencimento distante) nunca gera notificacao', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocValid');
+      const vehicleId = await createVehicle(adminAuth);
+      const documentId = await createVehicleDocument(adminAuth, vehicleId, 'CRLV', inDays(200));
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === documentId)).toBeUndefined();
+    });
+
+    it('documento sem expiresAt (NO_EXPIRY) nunca gera notificacao', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocNoExpiry');
+      const vehicleId = await createVehicle(adminAuth);
+      const documentId = await createVehicleDocument(adminAuth, vehicleId, 'CRLV', null);
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === documentId)).toBeUndefined();
+    });
+
+    it('tipo de documento fora do escopo desta fase (MEDICAL_EXAM) nunca gera notificacao mesmo vencido', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocOutOfScope');
+      const driverId = await createDriver(adminAuth);
+      const documentId = await createDriverDocument(adminAuth, driverId, 'MEDICAL_EXAM', '2020-01-01T00:00:00.000Z');
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer()).get('/api/v1/notifications').set('Authorization', adminAuth).expect(200);
+      expect(res.body.data.items.find((n: { entityId: string }) => n.entityId === documentId)).toBeUndefined();
+    });
+
+    it('veiculo com 2 documentos vencendo ao mesmo tempo gera 2 notificacoes distintas (entityId=Document.id, nunca Vehicle.id)', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocTwoPerVehicle');
+      const vehicleId = await createVehicle(adminAuth);
+      const crlvId = await createVehicleDocument(adminAuth, vehicleId, 'CRLV', inDays(5));
+      const anttId = await createVehicleDocument(adminAuth, vehicleId, 'ANTT', inDays(10));
+
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      const matches = res.body.data.items.filter((n: { metadata: { vehicleId: string } }) => n.metadata.vehicleId === vehicleId);
+      expect(matches).toHaveLength(2);
+      expect(matches.map((n: { entityId: string }) => n.entityId).sort()).toEqual([crlvId, anttId].sort());
+    });
+
+    it('reprocessar (POST /notifications/process 2x) nunca duplica a notificacao do documento', async () => {
+      const { adminAuth } = await createTenantAndLoginAsAdmin('DocDedup');
+      const vehicleId = await createVehicle(adminAuth);
+      const documentId = await createVehicleDocument(adminAuth, vehicleId, 'CRLV', inDays(5));
+
+      await processNow(adminAuth);
+      await processNow(adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      const matches = res.body.data.items.filter((n: { entityId: string }) => n.entityId === documentId);
+      expect(matches).toHaveLength(1);
+    });
+
+    it('isolamento multi-tenant: documento vencido do tenant A nunca vaza para o tenant B', async () => {
+      const tenantA = await createTenantAndLoginAsAdmin('DocIsoA');
+      const tenantB = await createTenantAndLoginAsAdmin('DocIsoB');
+      const vehicleId = await createVehicle(tenantA.adminAuth);
+      await createVehicleDocument(tenantA.adminAuth, vehicleId, 'CRLV', '2020-01-01T00:00:00.000Z');
+      await processNow(tenantA.adminAuth);
+      await processNow(tenantB.adminAuth);
+
+      const resB = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', tenantB.adminAuth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      expect(resB.body.data.items).toHaveLength(0);
+    });
+
+    it('destinatarios seguem MANAGEMENT_ROLES: MANAGER recebe, OPERATOR nunca recebe', async () => {
+      const { adminAuth, tenantId } = await createTenantAndLoginAsAdmin('DocRecipients');
+      const vehicleId = await createVehicle(adminAuth);
+      const documentId = await createVehicleDocument(adminAuth, vehicleId, 'CRLV', inDays(5));
+      const manager = await createUserWithRole(adminAuth, tenantId, 'MANAGER');
+      const operator = await createUserWithRole(adminAuth, tenantId, 'OPERATOR');
+
+      await processNow(adminAuth);
+
+      const managerList = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', manager.auth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      expect(managerList.body.data.items.some((n: { entityId: string }) => n.entityId === documentId)).toBe(true);
+
+      const operatorList = await request(app.getHttpServer())
+        .get('/api/v1/notifications')
+        .set('Authorization', operator.auth)
+        .query({ type: 'DOCUMENT_EXPIRING' })
+        .expect(200);
+      expect(operatorList.body.data.items.some((n: { entityId: string }) => n.entityId === documentId)).toBe(false);
+    });
+  });
+
+  // ==========================================================================
   // Integracao: fiscal (documento generico)
   // ==========================================================================
   describe('integracao -- fiscal', () => {

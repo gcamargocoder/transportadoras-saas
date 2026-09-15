@@ -304,6 +304,9 @@ export interface DriverDocumentEntity {
   number: string | null;
   issuedAt: string | null;
   expiresAt: string | null;
+  // Fase 119 -- corrige a assimetria com VehicleDocumentEntity, que ja tinha
+  // este campo desde a Fase 62.
+  expiryStatus: DocumentExpiryStatus;
   createdAt: string;
 }
 

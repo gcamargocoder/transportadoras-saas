@@ -882,6 +882,9 @@ export const NotificationType = {
   CHECKLIST_CRITICAL_NON_CONFORMITY: 'CHECKLIST_CRITICAL_NON_CONFORMITY',
   // Fase "Alertas de sincronizacao".
   TOLL_DATA_SYNC_FAILURE: 'TOLL_DATA_SYNC_FAILURE',
+  // Fase 119 -- documento de conformidade de frota (CRLV/ANTT/CNH/seguro)
+  // vencendo/vencido.
+  DOCUMENT_EXPIRING: 'DOCUMENT_EXPIRING',
 } as const;
 
 // Fase 72 -- Contas a Receber. Status ESCRITO (nunca contem OVERDUE --

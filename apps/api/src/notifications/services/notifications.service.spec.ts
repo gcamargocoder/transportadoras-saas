@@ -43,6 +43,10 @@ function buildPrismaMock(overrides: Record<string, unknown> = {}) {
     fiscalDocument: { findMany: emptyFindMany() },
     trip: { findMany: emptyFindMany() },
     driver: { findMany: emptyFindMany() },
+    // Fase 119 -- collectDocumentsExpiring (mesmo aviso das linhas acima:
+    // todo novo model consultado por um coletor tem que ser adicionado
+    // aqui, senao processTenant quebra em TODOS os testes desta suite).
+    document: { findMany: emptyFindMany() },
     tripBilling: { findMany: emptyFindMany() },
     contract: { findMany: emptyFindMany() },
     userAccount: { findMany: jest.fn().mockResolvedValue([]) },
@@ -260,6 +264,112 @@ describe('NotificationsService -- janela de processamento (secao 20 do pedido)',
 
     const call = (prisma.tripOccurrence.findMany as jest.Mock).mock.calls[0][0];
     expect(call.where).toMatchObject({ tenantId: TENANT_ID, resolvedAt: null, cancelledAt: null });
+  });
+});
+
+// Fase 119 -- collectDocumentsExpiring. Cobertura complementar (via banco
+// real) em test/notifications.e2e-spec.ts, describe 'integracao --
+// documentos de conformidade de frota'. Aqui: forma exata do candidato
+// (entityType/severity/metadata) e a janela de busca (where), sem
+// depender de banco.
+describe('NotificationsService -- documentos de conformidade de frota (Fase 119)', () => {
+  it('so busca Document dos 4 tipos do escopo, ownerType IN (VEHICLE,DRIVER), com expiresAt preenchido', async () => {
+    const { service, prisma } = buildService();
+    await service.processTenant(TENANT_ID);
+
+    const call = (prisma.document.findMany as jest.Mock).mock.calls[0][0];
+    expect(call.where).toMatchObject({
+      tenantId: TENANT_ID,
+      type: { in: ['CRLV', 'ANTT', 'CNH', 'INSURANCE'] },
+      ownerType: { in: ['VEHICLE', 'DRIVER'] },
+      expiresAt: { not: null },
+    });
+  });
+
+  it('documento de VEHICLE vencendo em breve vira candidato DOCUMENT_EXPIRING severity MEDIUM, entityType=Document, metadata com vehicleId', async () => {
+    const expiresAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+    const { service, prisma } = buildService({
+      document: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'doc-1', type: 'CRLV', ownerType: 'VEHICLE', ownerId: 'vehicle-1', expiresAt }]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC1234' }]) },
+      userAccount: { findMany: jest.fn().mockResolvedValue([{ id: 'manager-1', role: 'MANAGER' }]) },
+    });
+
+    await service.processTenant(TENANT_ID);
+
+    const rows = (prisma.notification.createMany as jest.Mock).mock.calls[0][0].data as Array<Record<string, unknown>>;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: NotificationType.DOCUMENT_EXPIRING,
+          severity: AlertSeverity.MEDIUM,
+          entityType: 'Document',
+          entityId: 'doc-1',
+          recipientId: 'manager-1',
+          metadata: { ownerType: 'VEHICLE', documentType: 'CRLV', vehicleId: 'vehicle-1' },
+        }),
+      ]),
+    );
+  });
+
+  it('documento de DRIVER ja vencido vira candidato DOCUMENT_EXPIRING severity CRITICAL, metadata com driverId (nunca vehicleId)', async () => {
+    const expiresAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+    const { service, prisma } = buildService({
+      document: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'doc-2', type: 'CNH', ownerType: 'DRIVER', ownerId: 'driver-1', expiresAt }]),
+      },
+      driver: { findMany: jest.fn().mockResolvedValue([{ id: 'driver-1', name: 'Jose' }]) },
+      userAccount: { findMany: jest.fn().mockResolvedValue([{ id: 'manager-1', role: 'MANAGER' }]) },
+    });
+
+    await service.processTenant(TENANT_ID);
+
+    const rows = (prisma.notification.createMany as jest.Mock).mock.calls[0][0].data as Array<Record<string, unknown>>;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: NotificationType.DOCUMENT_EXPIRING,
+          severity: AlertSeverity.CRITICAL,
+          entityId: 'doc-2',
+          metadata: { ownerType: 'DRIVER', documentType: 'CNH', driverId: 'driver-1' },
+        }),
+      ]),
+    );
+  });
+
+  it('2 documentos vencendo do MESMO veiculo geram 2 candidatos distintos (entityId=Document.id, nunca colide)', async () => {
+    const soon = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const { service, prisma } = buildService({
+      document: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'doc-1', type: 'CRLV', ownerType: 'VEHICLE', ownerId: 'vehicle-1', expiresAt: soon },
+          { id: 'doc-2', type: 'ANTT', ownerType: 'VEHICLE', ownerId: 'vehicle-1', expiresAt: soon },
+        ]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC1234' }]) },
+      userAccount: { findMany: jest.fn().mockResolvedValue([{ id: 'manager-1', role: 'MANAGER' }]) },
+    });
+
+    await service.processTenant(TENANT_ID);
+
+    const rows = (prisma.notification.createMany as jest.Mock).mock.calls[0][0].data as Array<Record<string, unknown>>;
+    const documentRows = rows.filter((r) => r.type === NotificationType.DOCUMENT_EXPIRING);
+    expect(documentRows).toHaveLength(2);
+    expect(documentRows.map((r) => r.entityId).sort()).toEqual(['doc-1', 'doc-2']);
+  });
+
+  it('documento VALID (dentro do prazo) nunca vira candidato', async () => {
+    const far = new Date(Date.now() + 200 * 24 * 60 * 60 * 1000);
+    const { service, prisma } = buildService({
+      document: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'doc-1', type: 'CRLV', ownerType: 'VEHICLE', ownerId: 'vehicle-1', expiresAt: far }]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC1234' }]) },
+    });
+
+    await service.processTenant(TENANT_ID);
+    expect(prisma.notification.createMany).not.toHaveBeenCalled();
   });
 });
 

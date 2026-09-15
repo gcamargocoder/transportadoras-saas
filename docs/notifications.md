@@ -452,7 +452,97 @@ porque ninguém rodou esse arquivo isoladamente depois. Corrigido
 adicionando os 2 models faltantes (+ `checklistExecution`, necessário para
 o coletor desta fase) ao `buildPrismaMock`.
 
-## 16. Pendências reais
+## 16. Fase 119 — documentos de conformidade de frota (`DOCUMENT_EXPIRING`)
+
+**GAP real identificado numa auditoria dedicada (pós-Fase 118)**:
+`resolveDocumentExpiryStatus` (Fase 62) já calculava `VALID`/`EXPIRING_SOON`/
+`EXPIRED`/`NO_EXPIRY` para `Document` (CRLV/ANTT/CNH/MEDICAL_EXAM/MOPP/
+LICENSING/INSURANCE/OTHER, dono polimórfico VEHICLE/TRAILER/DRIVER/TENANT) e
+já era reaproveitado por `collectContractsExpiring` (`Contract`, Fase 98) —
+mas nunca por `Document`, que só aparecia no overview de UM veículo por vez
+(`VehicleOverviewService.buildAlerts`, alerta em memória, nunca persistido).
+A auditoria confirmou que o padrão arquitetural (`entidade → threshold →
+collector → NotificationsService`) já existia e era maduro (mesmo usado por
+manutenção/pneus/contrato) — o gap era puramente a ausência de um collector
+para `Document`, não um problema de infraestrutura.
+
+**Escopo definido na fase de regra de negócio** (decisão de produto, não
+técnica): apenas `DocumentType` IN (`CRLV`, `ANTT`, `CNH`, `INSURANCE`) de
+`DocumentOwnerType` IN (`VEHICLE`, `DRIVER`). Fora do escopo: `TRAILER`/
+`TENANT` (nenhum dos dois tem CRUD de documento implementado hoje) e os
+demais `DocumentType` (`MEDICAL_EXAM`/`MOPP`/`LICENSING`/`OTHER`).
+
+Fechado com um novo coletor, `collectDocumentsExpiring`, que reaproveita
+**integralmente** `resolveDocumentExpiryStatus` (mesmo limiar de 30 dias,
+nenhum segundo cálculo) e 3 queries em lote (documentos do escopo + donos
+`Vehicle`/`Driver` batched por id, nunca 1 por documento/dono).
+`NotificationType.DOCUMENT_EXPIRING` é um valor novo (nenhum tipo existente
+cobre "documento de frota" sem forçar uma equivalência falsa, mesmo
+raciocínio já documentado para `CHECKLIST_CRITICAL_NON_CONFORMITY` na seção
+15). Destinatário: `MANAGEMENT_ROLES` (mesmo grupo de `CONTRACT_EXPIRING`/
+`DRIVER_SUSPENDED`/`BILLING_PENDING`).
+
+**Decisão de desenho — `entityType`/`entityId`**: `entityType='Document'`,
+`entityId=Document.id` (**nunca** `Vehicle`/`Driver`, mesmo que a
+notificação "seja sobre" um veículo/motorista). Um mesmo veículo pode ter
+mais de 1 documento vencendo ao mesmo tempo (ex.: CRLV e ANTT) — usar o id
+do dono como `entityId` colidiria na chave única de deduplicação
+(`tenantId+recipientId+type+entityType+entityId`) e o 2º documento seria
+descartado silenciosamente por `skipDuplicates`. Mesmo princípio já usado
+por `collectFiscalDocumentProblems`/`collectDeliveryProofPending`
+(`entityId` = id do documento, nunca da viagem). O dono
+(`vehicleId`/`driverId`) vai em `metadata` só para navegação — mesmo padrão
+de `collectMaintenancePlansDue`/`collectTireLifespanNearReplacement`.
+
+**Mapeamento de severidade**: `AlertSeverity` (usado por `Notification.
+severity`) não tem um nível "ATENÇÃO" — só `LOW`/`MEDIUM`/`HIGH`/
+`CRITICAL`. `EXPIRED` → `CRITICAL` (documento de frota vencido é mais grave
+que contrato vencido, decisão explícita da fase de regra de negócio);
+`EXPIRING_SOON` → `MEDIUM` (mesma convenção de severidade dupla já usada por
+`CONTRACT_EXPIRING`/`VEHICLE_MAINTENANCE`/`TIRE_NEAR_REPLACEMENT`). Nenhum
+nível de severidade novo foi criado.
+
+**Assimetria corrigida (fora do coletor, mesma fase)**: `VehicleDocumentMapper`
+já expunha `expiryStatus` desde a Fase 62; `DriverDocumentMapper` nunca
+chamava `resolveDocumentExpiryStatus` — `GET /drivers/:id/documents` nunca
+devolvia status de vencimento. Corrigido reaproveitando a mesma função pura
+(nenhum campo novo persistido, nenhuma segunda lógica de cálculo) —
+`DriverDocumentEntity` agora tem `expiryStatus`, espelhando
+`VehicleDocumentEntity`.
+
+**Frontend (admin-web)**: badge de status (`DOCUMENT_EXPIRY_STATUS_TONE`/
+`LABELS`, já existente) adicionado na aba "Documentos" do motorista,
+espelhando a do veículo — nenhum componente/tela novo. `NotificationType`/
+`NOTIFICATION_TYPE_LABELS` ganharam a entrada `DOCUMENT_EXPIRING` (mesmo gap
+de "label undefined" já documentado e corrigido para `CONTRACT_EXPIRING`/
+`CHECKLIST_CRITICAL_NON_CONFORMITY` — corrigido aqui desde o início, nunca
+deixado para trás). `resolveNotificationLink` ganhou o caso `'Document'`
+(leva para `/vehicles/:id` ou `/drivers/:id` via `metadata`, mesmo padrão de
+`MaintenancePlan`) — reaproveita o mecanismo existente, não cria navegação
+nova.
+
+**Fora do escopo desta fase (deliberado, ver auditoria de regra de
+negócio)**:
+- Documento de reboço/carreta (`DocumentOwnerType.TRAILER`) — não tem CRUD
+  implementado hoje, criar um seria uma fase própria.
+- `update`/`delete` de `Document` — "renovar" continua sendo criar uma nova
+  linha; a linha antiga permanece histórica, sem vínculo
+  `previousDocumentId`. Sem alerta persistido antigo a "resolver" quando o
+  documento é renovado (o registro antigo simplesmente deixa de aparecer
+  nos candidatos do próximo processamento, já que não está mais dentro do
+  limiar — mesmo comportamento de `CONTRACT_EXPIRING`).
+- Threshold configurável por tenant ou por tipo de documento — mesmo limiar
+  fixo de 30 dias para os 4 tipos, decisão explícita da fase de regra de
+  negócio.
+- Bloqueio de início de viagem por documento vencido — `TripsService.
+  assertCanStart` **não foi alterado**; documento vencido gera notificação,
+  nunca impede operação.
+- Integração com a Torre de Controle (`/operations/control-tower`) — nenhum
+  card/indicador/classificação de risco novo ali.
+- Filtro por vencimento/status documental em listagens de veículos/
+  motoristas.
+
+## 17. Pendências reais
 
 Nenhuma pendência real conhecida ao final da Fase 70 para o escopo
 pedido (as 3 pendências herdadas da Fase 69 — tela no Driver App,

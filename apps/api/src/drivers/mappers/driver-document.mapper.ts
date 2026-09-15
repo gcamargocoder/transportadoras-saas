@@ -1,5 +1,6 @@
 import { Document } from '@prisma/client';
 import { DriverDocumentEntity } from '../entities/driver-document.entity';
+import { resolveDocumentExpiryStatus } from '../../fleet/utils/document-expiry.util';
 
 export function toDriverDocumentEntity(document: Document): DriverDocumentEntity {
   const entity = new DriverDocumentEntity();
@@ -9,6 +10,7 @@ export function toDriverDocumentEntity(document: Document): DriverDocumentEntity
   entity.number = document.number;
   entity.issuedAt = document.issuedAt;
   entity.expiresAt = document.expiresAt;
+  entity.expiryStatus = resolveDocumentExpiryStatus(document.expiresAt);
   entity.createdAt = document.createdAt;
   return entity;
 }

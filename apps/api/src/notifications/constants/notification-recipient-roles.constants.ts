@@ -45,6 +45,10 @@ export const NOTIFICATION_RECIPIENT_ROLES: Record<NotificationType, UserRole[]> 
   // operacional/de seguranca imediata, mesmo grupo de TIRE_NEAR_REPLACEMENT/
   // VEHICLE_MAINTENANCE (nunca restrito a gestao).
   CHECKLIST_CRITICAL_NON_CONFORMITY: OPERATIONAL_ROLES,
+  // Fase 119 -- conformidade documental de frota (CRLV/ANTT/CNH/seguro) e
+  // decisao de gestao/regularizacao, mesmo grupo de CONTRACT_EXPIRING/
+  // DRIVER_SUSPENDED/BILLING_PENDING (nunca OPERATOR/DISPATCHER).
+  DOCUMENT_EXPIRING: MANAGEMENT_ROLES,
   // Fase "Alertas de sincronizacao" -- falha de fonte oficial de dados de
   // pedagio e uma questao de configuracao/infraestrutura, restrita a quem
   // ja pode agir sobre ela (o unico role com escrita em /toll-data/sync e

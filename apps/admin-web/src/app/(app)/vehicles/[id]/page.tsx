@@ -34,6 +34,7 @@ import { MAINTENANCE_STATUS_TONE, VEHICLE_STATUS_TONE } from '../../../../featur
 import { CHECKLIST_STATUS_LABELS, CHECKLIST_STATUS_TONE } from '../../../../features/checklists/status';
 import { TRIP_STATUS_TONE } from '../../../../features/trips/status';
 import { UpdateVehicleModal } from '../../../../features/fleet/update-vehicle-modal';
+import { HelpHint } from '../../../../features/help/help-hint';
 import {
   DOCUMENT_EXPIRY_STATUS_LABELS,
   DOCUMENT_EXPIRY_STATUS_TONE,
@@ -474,6 +475,7 @@ export default function VehicleDetailPage(): JSX.Element {
               <CardHeader
                 title="Documentos"
                 description="Documentos cadastrados do veículo (CRLV, ANTT, seguro, licenciamento, outros)."
+                action={<HelpHint articleSlug="documentos-de-frota" />}
                 className="px-0"
               />
               {documentsQuery.isLoading && <LoadingState label="Carregando documentos" />}

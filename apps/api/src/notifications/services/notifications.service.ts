@@ -3,6 +3,8 @@ import {
   AlertSeverity,
   ChecklistExecutionStatus,
   ContractStatus,
+  DocumentOwnerType,
+  DocumentType,
   DriverStatus,
   FiscalDocumentStatus,
   FiscalDocumentType,
@@ -62,6 +64,14 @@ const OPEN_MAINTENANCE_STATUSES_EXCLUDED: VehicleMaintenanceStatus[] = [
   VehicleMaintenanceStatus.COMPLETED,
   VehicleMaintenanceStatus.CANCELLED,
 ];
+
+// Fase 119 -- escopo definido na fase de regra de negocio (auditoria pos-
+// Fase 118): so estes 4 DocumentType/2 DocumentOwnerType. TRAILER/TENANT e
+// os demais DocumentType (MEDICAL_EXAM/MOPP/LICENSING/OTHER) ficam de fora
+// nesta fase (TRAILER nem tem CRUD hoje, ver fleet/services/vehicle-documents.
+// service.ts) -- nunca ampliar sem decisao de negocio explicita.
+const FLEET_DOCUMENT_TYPES: DocumentType[] = [DocumentType.CRLV, DocumentType.ANTT, DocumentType.CNH, DocumentType.INSURANCE];
+const FLEET_DOCUMENT_OWNER_TYPES: DocumentOwnerType[] = [DocumentOwnerType.VEHICLE, DocumentOwnerType.DRIVER];
 
 interface NotificationCandidate {
   type: NotificationType;
@@ -437,6 +447,7 @@ export class NotificationsService {
       deliveryProofProblem,
       contractsExpiring,
       idleVehicles,
+      documentsExpiring,
     ] = await Promise.all([
       this.collectCriticalOccurrences(tenantId),
       this.collectVehicleUnavailable(tenantId),
@@ -455,6 +466,7 @@ export class NotificationsService {
       this.collectDeliveryProofProblem(tenantId),
       this.collectContractsExpiring(tenantId),
       this.collectIdleVehicles(tenantId),
+      this.collectDocumentsExpiring(tenantId),
     ]);
 
     return [
@@ -475,6 +487,7 @@ export class NotificationsService {
       ...deliveryProofProblem,
       ...contractsExpiring,
       ...idleVehicles,
+      ...documentsExpiring,
     ];
   }
 
@@ -1107,6 +1120,83 @@ export class NotificationsService {
           netIdleMinutes,
           maintenanceMinutes,
           thresholdMinutes,
+        },
+      });
+    }
+    return candidates;
+  }
+
+  // Fase 119 -- fecha a lacuna real entre resolveDocumentExpiryStatus (Fase
+  // 62, ja usado por VehicleDocumentMapper/VehicleOverviewService para
+  // exibicao e por collectContractsExpiring para Contract) e o Centro de
+  // Notificacoes: Document (CRLV/ANTT/CNH/INSURANCE de veiculo/motorista)
+  // nunca gerava notificacao, so aparecia no overview de UM veiculo por vez.
+  // MESMO limiar (30 dias) -- nenhuma segunda regra de vencimento.
+  //
+  // entityType='Document', entityId=document.id (NUNCA Vehicle/Driver): um
+  // mesmo veiculo/motorista pode ter mais de 1 documento vencendo ao mesmo
+  // tempo (ex: CRLV e ANTT) -- usar o id do dono colidiria na chave de
+  // deduplicacao (tenantId+recipientId+type+entityType+entityId) e o 2o
+  // documento seria descartado silenciosamente por skipDuplicates. Mesmo
+  // principio ja usado por collectFiscalDocumentProblems/
+  // collectDeliveryProofPending (entityId = id do documento, nunca da
+  // viagem). O dono (vehicleId/driverId) vai em metadata para navegacao,
+  // mesmo padrao de collectMaintenancePlansDue/
+  // collectTireLifespanNearReplacement (metadata.vehicleId).
+  //
+  // 3 queries em lote (documentos + veiculos donos + motoristas donos),
+  // nunca 1 por documento/dono.
+  private async collectDocumentsExpiring(tenantId: string): Promise<NotificationCandidate[]> {
+    const documents = await this.prisma.document.findMany({
+      where: {
+        tenantId,
+        type: { in: FLEET_DOCUMENT_TYPES },
+        ownerType: { in: FLEET_DOCUMENT_OWNER_TYPES },
+        expiresAt: { not: null },
+      },
+      select: { id: true, type: true, ownerType: true, ownerId: true, expiresAt: true },
+    });
+    if (documents.length === 0) return [];
+
+    const vehicleIds = [...new Set(documents.filter((d) => d.ownerType === DocumentOwnerType.VEHICLE).map((d) => d.ownerId))];
+    const driverIds = [...new Set(documents.filter((d) => d.ownerType === DocumentOwnerType.DRIVER).map((d) => d.ownerId))];
+
+    const [vehicles, drivers] = await Promise.all([
+      vehicleIds.length > 0 ? this.prisma.vehicle.findMany({ where: { id: { in: vehicleIds } }, select: { id: true, plate: true } }) : [],
+      driverIds.length > 0 ? this.prisma.driver.findMany({ where: { id: { in: driverIds } }, select: { id: true, name: true } }) : [],
+    ]);
+    const plateByVehicle = new Map(vehicles.map((v) => [v.id, v.plate]));
+    const nameByDriver = new Map(drivers.map((d) => [d.id, d.name]));
+
+    const now = new Date();
+    const candidates: NotificationCandidate[] = [];
+    for (const document of documents) {
+      const status = resolveDocumentExpiryStatus(document.expiresAt, now);
+      if (status !== 'EXPIRED' && status !== 'EXPIRING_SOON') continue;
+
+      const isVehicle = document.ownerType === DocumentOwnerType.VEHICLE;
+      const ownerLabel = (isVehicle ? plateByVehicle.get(document.ownerId) : nameByDriver.get(document.ownerId)) ?? '—';
+      const ownerNoun = isVehicle ? 'veículo' : 'motorista';
+      const expired = status === 'EXPIRED';
+      const dateLabel = document.expiresAt!.toISOString().slice(0, 10);
+
+      candidates.push({
+        type: NotificationType.DOCUMENT_EXPIRING,
+        // AlertSeverity nao tem um nivel "ATTENTION" -- MEDIUM e o mais
+        // proximo (mesma convencao de severidade dupla ja usada por
+        // CONTRACT_EXPIRING/VEHICLE_MAINTENANCE: HIGH/CRITICAL quando
+        // vencido, MEDIUM quando so proximo).
+        severity: expired ? AlertSeverity.CRITICAL : AlertSeverity.MEDIUM,
+        title: expired ? `Documento vencido: ${document.type} (${ownerLabel})` : `Documento vencendo: ${document.type} (${ownerLabel})`,
+        message: expired
+          ? `${document.type} do ${ownerNoun} ${ownerLabel} está vencido desde ${dateLabel}.`
+          : `${document.type} do ${ownerNoun} ${ownerLabel} vence em ${dateLabel}.`,
+        entityType: 'Document',
+        entityId: document.id,
+        metadata: {
+          ownerType: document.ownerType,
+          documentType: document.type,
+          ...(isVehicle ? { vehicleId: document.ownerId } : { driverId: document.ownerId }),
         },
       });
     }

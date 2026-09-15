@@ -7,6 +7,7 @@ import {
   Building2,
   CalendarClock,
   CircleDot,
+  CircleHelp,
   ClipboardCheck,
   Container,
   FileCheck,
@@ -106,6 +107,11 @@ export const NAV_GROUPS: NavGroup[] = [
       // aplica @Roles em NotificationsController -- o isolamento e por
       // usuario, nao por papel).
       { label: 'Notificações', href: '/notifications', icon: Bell, roles: [] },
+      // Central de Ajuda -- mesmo criterio de Notificacoes (Parte 12 do
+      // pedido: sem restricao de role/modulo, qualquer usuario autenticado
+      // pode abrir). Conteudo e so leitura, nunca revela acao que o usuario
+      // nao poderia executar.
+      { label: 'Central de Ajuda', href: '/help', icon: CircleHelp, roles: [] },
     ],
   },
   {

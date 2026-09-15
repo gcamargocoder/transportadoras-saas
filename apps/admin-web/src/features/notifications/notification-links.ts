@@ -8,6 +8,7 @@ export function resolveNotificationLink(notification: NotificationEntity): strin
   const metadata = notification.metadata ?? {};
   const tripId = typeof metadata.tripId === 'string' ? metadata.tripId : undefined;
   const vehicleId = typeof metadata.vehicleId === 'string' ? metadata.vehicleId : undefined;
+  const driverId = typeof metadata.driverId === 'string' ? metadata.driverId : undefined;
 
   switch (notification.entityType) {
     case 'TripOccurrence':
@@ -31,6 +32,12 @@ export function resolveNotificationLink(notification: NotificationEntity): strin
       return `/trips/${notification.entityId}`;
     case 'Driver':
       return `/drivers/${notification.entityId}`;
+    // Fase 119 -- documento de conformidade de frota (CRLV/ANTT/CNH/seguro).
+    // entityId e o id do Document, sem tela dedicada propria -- leva para o
+    // veiculo ou motorista dono (metadata.vehicleId/driverId), mesmo padrao
+    // de MaintenancePlan acima.
+    case 'Document':
+      return vehicleId ? `/vehicles/${vehicleId}` : driverId ? `/drivers/${driverId}` : null;
     case 'TripBilling':
       return tripId ? `/trips/${tripId}` : '/operations/fleet/billing';
     // Fase "Alertas de sincronizacao" -- painel de status das fontes

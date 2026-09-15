@@ -889,6 +889,8 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   CHECKLIST_CRITICAL_NON_CONFORMITY: 'Checklist com item crítico',
   // Fase "Alertas de sincronizacao".
   TOLL_DATA_SYNC_FAILURE: 'Falha na sincronização de pedágios',
+  // Fase 119.
+  DOCUMENT_EXPIRING: 'Documento de frota vencendo',
 };
 
 // Fase "Alertas de sincronizacao".
