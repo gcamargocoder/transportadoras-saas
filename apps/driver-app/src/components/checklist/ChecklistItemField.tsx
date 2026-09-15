@@ -71,10 +71,10 @@ export function ChecklistItemField({
           {item.required ? ' *' : ''}
         </Text>
         {item.critical && (
-          <Text style={{ color: colors.warning, fontSize: 12, fontWeight: '700' }}>CRITICO</Text>
+          <Text style={{ color: colors.warning, fontSize: 14, fontWeight: '700' }}>CRITICO</Text>
         )}
       </View>
-      {item.description && <Text style={{ color: colors.textMuted, fontSize: 13 }}>{item.description}</Text>}
+      {item.description && <Text style={{ color: colors.textMuted, fontSize: 15 }}>{item.description}</Text>}
 
       {item.type === 'BOOLEAN' && (
         <>
@@ -147,7 +147,7 @@ export function ChecklistItemField({
         <ChecklistSignaturePad onConfirm={handleSignatureConfirm} />
       )}
       {item.type === 'SIGNATURE' && evidence && (
-        <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+        <Text style={{ color: colors.textMuted, fontSize: 14 }}>
           {evidence.syncStatus === 'synced' ? '🟢 Assinatura sincronizada' : '🟡 Assinatura aguardando sincronizacao'}
         </Text>
       )}

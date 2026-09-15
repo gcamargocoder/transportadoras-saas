@@ -64,7 +64,7 @@ export function ChecklistPhotoField({
             style={{ width: 120, height: 120, borderRadius: 8 }}
             accessibilityLabel={`Foto capturada: ${label}`}
           />
-          <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+          <Text style={{ color: colors.textMuted, fontSize: 14 }}>
             {syncStatus === 'synced' ? '🟢 Sincronizado' : '🟡 Aguardando sincronizacao'}
           </Text>
           {!disabled && (
@@ -84,7 +84,7 @@ export function ChecklistPhotoField({
           apos reabrir o app) -- sem endpoint de download nesta fase, so
           informa que ja foi enviada (ver EvidenceDraft.localUri). */}
       {!localUri && syncStatus === 'synced' && (
-        <Text style={{ color: colors.textMuted, fontSize: 13 }}>🟢 Foto ja enviada anteriormente</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 15 }}>🟢 Foto ja enviada anteriormente</Text>
       )}
 
       {!localUri && syncStatus !== 'synced' && (

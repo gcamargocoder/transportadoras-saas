@@ -112,19 +112,19 @@ export function StartTripScreen({ route, navigation }: Props): React.JSX.Element
       </Text>
 
       <Card>
-        <Text style={{ color: colors.textMuted, fontSize: 13 }}>Caminhao</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 15 }}>Caminhao</Text>
         <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
           {trip.vehiclePlate ?? '-'}
         </Text>
-        <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>
+        <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>
           Eixos (configuracao normal)
         </Text>
         <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
           {trip.defaultAxles !== null ? `${trip.defaultAxles} eixos` : '-'}
         </Text>
-        <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Origem</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>Origem</Text>
         <Text style={{ color: colors.text }}>{trip.originName}</Text>
-        <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Destino</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>Destino</Text>
         <Text style={{ color: colors.text }}>{trip.destinationName}</Text>
       </Card>
 
@@ -156,7 +156,7 @@ export function StartTripScreen({ route, navigation }: Props): React.JSX.Element
 
         {fuelChoice === 'SUPPLIED' && (
           <>
-            <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Tipo</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>Tipo</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {FUEL_TYPE_OPTIONS.map((option) => (
                 <View key={option.value} style={{ width: '31%' }}>
@@ -168,7 +168,7 @@ export function StartTripScreen({ route, navigation }: Props): React.JSX.Element
                 </View>
               ))}
             </View>
-            <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Local</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>Local</Text>
             <View style={{ flexDirection: 'row', gap: 12 }}>
               <View style={{ flex: 1 }}>
                 <Button

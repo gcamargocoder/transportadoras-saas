@@ -35,7 +35,12 @@ const IN_PROGRESS_TRIP: DriverActiveTrip = {
 };
 
 function renderScreen() {
-  const navigation = { navigate: jest.fn(), replace: jest.fn(), goBack: jest.fn() };
+  const navigation = {
+    navigate: jest.fn(),
+    replace: jest.fn(),
+    goBack: jest.fn(),
+    addListener: jest.fn(() => jest.fn()),
+  };
   const utils = render(<HomeScreen route={{} as never} navigation={navigation as never} />);
   return { ...utils, navigation };
 }
@@ -235,6 +240,35 @@ describe('HomeScreen -- pausa e retomada', () => {
 
       expect(await screen.findByText('DESVIO DETECTADO')).toBeTruthy();
       expect(screen.getByText('RECALCULAR ROTA')).toBeTruthy();
+    });
+  });
+
+  // Bug real encontrado em teste manual (emulador): tocar "INICIAR VIAGEM"
+  // mais de uma vez rapidamente empilhava duas instancias de StartTripScreen
+  // (o botao nunca ficava disabled/loading enquanto a navegacao acontecia).
+  // Quando uma das instancias concluia com sucesso, navigation.replace('Home')
+  // so substituia a PROPRIA posicao na pilha -- a instancia visivel (a outra)
+  // continuava presa mostrando o formulario antigo mesmo com a viagem ja
+  // IN_PROGRESS no backend.
+  describe('viagem despachada (ainda nao iniciada)', () => {
+    beforeEach(() => {
+      mockUseTrip.mockReturnValue({
+        activeTrip: { ...IN_PROGRESS_TRIP, status: 'WAITING_DEPARTURE' },
+        config: null,
+        isLoading: false,
+        refresh: jest.fn().mockResolvedValue(undefined),
+      });
+    });
+
+    it('INICIAR VIAGEM tocado duas vezes rapidamente navega para StartTrip so uma vez (nunca empilha 2 telas)', async () => {
+      const { navigation } = renderScreen();
+
+      const button = await screen.findByText('INICIAR VIAGEM');
+      fireEvent.press(button);
+      fireEvent.press(button);
+
+      expect(navigation.navigate).toHaveBeenCalledTimes(1);
+      expect(navigation.navigate).toHaveBeenCalledWith('StartTrip', { tripId: 'trip-1' });
     });
   });
 });

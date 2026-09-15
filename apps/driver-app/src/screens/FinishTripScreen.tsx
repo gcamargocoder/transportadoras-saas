@@ -87,11 +87,11 @@ export function FinishTripScreen({ route, navigation }: Props): React.JSX.Elemen
 
       {trip && (
         <Card>
-          <Text style={{ color: colors.textMuted, fontSize: 13 }}>Destino</Text>
+          <Text style={{ color: colors.textMuted, fontSize: 15 }}>Destino</Text>
           <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
             {trip.destinationName}
           </Text>
-          <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>KM atual</Text>
+          <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>KM atual</Text>
           <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
             {trip.currentOdometerKm !== null ? `${trip.currentOdometerKm} km` : '-'}
           </Text>
@@ -109,7 +109,7 @@ export function FinishTripScreen({ route, navigation }: Props): React.JSX.Elemen
         <Text style={{ color: colors.text, fontWeight: '700', marginBottom: 4 }}>
           Motivo da parada do veiculo (opcional)
         </Text>
-        <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>
+        <Text style={{ color: colors.textMuted, fontSize: 14, marginBottom: 8 }}>
           Ao encerrar, o veiculo fica parado ate a proxima viagem. Voce pode informar o motivo agora
           ou depois, pela tela inicial.
         </Text>
@@ -145,6 +145,6 @@ const styles = StyleSheet.create({
   reasonGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   reasonChip: { backgroundColor: colors.surface, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 12 },
   reasonChipSelected: { backgroundColor: colors.primary },
-  reasonChipLabel: { color: colors.text, fontSize: 13, fontWeight: '600' },
+  reasonChipLabel: { color: colors.text, fontSize: 15, fontWeight: '600' },
   reasonChipLabelSelected: { color: colors.background },
 });

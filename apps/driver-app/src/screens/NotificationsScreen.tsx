@@ -115,7 +115,7 @@ export function NotificationsScreen({ navigation }: Props): React.JSX.Element {
                   )}
                 </View>
                 <Text style={{ color: colors.textMuted }}>{item.message}</Text>
-                <Text style={{ color: colors.textMuted, fontSize: 12 }}>{new Date(item.createdAt).toLocaleString()}</Text>
+                <Text style={{ color: colors.textMuted, fontSize: 14 }}>{new Date(item.createdAt).toLocaleString()}</Text>
               </Card>
             </Pressable>
           )}

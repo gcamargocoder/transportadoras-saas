@@ -96,17 +96,17 @@ export function IdleReasonScreen({ navigation }: Props): React.JSX.Element {
       {period ? (
         <>
           <Card>
-            <Text style={{ color: colors.textMuted, fontSize: 13 }}>Veículo</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 15 }}>Veículo</Text>
             <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
               {period.plate ?? '-'}
             </Text>
-            <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Parado desde</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>Parado desde</Text>
             <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>
               {formatDateTime(period.startedAt)}
             </Text>
             {period.previousDestinationLabel ? (
               <>
-                <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 8 }}>Último destino</Text>
+                <Text style={{ color: colors.textMuted, fontSize: 15, marginTop: 8 }}>Último destino</Text>
                 <Text style={{ color: colors.text, fontSize: 16 }}>{period.previousDestinationLabel}</Text>
               </>
             ) : null}

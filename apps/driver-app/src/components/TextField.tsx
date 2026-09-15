@@ -22,7 +22,7 @@ export function TextField({ label, style, ...rest }: TextFieldProps): React.JSX.
 
 const styles = StyleSheet.create({
   wrapper: { gap: 6 },
-  label: { color: colors.textMuted, fontSize: 13 },
+  label: { color: colors.textMuted, fontSize: 15 },
   input: {
     backgroundColor: colors.surface,
     borderWidth: 1,

@@ -1,6 +1,6 @@
 import * as Location from 'expo-location';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -55,6 +55,25 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
   // motorista (Fase B ja o criou). So exibido quando NAO ha viagem ativa --
   // o "fluxo pos-viagem". Recarrega a cada refresh/pull. Nunca cria nada.
   const [idlePeriod, setIdlePeriod] = useState<DriverIdlePeriod | null>(null);
+  // Bug real encontrado em teste manual (emulador): tocar "INICIAR VIAGEM"
+  // mais de uma vez rapidamente empilhava duas instancias de StartTripScreen
+  // (nenhuma protecao contra duplo toque, ao contrario dos botoes que usam
+  // `busy`). Quando uma das instancias concluia com sucesso,
+  // navigation.replace('Home') so substituia a PROPRIA posicao na pilha -- a
+  // instancia visivel (a outra) ficava presa mostrando o formulario antigo,
+  // mesmo com a viagem ja IN_PROGRESS no backend. Ref (nao state) porque o
+  // guard precisa ser sincrono dentro do proprio onPress -- um state
+  // atualizado por setStartingTrip so refletiria no proximo render, tarde
+  // demais para bloquear o segundo toque da mesma rajada. Reseta no
+  // 'focus' (nunca fica preso: se o motorista voltar da tela sem concluir,
+  // o botao volta a funcionar).
+  const startingTripRef = useRef(false);
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      startingTripRef.current = false;
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   const loadIdlePeriod = useCallback(() => {
     driverTripsApi
@@ -413,7 +432,11 @@ export function HomeScreen({ navigation }: Props): React.JSX.Element {
             />
             <Button
               label="INICIAR VIAGEM"
-              onPress={() => navigation.navigate('StartTrip', { tripId: activeTrip.id })}
+              onPress={() => {
+                if (startingTripRef.current) return;
+                startingTripRef.current = true;
+                navigation.navigate('StartTrip', { tripId: activeTrip.id });
+              }}
             />
           </Card>
         )}
