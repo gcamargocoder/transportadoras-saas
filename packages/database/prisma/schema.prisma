@@ -844,6 +844,7 @@ enum SubscriptionStatus {
 enum SubscriptionPaymentMethod {
   PIX_SCHEDULED
   DIRECT_DEBIT
+  MERCADO_PAGO
   /// Preparado para uso futuro -- nenhuma integracao real nesta fase.
   STRIPE
 }
@@ -882,7 +883,10 @@ model TenantSubscription {
   /// Preparacao Stripe (Fase 50, secao 12) -- nunca lidos/escritos por
   /// nenhum codigo nesta fase, so reservam o campo para integracao futura.
   externalCustomerId     String?                   @map("external_customer_id")
-  externalSubscriptionId String?                   @map("external_subscription_id")
+  /// Unico -- preapproval_id do Mercado Pago (Fase Mercado Pago). Postgres
+  /// permite multiplos NULL numa coluna UNIQUE, entao assinaturas com metodo
+  /// manual (sem preapproval) continuam null sem conflito.
+  externalSubscriptionId String?                   @unique @map("external_subscription_id")
   createdAt              DateTime                  @default(now()) @map("created_at")
   updatedAt              DateTime                  @updatedAt @map("updated_at")
 
@@ -908,14 +912,18 @@ model SubscriptionPayment {
   paymentMethod     SubscriptionPaymentMethod @map("payment_method")
   status            SubscriptionPaymentStatus @default(PENDING)
   reference         String?                   @db.Text
-  /// Preparacao Stripe -- nunca lido/escrito nesta fase.
-  externalPaymentId String?                   @map("external_payment_id")
-  createdBy         String                    @map("created_by") @db.Uuid
+  /// Unico -- payment_id do Mercado Pago (Fase Mercado Pago), usado para
+  /// deduplicar webhooks reenviados. Postgres permite multiplos NULL.
+  externalPaymentId String?                   @unique @map("external_payment_id")
+  /// Nullable: pagamentos criados pelo webhook do Mercado Pago nao tem ator
+  /// humano (Fase Mercado Pago). Pagamentos manuais continuam sempre
+  /// preenchendo isto (registerPayment exige actor.userId).
+  createdBy         String?                   @map("created_by") @db.Uuid
   createdAt         DateTime                  @default(now()) @map("created_at")
 
   tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subscription TenantSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  creator      UserAccount        @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  creator      UserAccount?       @relation(fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([subscriptionId])
