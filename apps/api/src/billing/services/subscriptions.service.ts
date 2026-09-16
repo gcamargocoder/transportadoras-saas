@@ -364,6 +364,15 @@ export class SubscriptionsService {
       throw new ConflictException('Esta assinatura nao esta configurada para cobranca via Mercado Pago.');
     }
 
+    if (subscription.externalSubscriptionId) {
+      const existing = await this.mercadoPago.getPreapproval(subscription.externalSubscriptionId);
+      if (existing.status === 'authorized' || existing.status === 'pending') {
+        throw new ConflictException(
+          'Ja existe uma autorizacao de cobranca em andamento ou ativa para esta assinatura no Mercado Pago.',
+        );
+      }
+    }
+
     const recurrence = toMercadoPagoRecurrence(subscription.periodicity);
     const adminWebUrl = this.configService.get('mercadoPago', { infer: true }).adminWebUrl;
     const preapproval = await this.mercadoPago.createPreapproval({
