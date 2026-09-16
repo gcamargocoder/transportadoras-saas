@@ -1,19 +1,21 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiCreatedResponse, ApiNotFoundResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { UserRole } from '@prisma/client';
+import { Tenant, UserRole } from '@prisma/client';
 import { Request } from 'express';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { extractRequestMetadata } from '../../auth/utils/request-metadata.util';
 import { ADMIN_THROTTLE } from '../../common/constants/throttle.constants';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { CurrentTenant } from '../../tenants/decorators/current-tenant.decorator';
 import { BillingDashboardQueryDto } from '../dto/billing-dashboard-query.dto';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { FindSubscriptionsQueryDto } from '../dto/find-subscriptions-query.dto';
 import { RegisterPaymentDto } from '../dto/register-payment.dto';
 import { UpdateSubscriptionDto } from '../dto/update-subscription.dto';
 import { BillingDashboardEntity } from '../entities/billing-dashboard.entity';
+import { MercadoPagoAuthorizationEntity } from '../entities/mercado-pago-authorization.entity';
 import { PaginatedSubscriptionPaymentsEntity } from '../entities/paginated-subscription-payments.entity';
 import { PaginatedSubscriptionsEntity } from '../entities/paginated-subscriptions.entity';
 import { SubscriptionEntity } from '../entities/subscription.entity';
@@ -48,6 +50,30 @@ export class SubscriptionsController {
   @ApiOkResponse({ type: PaginatedSubscriptionsEntity })
   findAll(@Query() query: FindSubscriptionsQueryDto): Promise<PaginatedSubscriptionsEntity> {
     return this.subscriptionsService.findAll(query);
+  }
+
+  @Get('subscriptions/me')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '[Self-service] Consulta a assinatura do tenant autenticado.' })
+  @ApiOkResponse({ type: SubscriptionEntity })
+  @ApiNotFoundResponse({ description: 'Tenant nao possui assinatura cadastrada.' })
+  findOwn(@CurrentTenant() tenant: Tenant): Promise<SubscriptionEntity> {
+    return this.subscriptionsService.getOwnSubscription(tenant.id);
+  }
+
+  @Post('subscriptions/me/mercado-pago/authorization')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({
+    summary:
+      '[Self-service] Cria a autorizacao de cobranca recorrente no Mercado Pago (Preapproval) e devolve o link de checkout.',
+  })
+  @ApiCreatedResponse({ type: MercadoPagoAuthorizationEntity })
+  @ApiNotFoundResponse({ description: 'Tenant nao possui assinatura cadastrada.' })
+  createMercadoPagoAuthorization(
+    @CurrentTenant() tenant: Tenant,
+    @CurrentUser('email') payerEmail: string,
+  ): Promise<MercadoPagoAuthorizationEntity> {
+    return this.subscriptionsService.createMercadoPagoAuthorization(tenant.id, payerEmail);
   }
 
   @Post('subscriptions')
