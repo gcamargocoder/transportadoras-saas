@@ -29,8 +29,8 @@ export class SubscriptionPaymentEntity {
   @ApiProperty({ nullable: true })
   reference!: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  createdBy!: string;
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Null quando o pagamento foi criado via webhook (sem ator humano).' })
+  createdBy!: string | null;
 
   @ApiProperty()
   createdByName!: string;

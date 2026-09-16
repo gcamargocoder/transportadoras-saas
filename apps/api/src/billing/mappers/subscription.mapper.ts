@@ -35,8 +35,11 @@ export function toSubscriptionEntity(
   return entity;
 }
 
-export type SubscriptionPaymentWithCreator = SubscriptionPayment & { creator: { name: string } };
+export type SubscriptionPaymentWithCreator = SubscriptionPayment & { creator: { name: string } | null };
 
+// creator e null quando o pagamento foi criado pelo webhook do Mercado Pago
+// (sem ator humano, ver SubscriptionsService.recordPaymentInTransaction) --
+// createdByName sempre tem um valor de exibicao, nunca fica vazio na UI.
 export function toSubscriptionPaymentEntity(payment: SubscriptionPaymentWithCreator): SubscriptionPaymentEntity {
   const entity = new SubscriptionPaymentEntity();
   entity.id = payment.id;
@@ -49,7 +52,7 @@ export function toSubscriptionPaymentEntity(payment: SubscriptionPaymentWithCrea
   entity.status = payment.status;
   entity.reference = payment.reference;
   entity.createdBy = payment.createdBy;
-  entity.createdByName = payment.creator.name;
+  entity.createdByName = payment.creator?.name ?? 'Mercado Pago (automatico)';
   entity.createdAt = payment.createdAt;
   return entity;
 }

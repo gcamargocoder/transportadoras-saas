@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
+import { MercadoPagoModule } from '../mercado-pago/mercado-pago.module';
 import { SubscriptionsController } from './controllers/subscriptions.controller';
 import { BillingDashboardService } from './services/billing-dashboard.service';
 import { BillingLifecycleScheduler } from './services/billing-lifecycle.scheduler';
@@ -12,7 +13,7 @@ import { SubscriptionsService } from './services/subscriptions.service';
 // reimportado aqui (dynamic module global:true, seguro reimportar --
 // mesmo padrao ja usado em TenantsModule/TollDataModule).
 @Module({
-  imports: [ScheduleModule.forRoot()],
+  imports: [ScheduleModule.forRoot(), MercadoPagoModule],
   controllers: [SubscriptionsController],
   providers: [SubscriptionsService, BillingDashboardService, BillingLifecycleService, BillingLifecycleScheduler],
 })

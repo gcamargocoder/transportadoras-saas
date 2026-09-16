@@ -1,11 +1,15 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Prisma, SubscriptionPaymentMethod, SubscriptionPaymentStatus, TenantSubscription } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { AppConfig } from '../../config/configuration';
+import { MercadoPagoService } from '../../mercado-pago/services/mercado-pago.service';
+import { toMercadoPagoRecurrence } from '../../mercado-pago/utils/mercado-pago-recurrence.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateSubscriptionDto } from '../dto/create-subscription.dto';
 import { FindSubscriptionsQueryDto } from '../dto/find-subscriptions-query.dto';
@@ -15,7 +19,11 @@ import { PaginatedSubscriptionPaymentsEntity } from '../entities/paginated-subsc
 import { PaginatedSubscriptionsEntity } from '../entities/paginated-subscriptions.entity';
 import { SubscriptionEntity } from '../entities/subscription.entity';
 import { SubscriptionPaymentEntity } from '../entities/subscription-payment.entity';
-import { toSubscriptionEntity, toSubscriptionPaymentEntity } from '../mappers/subscription.mapper';
+import {
+  SubscriptionPaymentWithCreator,
+  toSubscriptionEntity,
+  toSubscriptionPaymentEntity,
+} from '../mappers/subscription.mapper';
 import { computeFirstDueDate, computeNextDueDate } from '../utils/billing-date.util';
 
 const TENANT_INCLUDE = { tenant: { select: { name: true } } } satisfies Prisma.TenantSubscriptionInclude;
@@ -30,6 +38,8 @@ export class SubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly mercadoPago: MercadoPagoService,
+    private readonly configService: ConfigService<AppConfig, true>,
   ) {}
 
   async create(
@@ -216,36 +226,17 @@ export class SubscriptionsService {
         ? new Date()
         : null;
 
-    const payment = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.subscriptionPayment.create({
-        data: {
-          tenantId: subscription.tenantId,
-          subscriptionId: id,
-          amount: dto.amount,
-          dueDate: new Date(dto.dueDate),
-          paidAt,
-          paymentMethod: dto.paymentMethod,
-          status: dto.status,
-          createdBy: actor.userId,
-          ...compact({ reference: dto.reference }),
-        },
-        include: CREATOR_INCLUDE,
-      });
-
-      if (dto.status === 'PAID') {
-        const nextDueDate = computeNextDueDate(
-          subscription.nextDueDate,
-          subscription.periodicity,
-          subscription.dueDay,
-        );
-        await tx.tenantSubscription.update({
-          where: { id },
-          data: { nextDueDate, status: 'ACTIVE' },
-        });
-      }
-
-      return created;
-    });
+    const payment = await this.prisma.$transaction((tx) =>
+      this.recordPaymentInTransaction(tx, subscription, {
+        amount: dto.amount,
+        dueDate: new Date(dto.dueDate),
+        paidAt,
+        paymentMethod: dto.paymentMethod,
+        status: dto.status,
+        createdBy: actor.userId,
+        ...compact({ reference: dto.reference }),
+      }),
+    );
 
     await this.audit.log({
       tenantId: subscription.tenantId,
@@ -265,6 +256,58 @@ export class SubscriptionsService {
     });
 
     return toSubscriptionPaymentEntity(payment);
+  }
+
+  // Extraido de registerPayment para ser reaproveitado pelo webhook do
+  // Mercado Pago (Task 8) -- MESMA logica transacional (criar o registro +
+  // avancar nextDueDate/status quando PAID), nunca duplicada. Publico de
+  // proposito: MercadoPagoWebhookService chama isto diretamente (mesmo
+  // modulo `billing`, nunca cross-module).
+  async recordPaymentInTransaction(
+    tx: Prisma.TransactionClient,
+    subscription: TenantSubscription,
+    data: {
+      amount: Prisma.Decimal | number;
+      dueDate: Date;
+      paidAt: Date | null;
+      paymentMethod: SubscriptionPaymentMethod;
+      status: SubscriptionPaymentStatus;
+      createdBy: string | null;
+      reference?: string;
+      externalPaymentId?: string;
+    },
+  ): Promise<SubscriptionPaymentWithCreator> {
+    const created = await tx.subscriptionPayment.create({
+      data: {
+        tenantId: subscription.tenantId,
+        subscriptionId: subscription.id,
+        amount: data.amount,
+        dueDate: data.dueDate,
+        paidAt: data.paidAt,
+        paymentMethod: data.paymentMethod,
+        status: data.status,
+        ...compact({
+          createdBy: data.createdBy ?? undefined,
+          reference: data.reference,
+          externalPaymentId: data.externalPaymentId,
+        }),
+      },
+      include: CREATOR_INCLUDE,
+    });
+
+    if (data.status === 'PAID') {
+      const nextDueDate = computeNextDueDate(
+        subscription.nextDueDate,
+        subscription.periodicity,
+        subscription.dueDay,
+      );
+      await tx.tenantSubscription.update({
+        where: { id: subscription.id },
+        data: { nextDueDate, status: 'ACTIVE' },
+      });
+    }
+
+    return created;
   }
 
   async listPayments(
@@ -290,6 +333,60 @@ export class SubscriptionsService {
     result.items = items.map(toSubscriptionPaymentEntity);
     result.meta = buildPaginationMeta(total, page, pageSize);
     return result;
+  }
+
+  // [Mercado Pago] Self-service: GET /billing/subscriptions/me.
+  async getOwnSubscription(tenantId: string): Promise<SubscriptionEntity> {
+    const subscription = await this.prisma.tenantSubscription.findUnique({
+      where: { tenantId },
+      include: TENANT_INCLUDE,
+    });
+    if (!subscription) {
+      throw new NotFoundException('Este tenant nao possui assinatura cadastrada.');
+    }
+    const lastPayment = await this.prisma.subscriptionPayment.findFirst({
+      where: { subscriptionId: subscription.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    return toSubscriptionEntity(subscription, lastPayment);
+  }
+
+  // [Mercado Pago] Self-service: POST /billing/subscriptions/me/mercado-pago/authorization.
+  // Cria o preapproval no Mercado Pago e devolve o link de checkout para o
+  // tenant ADMIN autorizar o cartao -- dado de cartao nunca trafega por
+  // aqui, so pelo checkout do proprio Mercado Pago.
+  async createMercadoPagoAuthorization(tenantId: string, payerEmail: string): Promise<{ initPoint: string }> {
+    const subscription = await this.prisma.tenantSubscription.findUnique({ where: { tenantId } });
+    if (!subscription) {
+      throw new NotFoundException('Este tenant nao possui assinatura cadastrada.');
+    }
+    if (subscription.paymentMethod !== 'MERCADO_PAGO') {
+      throw new ConflictException('Esta assinatura nao esta configurada para cobranca via Mercado Pago.');
+    }
+
+    const recurrence = toMercadoPagoRecurrence(subscription.periodicity);
+    const adminWebUrl = this.configService.get('mercadoPago', { infer: true }).adminWebUrl;
+    const preapproval = await this.mercadoPago.createPreapproval({
+      reason: `Assinatura ${subscription.planTier} - transportadoras-saas`,
+      payerEmail,
+      externalReference: tenantId,
+      transactionAmount: subscription.amount.toNumber(),
+      frequency: recurrence.frequency,
+      frequencyType: recurrence.frequencyType,
+      startDate: subscription.nextDueDate,
+      backUrl: `${adminWebUrl}/settings/company`,
+    });
+
+    if (!preapproval.initPoint) {
+      throw new ServiceUnavailableException('Mercado Pago nao retornou o link de autorizacao.');
+    }
+
+    await this.prisma.tenantSubscription.update({
+      where: { id: subscription.id },
+      data: { externalSubscriptionId: preapproval.id },
+    });
+
+    return { initPoint: preapproval.initPoint };
   }
 
   private async findByIdOrThrow(id: string) {
