@@ -2530,8 +2530,8 @@ model Trip {
   /// concluida (tripBeforeId) e FECHADO(S) por esta viagem ao iniciar
   /// (tripAfterId). Na pratica no maximo 1 de cada, listas por nao haver
   /// unique direto aqui.
-  idlePeriodsBefore   VehicleIdlePeriod[] @relation("IdlePeriodTripBefore")
-  idlePeriodsAfter    VehicleIdlePeriod[] @relation("IdlePeriodTripAfter")
+  idlePeriodsBefore   VehicleIdlePeriod[]  @relation("IdlePeriodTripBefore")
+  idlePeriodsAfter    VehicleIdlePeriod[]  @relation("IdlePeriodTripAfter")
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
@@ -3213,7 +3213,7 @@ model TollPlaza {
   /// TollPlazaType. Nunca infere o tipo a partir de outro campo (km/geo
   /// ausentes NAO significam portico -- praca fisica legada tambem pode
   /// nao ter coordenada cadastrada).
-  type         TollPlazaType                        @default(PHYSICAL_PLAZA)
+  type         TollPlazaType                         @default(PHYSICAL_PLAZA)
   highway      String?
   /// Quilometro da rodovia onde a praca esta localizada. Para
   /// FREE_FLOW_GANTRY, so preenchido quando a fonte oficial publicar o km
