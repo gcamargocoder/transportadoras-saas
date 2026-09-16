@@ -116,7 +116,31 @@ banco, nunca confiado a partir do payload sozinho).
   componente visual novo além dos 3 modais (`create-subscription-modal`,
   `edit-subscription-modal`, `register-payment-modal`).
 
-## 9. Limitações reais
+## 9. Integração Mercado Pago (cobrança recorrente)
+
+A partir desta fase, `paymentMethod=MERCADO_PAGO` habilita cobrança
+recorrente real via Preapproval API do Mercado Pago, convivendo com os
+métodos manuais (`PIX_SCHEDULED`/`DIRECT_DEBIT`) sem alterá-los. Uma única
+conta Mercado Pago pertence à plataforma — cada tenant é um pagador que
+autoriza um cartão, nunca conecta a própria conta MP.
+
+- Tenant ADMIN autoriza em `/settings/company` (`POST
+  /billing/subscriptions/me/mercado-pago/authorization`), que cria o
+  preapproval e devolve o link de checkout do Mercado Pago.
+- `POST /billing/webhooks/mercado-pago` (público, validado por assinatura
+  HMAC) processa `preapproval` (atualiza `TenantSubscription.status`) e
+  `payment` (cria `SubscriptionPayment` e avança `nextDueDate` — mesma
+  lógica transacional de `POST /billing/subscriptions/:id/payments`).
+  Idempotente por `SubscriptionPayment.externalPaymentId` (`@unique`
+  nullable).
+- `BillingLifecycleService.markOverdueSubscriptions()` ignora assinaturas
+  `MERCADO_PAGO` — quem decide atraso ali é o próprio Mercado Pago.
+- Ver `docs/superpowers/specs/2026-09-15-mercado-pago-billing-design.md`
+  para o design completo e limitações desta integração (sem split
+  payment/marketplace, sem cobrança de fretes/receivables via MP, sem envio
+  automático do link de autorização).
+
+## 10. Limitações reais
 
 - Sem Stripe/PIX automático/débito automático real, gateway, webhook,
   checkout, nota fiscal, e-mail/WhatsApp automático — todos fora de
