@@ -20,6 +20,7 @@ import { getMyTenant, updateMyTenant } from '../../../../lib/api/admin.api';
 import { ADMIN_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { TENANT_STATUS_LABELS, TENANT_STATUS_TONE } from '../../../../lib/labels';
 import type { TenantEntity } from '../../../../types/entities';
+import { MercadoPagoAuthorizationCard } from '../../../../features/billing/mercado-pago-authorization-card';
 
 // Fase 49 -- mensagem objetiva de ciclo de vida, pedida explicitamente por
 // status. dias restantes vem sempre calculado pelo backend
@@ -142,6 +143,8 @@ export default function CompanySettingsPage(): JSX.Element {
           </form>
         </CardBody>
       </Card>
+
+      <MercadoPagoAuthorizationCard />
     </div>
   );
 }
