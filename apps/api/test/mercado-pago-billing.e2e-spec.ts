@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { BillingLifecycleService } from '../src/billing/services/billing-lifecycle.service';
@@ -187,6 +187,13 @@ describe('Mercado Pago Billing (e2e)', () => {
     return { adminAccessToken: loginRes.body.data.accessToken as string, email };
   }
 
+  function signWebhook(dataId: string, requestId: string, secret: string): { xSignature: string; xRequestId: string } {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const manifest = `id:${dataId};request-id:${requestId};ts:${ts};`;
+    const hash = createHmac('sha256', secret).update(manifest).digest('hex');
+    return { xSignature: `ts=${ts},v1=${hash}`, xRequestId: requestId };
+  }
+
   async function createMercadoPagoSubscription(superAdminAccessToken: string, tenantId: string) {
     const res = await request(app.getHttpServer())
       .post('/api/v1/billing/subscriptions')
@@ -351,6 +358,124 @@ describe('Mercado Pago Billing (e2e)', () => {
         .post('/api/v1/billing/subscriptions/me/mercado-pago/authorization')
         .set('Authorization', `Bearer ${adminAccessToken}`)
         .expect(409);
+    });
+  });
+
+  describe('Webhook (POST /billing/webhooks/mercado-pago)', () => {
+    const WEBHOOK_SECRET = 'teste-webhook-secret-32-caracteres';
+
+    it('401 quando a assinatura e invalida', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/billing/webhooks/mercado-pago')
+        .set('x-signature', 'ts=123,v1=hash-invalido')
+        .set('x-request-id', 'req-invalido')
+        .send({ type: 'payment', data: { id: 'payment-invalido' } })
+        .expect(401);
+    });
+
+    it('preapproval autorizado atualiza a assinatura para ACTIVE', async () => {
+      const { tenantId, superAdminAccessToken } = await createTenantWithSuperAdmin('WebhookPreapproval');
+      const subscription = await createMercadoPagoSubscription(superAdminAccessToken, tenantId);
+      const { adminAccessToken } = await loginAsTenantAdmin(tenantId);
+      const authRes = await request(app.getHttpServer())
+        .post('/api/v1/billing/subscriptions/me/mercado-pago/authorization')
+        .set('Authorization', `Bearer ${adminAccessToken}`)
+        .expect(201);
+      void authRes;
+
+      const updated = await prisma.tenantSubscription.findUnique({ where: { id: subscription.id } });
+      const preapprovalId = updated!.externalSubscriptionId!;
+      fakeMercadoPagoProvider.authorize(preapprovalId, 'payer-123');
+
+      const { xSignature, xRequestId } = signWebhook(preapprovalId, 'req-preapproval-1', WEBHOOK_SECRET);
+      await request(app.getHttpServer())
+        .post('/api/v1/billing/webhooks/mercado-pago')
+        .set('x-signature', xSignature)
+        .set('x-request-id', xRequestId)
+        .send({ type: 'preapproval', data: { id: preapprovalId } })
+        .expect(200);
+
+      const afterWebhook = await prisma.tenantSubscription.findUnique({ where: { id: subscription.id } });
+      expect(afterWebhook?.status).toBe('ACTIVE');
+      expect(afterWebhook?.externalCustomerId).toBe('payer-123');
+    });
+
+    it('pagamento aprovado cria SubscriptionPayment e avanca nextDueDate', async () => {
+      const { tenantId, superAdminAccessToken } = await createTenantWithSuperAdmin('WebhookPayment');
+      const subscription = await createMercadoPagoSubscription(superAdminAccessToken, tenantId);
+      const originalNextDueDate = new Date(subscription.nextDueDate);
+
+      fakeMercadoPagoProvider.enqueuePayment({
+        id: 'payment-1',
+        status: 'approved',
+        externalReference: tenantId,
+        transactionAmount: 499.9,
+      });
+
+      const { xSignature, xRequestId } = signWebhook('payment-1', 'req-payment-1', WEBHOOK_SECRET);
+      await request(app.getHttpServer())
+        .post('/api/v1/billing/webhooks/mercado-pago')
+        .set('x-signature', xSignature)
+        .set('x-request-id', xRequestId)
+        .send({ type: 'payment', data: { id: 'payment-1' } })
+        .expect(200);
+
+      const payments = await prisma.subscriptionPayment.findMany({ where: { subscriptionId: subscription.id } });
+      expect(payments).toHaveLength(1);
+      expect(payments[0].externalPaymentId).toBe('payment-1');
+      expect(payments[0].createdBy).toBeNull();
+
+      const updatedSubscription = await prisma.tenantSubscription.findUnique({ where: { id: subscription.id } });
+      expect(updatedSubscription?.status).toBe('ACTIVE');
+      expect(updatedSubscription!.nextDueDate.getTime()).toBeGreaterThan(originalNextDueDate.getTime());
+    });
+
+    it('webhook duplicado (mesmo payment id) nunca cria um segundo SubscriptionPayment', async () => {
+      const { tenantId, superAdminAccessToken } = await createTenantWithSuperAdmin('WebhookDuplicate');
+      const subscription = await createMercadoPagoSubscription(superAdminAccessToken, tenantId);
+
+      fakeMercadoPagoProvider.enqueuePayment({
+        id: 'payment-dup-1',
+        status: 'approved',
+        externalReference: tenantId,
+        transactionAmount: 499.9,
+      });
+
+      for (let i = 0; i < 2; i += 1) {
+        const { xSignature, xRequestId } = signWebhook('payment-dup-1', `req-dup-${i}`, WEBHOOK_SECRET);
+        await request(app.getHttpServer())
+          .post('/api/v1/billing/webhooks/mercado-pago')
+          .set('x-signature', xSignature)
+          .set('x-request-id', xRequestId)
+          .send({ type: 'payment', data: { id: 'payment-dup-1' } })
+          .expect(200);
+      }
+
+      const payments = await prisma.subscriptionPayment.findMany({ where: { subscriptionId: subscription.id } });
+      expect(payments).toHaveLength(1);
+    });
+
+    it('pagamento com status diferente de approved nunca cria SubscriptionPayment', async () => {
+      const { tenantId, superAdminAccessToken } = await createTenantWithSuperAdmin('WebhookRejected');
+      const subscription = await createMercadoPagoSubscription(superAdminAccessToken, tenantId);
+
+      fakeMercadoPagoProvider.enqueuePayment({
+        id: 'payment-rejected-1',
+        status: 'rejected',
+        externalReference: tenantId,
+        transactionAmount: 499.9,
+      });
+
+      const { xSignature, xRequestId } = signWebhook('payment-rejected-1', 'req-rejected-1', WEBHOOK_SECRET);
+      await request(app.getHttpServer())
+        .post('/api/v1/billing/webhooks/mercado-pago')
+        .set('x-signature', xSignature)
+        .set('x-request-id', xRequestId)
+        .send({ type: 'payment', data: { id: 'payment-rejected-1' } })
+        .expect(200);
+
+      const payments = await prisma.subscriptionPayment.findMany({ where: { subscriptionId: subscription.id } });
+      expect(payments).toHaveLength(0);
     });
   });
 });

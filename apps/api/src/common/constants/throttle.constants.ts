@@ -22,3 +22,8 @@ export const CRITICAL_THROTTLE = { default: { limit: 20, ttl: 60_000 } };
 // Fase 46 -- uploads (processamento de arquivo tem custo de IO/CPU real) e
 // operacoes de sincronizacao custosas (chamadas a fontes externas).
 export const UPLOAD_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
+
+// Fase Mercado Pago -- webhook publico (sem JWT). Volume pode ser maior que
+// um usuario humano clicando (varias notificacoes por cobranca), mas ainda
+// precisa de um teto -- nunca ilimitado so por ser @Public().
+export const WEBHOOK_THROTTLE = { default: { limit: 60, ttl: 60_000 } };

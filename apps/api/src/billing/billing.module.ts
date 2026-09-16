@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { MercadoPagoModule } from '../mercado-pago/mercado-pago.module';
+import { MercadoPagoWebhookController } from './controllers/mercado-pago-webhook.controller';
 import { SubscriptionsController } from './controllers/subscriptions.controller';
 import { BillingDashboardService } from './services/billing-dashboard.service';
 import { BillingLifecycleScheduler } from './services/billing-lifecycle.scheduler';
 import { BillingLifecycleService } from './services/billing-lifecycle.service';
+import { MercadoPagoWebhookService } from './services/mercado-pago-webhook.service';
 import { SubscriptionsService } from './services/subscriptions.service';
 
 // Fase 50 -- modulo self-contained (mesmo padrao de checklists/tolls),
@@ -14,7 +16,13 @@ import { SubscriptionsService } from './services/subscriptions.service';
 // mesmo padrao ja usado em TenantsModule/TollDataModule).
 @Module({
   imports: [ScheduleModule.forRoot(), MercadoPagoModule],
-  controllers: [SubscriptionsController],
-  providers: [SubscriptionsService, BillingDashboardService, BillingLifecycleService, BillingLifecycleScheduler],
+  controllers: [SubscriptionsController, MercadoPagoWebhookController],
+  providers: [
+    SubscriptionsService,
+    BillingDashboardService,
+    BillingLifecycleService,
+    BillingLifecycleScheduler,
+    MercadoPagoWebhookService,
+  ],
 })
 export class BillingModule {}
