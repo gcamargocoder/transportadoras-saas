@@ -477,5 +477,70 @@ describe('Mercado Pago Billing (e2e)', () => {
       const payments = await prisma.subscriptionPayment.findMany({ where: { subscriptionId: subscription.id } });
       expect(payments).toHaveLength(0);
     });
+
+    it('pagamento aprovado para assinatura que trocou de metodo (nao e mais MERCADO_PAGO) nunca cria SubscriptionPayment nem avanca nextDueDate', async () => {
+      const { tenantId, superAdminAccessToken } = await createTenantWithSuperAdmin('WebhookWrongMethod');
+      const subscription = await createMercadoPagoSubscription(superAdminAccessToken, tenantId);
+      const originalNextDueDate = new Date(subscription.nextDueDate);
+
+      await request(app.getHttpServer())
+        .patch(`/api/v1/billing/subscriptions/${subscription.id}`)
+        .set('Authorization', `Bearer ${superAdminAccessToken}`)
+        .send({ paymentMethod: 'PIX_SCHEDULED' })
+        .expect(200);
+
+      fakeMercadoPagoProvider.enqueuePayment({
+        id: 'payment-wrong-method-1',
+        status: 'approved',
+        externalReference: tenantId,
+        transactionAmount: 499.9,
+      });
+
+      const { xSignature, xRequestId } = signWebhook('payment-wrong-method-1', 'req-wrong-method-1', WEBHOOK_SECRET);
+      await request(app.getHttpServer())
+        .post('/api/v1/billing/webhooks/mercado-pago')
+        .set('x-signature', xSignature)
+        .set('x-request-id', xRequestId)
+        .send({ type: 'payment', data: { id: 'payment-wrong-method-1' } })
+        .expect(200);
+
+      const payments = await prisma.subscriptionPayment.findMany({ where: { subscriptionId: subscription.id } });
+      expect(payments).toHaveLength(0);
+
+      const updatedSubscription = await prisma.tenantSubscription.findUnique({ where: { id: subscription.id } });
+      expect(updatedSubscription?.paymentMethod).toBe('PIX_SCHEDULED');
+      expect(updatedSubscription!.nextDueDate.getTime()).toBe(originalNextDueDate.getTime());
+    });
+
+    it('pagamento aprovado para assinatura CANCELLED nunca reativa a assinatura nem cria SubscriptionPayment', async () => {
+      const { tenantId, superAdminAccessToken } = await createTenantWithSuperAdmin('WebhookCancelled');
+      const subscription = await createMercadoPagoSubscription(superAdminAccessToken, tenantId);
+
+      await prisma.tenantSubscription.update({
+        where: { id: subscription.id },
+        data: { status: 'CANCELLED' },
+      });
+
+      fakeMercadoPagoProvider.enqueuePayment({
+        id: 'payment-cancelled-1',
+        status: 'approved',
+        externalReference: tenantId,
+        transactionAmount: 499.9,
+      });
+
+      const { xSignature, xRequestId } = signWebhook('payment-cancelled-1', 'req-cancelled-1', WEBHOOK_SECRET);
+      await request(app.getHttpServer())
+        .post('/api/v1/billing/webhooks/mercado-pago')
+        .set('x-signature', xSignature)
+        .set('x-request-id', xRequestId)
+        .send({ type: 'payment', data: { id: 'payment-cancelled-1' } })
+        .expect(200);
+
+      const payments = await prisma.subscriptionPayment.findMany({ where: { subscriptionId: subscription.id } });
+      expect(payments).toHaveLength(0);
+
+      const updatedSubscription = await prisma.tenantSubscription.findUnique({ where: { id: subscription.id } });
+      expect(updatedSubscription?.status).toBe('CANCELLED');
+    });
   });
 });

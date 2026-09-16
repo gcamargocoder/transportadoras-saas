@@ -97,8 +97,9 @@ export class MercadoPagoWebhookService {
 
     const tenantId = payment.externalReference;
 
+    let recorded: boolean;
     try {
-      await this.prisma.$transaction(async (tx) => {
+      recorded = await this.prisma.$transaction(async (tx) => {
         // Re-le a assinatura DENTRO da transacao (nao reaproveita nenhuma
         // variavel lida antes) -- reduz a janela de nextDueDate desatualizado
         // entre a checagem de duplicata acima e a escrita real a apenas o
@@ -106,7 +107,32 @@ export class MercadoPagoWebhookService {
         const subscription = await tx.tenantSubscription.findUnique({ where: { tenantId } });
         if (!subscription) {
           this.logger.warn(`Pagamento Mercado Pago ${payment.id} referencia tenant desconhecido (${tenantId}).`);
-          return;
+          return false;
+        }
+
+        // A assinatura pode ter sido trocada para um metodo manual (PATCH
+        // /billing/subscriptions/:id) depois que a preapproval foi criada no
+        // Mercado Pago -- trocar o metodo nao cancela a preapproval la, entao
+        // o Mercado Pago pode continuar cobrando. Sem essa checagem o webhook
+        // creditaria uma assinatura que hoje e nominalmente manual, escondendo
+        // inadimplencia real do cron de cobranca manual.
+        if (subscription.paymentMethod !== 'MERCADO_PAGO') {
+          this.logger.warn(
+            `Pagamento Mercado Pago ${payment.id} recebido para a assinatura ${subscription.id}, mas ela nao esta mais configurada para Mercado Pago (paymentMethod=${subscription.paymentMethod}) -- ignorado.`,
+          );
+          return false;
+        }
+        // Notificacoes de pagamento podem chegar fora de ordem em relacao a
+        // notificacoes de preapproval (ex.: um "payment approved" antigo
+        // entregue depois de um "preapproval cancelled" mais recente). Nao
+        // reativa automaticamente uma assinatura cancelada/suspensa via
+        // webhook de pagamento -- isso e responsabilidade explicita de outro
+        // fluxo, nunca um efeito colateral de reentrega/reordenacao.
+        if (subscription.status === 'CANCELLED' || subscription.status === 'SUSPENDED') {
+          this.logger.warn(
+            `Pagamento Mercado Pago ${payment.id} recebido para a assinatura ${subscription.id} com status ${subscription.status} -- nao reativa automaticamente via webhook, ignorado.`,
+          );
+          return false;
         }
 
         await this.subscriptionsService.recordPaymentInTransaction(tx, subscription, {
@@ -118,6 +144,7 @@ export class MercadoPagoWebhookService {
           createdBy: null,
           externalPaymentId: payment.id,
         });
+        return true;
       });
     } catch (error) {
       // Corrida entre duas entregas quase simultaneas do mesmo webhook: a
@@ -132,6 +159,8 @@ export class MercadoPagoWebhookService {
       throw error;
     }
 
-    this.logger.log(`Pagamento Mercado Pago ${payment.id} registrado para o tenant ${tenantId}.`);
+    if (recorded) {
+      this.logger.log(`Pagamento Mercado Pago ${payment.id} registrado para o tenant ${tenantId}.`);
+    }
   }
 }
