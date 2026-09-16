@@ -576,6 +576,7 @@ export const SUBSCRIPTION_STATUS_TONE: Record<SubscriptionStatus, 'success' | 'w
 export const SUBSCRIPTION_PAYMENT_METHOD_LABELS: Record<SubscriptionPaymentMethod, string> = {
   PIX_SCHEDULED: 'PIX agendado',
   DIRECT_DEBIT: 'Débito automático',
+  MERCADO_PAGO: 'Mercado Pago',
   STRIPE: 'Stripe',
 };
 

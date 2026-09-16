@@ -221,7 +221,7 @@ export interface SubscriptionPaymentEntity {
   paymentMethod: SubscriptionPaymentMethod;
   status: SubscriptionPaymentStatus;
   reference: string | null;
-  createdBy: string;
+  createdBy: string | null;
   createdByName: string;
   createdAt: string;
 }

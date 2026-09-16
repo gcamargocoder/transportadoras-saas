@@ -91,3 +91,16 @@ export function getBillingDashboard(
 ) {
   return api.get<BillingDashboardEntity>('/billing/dashboard', query, signal);
 }
+
+// [Mercado Pago] Self-service (ADMIN do proprio tenant, area /settings).
+export function getMySubscription(signal?: AbortSignal) {
+  return api.get<SubscriptionEntity>('/billing/subscriptions/me', undefined, signal);
+}
+
+export interface MercadoPagoAuthorization {
+  initPoint: string;
+}
+
+export function createMercadoPagoAuthorization() {
+  return api.post<MercadoPagoAuthorization>('/billing/subscriptions/me/mercado-pago/authorization');
+}

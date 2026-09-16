@@ -544,6 +544,7 @@ export type SubscriptionStatus = (typeof SubscriptionStatus)[keyof typeof Subscr
 export const SubscriptionPaymentMethod = {
   PIX_SCHEDULED: 'PIX_SCHEDULED',
   DIRECT_DEBIT: 'DIRECT_DEBIT',
+  MERCADO_PAGO: 'MERCADO_PAGO',
   STRIPE: 'STRIPE',
 } as const;
 export type SubscriptionPaymentMethod = (typeof SubscriptionPaymentMethod)[keyof typeof SubscriptionPaymentMethod];
