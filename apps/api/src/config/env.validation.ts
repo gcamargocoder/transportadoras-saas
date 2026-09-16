@@ -137,6 +137,26 @@ class EnvironmentVariables {
   @IsString()
   @MinLength(1)
   NOTIFICATIONS_PROCESS_CRON?: string;
+
+  // Fase Mercado Pago -- cobranca recorrente. Ambos OPCIONAIS: sem eles, o
+  // gateway fica "nao configurado" (ver NotConfiguredMercadoPagoProvider),
+  // nunca falha o boot.
+  @IsOptional()
+  @IsString()
+  MERCADO_PAGO_ACCESS_TOKEN?: string;
+
+  @IsOptional()
+  @IsString()
+  MERCADO_PAGO_WEBHOOK_SECRET?: string;
+
+  @IsString()
+  ADMIN_WEB_URL = 'http://localhost:3000';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  @Max(60000)
+  MERCADO_PAGO_REQUEST_TIMEOUT_MS = 8000;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

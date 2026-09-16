@@ -74,6 +74,20 @@ export interface AppConfig {
     enabled: boolean;
     cronExpression: string;
   };
+  // Fase Mercado Pago -- cobranca recorrente de assinaturas SaaS via
+  // Preapproval API. OPCIONAL: sem MERCADO_PAGO_ACCESS_TOKEN, o billing
+  // manual continua funcionando normalmente e as rotas de Mercado Pago
+  // respondem erro claro de "nao configurado" (ver
+  // NotConfiguredMercadoPagoProvider) -- nunca bloqueia o boot.
+  mercadoPago: {
+    accessToken: string | undefined;
+    webhookSecret: string | undefined;
+    // URL publica do admin-web, usada para montar o back_url do checkout de
+    // autorizacao (para onde o Mercado Pago redireciona o usuario apos ele
+    // autorizar/cancelar o cartao).
+    adminWebUrl: string;
+    requestTimeoutMs: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -121,5 +135,11 @@ export default (): AppConfig => ({
     // agressivo, e sempre ajustavel por env var sem precisar de deploy de
     // codigo.
     cronExpression: process.env.NOTIFICATIONS_PROCESS_CRON ?? '*/5 * * * *',
+  },
+  mercadoPago: {
+    accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN || undefined,
+    webhookSecret: process.env.MERCADO_PAGO_WEBHOOK_SECRET || undefined,
+    adminWebUrl: process.env.ADMIN_WEB_URL ?? 'http://localhost:3000',
+    requestTimeoutMs: parseInt(process.env.MERCADO_PAGO_REQUEST_TIMEOUT_MS ?? '8000', 10),
   },
 });
