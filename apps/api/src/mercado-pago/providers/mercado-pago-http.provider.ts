@@ -91,7 +91,7 @@ export class MercadoPagoHttpProvider implements MercadoPagoProviderPort {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
-        body: body ? JSON.stringify(body) : undefined,
+        ...(body && { body: JSON.stringify(body) }),
         signal: controller.signal,
       });
     } catch (error) {
