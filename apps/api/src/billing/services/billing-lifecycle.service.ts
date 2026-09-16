@@ -13,12 +13,21 @@ export class BillingLifecycleService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // [Mercado Pago] Assinaturas MERCADO_PAGO nunca entram aqui -- quem decide
+  // que uma cobranca recorrente atrasou e o proprio Mercado Pago (retry de
+  // cobranca + eventual paused/cancelled do preapproval), refletido via
+  // webhook (ver MercadoPagoWebhookService), nunca por este cron baseado em
+  // nextDueDate local.
   // Idempotente por construcao: uma assinatura ja OVERDUE nao e mais
   // elegivel ao filtro `status: {in: [ACTIVE, PENDING]}` na proxima
   // execucao.
   async markOverdueSubscriptions(now: Date = new Date()): Promise<number> {
     const overdue = await this.prisma.tenantSubscription.findMany({
-      where: { status: { in: ['ACTIVE', 'PENDING'] }, nextDueDate: { lt: now } },
+      where: {
+        status: { in: ['ACTIVE', 'PENDING'] },
+        nextDueDate: { lt: now },
+        paymentMethod: { not: 'MERCADO_PAGO' },
+      },
       select: { id: true },
     });
 
