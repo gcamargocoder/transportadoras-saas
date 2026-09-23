@@ -15,6 +15,8 @@ import { FleetOperationsMetricsService } from './services/fleet-operations-metri
   providers: [FleetOperationsMetricsService, FleetOccurrencesMetricsService, FleetIdleTimeService],
   // Fase 62 -- exportado para VehicleOverviewService (FleetModule)
   // reaproveitar getFinancialDashboard sem recalcular custo/receita.
-  exports: [FleetOperationsMetricsService],
+  // BI 1 -- FleetIdleTimeService exportado para BiKpiSnapshotService
+  // reaproveitar loadVehicleIdleData (ociosidade/utilizacao/disponibilidade).
+  exports: [FleetOperationsMetricsService, FleetIdleTimeService],
 })
 export class FleetOperationsModule {}

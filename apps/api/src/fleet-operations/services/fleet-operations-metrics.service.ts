@@ -213,6 +213,68 @@ interface FleetOperationsFilters {
   expenseStatus?: ExpenseStatus;
 }
 
+// BI 1 -- escopo minimo aceito pelos nucleos publicos de totais
+// (computeCostTotals/computeRevenueTotals/buildCostSourceWheres). E um
+// subconjunto estrutural de FleetOperationsFilters: quem chama de fora
+// (BiKpiSnapshotService) so consegue recortar por periodo/veiculo/frota,
+// nunca pelos filtros exclusivos de um endpoint (categoria, status etc.).
+export interface FleetMetricsScope {
+  startDate?: Date;
+  endDate?: Date;
+  vehicleId?: string;
+  fleetId?: string;
+}
+
+// BI 1 -- where de cada fonte de custo REALIZADO, montados uma unica vez
+// pelos mesmos builders privados deste service. Exposto para que a camada
+// de BI liste as evidencias (registros de origem) com EXATAMENTE o mesmo
+// recorte usado no total -- nunca um segundo filtro paralelo.
+export interface FleetCostSourceWheres {
+  fuel: Prisma.FuelSupplyWhereInput;
+  maintenance: Prisma.VehicleMaintenanceWhereInput;
+  tire: Prisma.TireWhereInput;
+  retread: Prisma.TireRetreadWhereInput;
+  toll: Prisma.TollTransactionWhereInput;
+  otherExpense: Prisma.TripExpenseWhereInput;
+}
+
+// BI 1 -- nucleo de totais de custo REALIZADO (extraido de computeCosts,
+// Fase 40/85). Fonte unica: GET /fleet-operations/costs, o periodo anterior
+// desse endpoint e os KPIs de BI leem todos daqui.
+export interface FleetCostTotals {
+  fuelCost: number;
+  maintenanceCost: number;
+  tireCost: number;
+  tollCost: number;
+  otherCost: number;
+  totalCost: number;
+  fuelLiters: number;
+  otherCostByCategory: { category: ExpenseCategory; amount: number }[];
+  recordCounts: {
+    fuelSupplies: number;
+    maintenances: number;
+    tires: number;
+    tireRetreads: number;
+    tollTransactions: number;
+    otherExpenses: number;
+  };
+  /// null quando a distancia nao foi pedida (includeDistance=false).
+  distance: FleetDistanceTotals | null;
+}
+
+export interface FleetDistanceTotals {
+  /// Distancia por veiculo qualificado (>= 2 leituras, distancia > 0).
+  vehicleDistances: Map<string, number>;
+  /// Soma das distancias; null (nunca 0) sem nenhum veiculo qualificado.
+  totalDistanceKm: number | null;
+  odometerReadings: number;
+}
+
+export interface FleetRevenueTotals {
+  totalRevenue: number;
+  recordCount: number;
+}
+
 interface CostsResult {
   entity: FleetCostsEntity;
   vehicleMap: Map<string, VehicleRankingAccumulator>;
@@ -372,66 +434,165 @@ export class FleetOperationsMetricsService {
     return (await this.computeCosts(tenantId, this.parseFilters(query))).entity;
   }
 
-  private async computeCosts(tenantId: string, filters: FleetOperationsFilters): Promise<CostsResult> {
+  // BI 1 -- where de todas as fontes de custo no recorte informado (ver
+  // FleetCostSourceWheres). Unico ponto de montagem: computeCostTotals e a
+  // listagem de evidencias do BI usam o MESMO objeto.
+  buildCostSourceWheres(tenantId: string, filters: FleetMetricsScope): FleetCostSourceWheres {
     const dateRange = this.dateRangeFilter(filters);
+    return {
+      fuel: this.buildFuelWhere(tenantId, filters, dateRange),
+      maintenance: this.buildMaintenanceWhere(tenantId, filters, dateRange),
+      tire: this.buildTireWhere(tenantId, filters, dateRange),
+      retread: this.buildTireRetreadWhere(tenantId, filters, dateRange),
+      toll: this.buildTollWhere(tenantId, filters, dateRange),
+      otherExpense: this.buildOtherExpenseWhere(tenantId, filters, dateRange),
+    };
+  }
 
-    const fuelWhere = this.buildFuelWhere(tenantId, filters, dateRange);
-    const maintenanceWhere = this.buildMaintenanceWhere(tenantId, filters, dateRange);
-    const tireWhere = this.buildTireWhere(tenantId, filters, dateRange);
-    const retreadWhere = this.buildTireRetreadWhere(tenantId, filters, dateRange);
-    const tollWhere = this.buildTollWhere(tenantId, filters, dateRange);
-    const expenseWhere = this.buildOtherExpenseWhere(tenantId, filters, dateRange);
+  // BI 1 -- where de receita (TripRevenue.receivedAt) no recorte informado,
+  // mesmo builder de getFinancialDashboard (Fase 51).
+  buildRevenueSourceWhere(tenantId: string, filters: FleetMetricsScope): Prisma.TripRevenueWhereInput {
+    return this.buildRevenueWhere(tenantId, filters, this.dateRangeFilter(filters));
+  }
 
-    const [
-      fuelAgg,
-      maintenanceAgg,
-      tireAgg,
-      retreadAgg,
-      tollAgg,
-      expenseGroups,
-      fuelByVehicle,
-      maintenanceByVehicle,
-      tollByVehicle,
-      monthlyTrend,
-      fuelOdometerRows,
-      maintenanceOdometerRows,
-    ] = await Promise.all([
-      this.prisma.fuelSupply.aggregate({ where: fuelWhere, _sum: { totalAmount: true } }),
-      this.prisma.vehicleMaintenance.aggregate({ where: maintenanceWhere, _sum: { totalCost: true } }),
-      this.prisma.tire.aggregate({ where: tireWhere, _sum: { purchasePrice: true } }),
-      this.prisma.tireRetread.aggregate({ where: retreadWhere, _sum: { cost: true } }),
-      this.prisma.tollTransaction.aggregate({ where: tollWhere, _sum: { chargedAmount: true } }),
-      this.prisma.tripExpense.groupBy({ by: ['category'], where: expenseWhere, _sum: { amount: true } }),
-      this.prisma.fuelSupply.groupBy({ by: ['vehicleId'], where: fuelWhere, _count: true, _sum: { totalAmount: true } }),
-      this.prisma.vehicleMaintenance.groupBy({ by: ['vehicleId'], where: maintenanceWhere, _count: true, _sum: { totalCost: true } }),
-      this.prisma.tollTransaction.groupBy({ by: ['vehicleId'], where: tollWhere, _count: true, _sum: { chargedAmount: true } }),
-      this.computeCostsMonthlyTrend(tenantId, filters),
-      // Fase 85 -- pool de leituras de odometro (FuelSupply) para o calculo
-      // de distancia real do custo/km -- mesmo escopo de filtro de fuelCost,
-      // nunca uma consulta por veiculo.
-      this.prisma.fuelSupply.findMany({ where: fuelWhere, select: { vehicleId: true, odometerKm: true } }),
-      // Fase 85 -- idem para VehicleMaintenance: odometerKm (abertura) e
-      // completionOdometerKm (Fase 82, conclusao) sao ambos leituras reais
-      // de odometro do mesmo veiculo em momentos diferentes.
-      this.prisma.vehicleMaintenance.findMany({
-        where: maintenanceWhere,
-        select: { vehicleId: true, odometerKm: true, completionOdometerKm: true },
-      }),
-    ]);
+  // BI 1 -- receita total do recorte (soma de TripRevenue.amount por
+  // receivedAt), mesma fonte/filtro de summary.totalRevenue do dashboard
+  // financeiro operacional (Fase 51), via aggregate (nunca findMany).
+  async computeRevenueTotals(tenantId: string, filters: FleetMetricsScope): Promise<FleetRevenueTotals> {
+    const agg = await this.prisma.tripRevenue.aggregate({
+      where: this.buildRevenueSourceWhere(tenantId, filters),
+      _sum: { amount: true },
+      _count: { _all: true },
+    });
+    return { totalRevenue: toNumberOrNull(agg._sum.amount) ?? 0, recordCount: agg._count._all };
+  }
+
+  // BI 1 -- nucleo de totais extraido de computeCosts (Fase 40/85) sem
+  // nenhuma mudanca de regra: mesmas fontes, mesmos filtros, mesma exclusao
+  // de FUEL/MAINTENANCE/TIRES em "outras despesas", mesma distancia por
+  // odometro. `includeDistance=false` pula as 2 leituras de odometro quando
+  // o chamador so precisa do custo (ex: periodo anterior de /costs).
+  async computeCostTotals(
+    tenantId: string,
+    filters: FleetMetricsScope,
+    options: { includeDistance?: boolean } = {},
+  ): Promise<FleetCostTotals> {
+    const includeDistance = options.includeDistance ?? true;
+    const wheres = this.buildCostSourceWheres(tenantId, filters);
+
+    const [fuelAgg, maintenanceAgg, tireAgg, retreadAgg, tollAgg, expenseGroups, fuelOdometerRows, maintenanceOdometerRows] =
+      await Promise.all([
+        this.prisma.fuelSupply.aggregate({
+          where: wheres.fuel,
+          _sum: { totalAmount: true, liters: true },
+          _count: { _all: true },
+        }),
+        this.prisma.vehicleMaintenance.aggregate({
+          where: wheres.maintenance,
+          _sum: { totalCost: true },
+          _count: { _all: true },
+        }),
+        this.prisma.tire.aggregate({ where: wheres.tire, _sum: { purchasePrice: true }, _count: { _all: true } }),
+        this.prisma.tireRetread.aggregate({ where: wheres.retread, _sum: { cost: true }, _count: { _all: true } }),
+        this.prisma.tollTransaction.aggregate({
+          where: wheres.toll,
+          _sum: { chargedAmount: true },
+          _count: { _all: true },
+        }),
+        this.prisma.tripExpense.groupBy({
+          by: ['category'],
+          where: wheres.otherExpense,
+          _sum: { amount: true },
+          _count: { _all: true },
+        }),
+        // Fase 85 -- pool de leituras de odometro (FuelSupply) para o calculo
+        // de distancia real do custo/km -- mesmo escopo de filtro de fuelCost,
+        // nunca uma consulta por veiculo.
+        includeDistance
+          ? this.prisma.fuelSupply.findMany({ where: wheres.fuel, select: { vehicleId: true, odometerKm: true } })
+          : Promise.resolve([]),
+        // Fase 85 -- idem para VehicleMaintenance: odometerKm (abertura) e
+        // completionOdometerKm (Fase 82, conclusao) sao ambos leituras reais
+        // de odometro do mesmo veiculo em momentos diferentes.
+        includeDistance
+          ? this.prisma.vehicleMaintenance.findMany({
+              where: wheres.maintenance,
+              select: { vehicleId: true, odometerKm: true, completionOdometerKm: true },
+            })
+          : Promise.resolve([]),
+      ]);
 
     const fuelCost = toNumberOrNull(fuelAgg._sum.totalAmount) ?? 0;
     const maintenanceCost = toNumberOrNull(maintenanceAgg._sum.totalCost) ?? 0;
     const tireCost = (toNumberOrNull(tireAgg._sum.purchasePrice) ?? 0) + (toNumberOrNull(retreadAgg._sum.cost) ?? 0);
     const tollCost = toNumberOrNull(tollAgg._sum.chargedAmount) ?? 0;
-    const otherCost = expenseGroups.reduce((sum, row) => sum + (toNumberOrNull(row._sum.amount) ?? 0), 0);
-    const totalCost = fuelCost + maintenanceCost + tireCost + tollCost + otherCost;
+    const otherCostByCategory = expenseGroups.map((row) => ({
+      category: row.category,
+      amount: toNumberOrNull(row._sum.amount) ?? 0,
+    }));
+    const otherCost = otherCostByCategory.reduce((sum, row) => sum + row.amount, 0);
+
+    let distance: FleetDistanceTotals | null = null;
+    if (includeDistance) {
+      // Fase 85 -- distancia real = pool de leituras de odometro de fuel +
+      // manutencao (mesmo escopo de filtro desta funcao), agregada pelo
+      // mesmo primitivo ja usado pelo custo/km de manutencao (Fase 45).
+      const odometerPoints: OdometerReadingPoint[] = [
+        ...fuelOdometerRows.map((row) => ({ vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.odometerKm) })),
+        ...maintenanceOdometerRows.flatMap((row) => [
+          { vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.odometerKm) },
+          { vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.completionOdometerKm) },
+        ]),
+      ];
+      const vehicleDistances = computeVehicleDistancesKm(odometerPoints);
+      distance = {
+        vehicleDistances,
+        totalDistanceKm:
+          vehicleDistances.size > 0 ? [...vehicleDistances.values()].reduce((sum, d) => sum + d, 0) : null,
+        odometerReadings: odometerPoints.filter((p) => p.odometerKm !== null).length,
+      };
+    }
+
+    return {
+      fuelCost,
+      maintenanceCost,
+      tireCost,
+      tollCost,
+      otherCost,
+      totalCost: fuelCost + maintenanceCost + tireCost + tollCost + otherCost,
+      fuelLiters: toNumberOrNull(fuelAgg._sum.liters) ?? 0,
+      otherCostByCategory,
+      recordCounts: {
+        fuelSupplies: fuelAgg._count._all,
+        maintenances: maintenanceAgg._count._all,
+        tires: tireAgg._count._all,
+        tireRetreads: retreadAgg._count._all,
+        tollTransactions: tollAgg._count._all,
+        otherExpenses: expenseGroups.reduce((sum, row) => sum + row._count._all, 0),
+      },
+      distance,
+    };
+  }
+
+  private async computeCosts(tenantId: string, filters: FleetOperationsFilters): Promise<CostsResult> {
+    const { fuel: fuelWhere, maintenance: maintenanceWhere, toll: tollWhere } = this.buildCostSourceWheres(tenantId, filters);
+
+    const [totals, fuelByVehicle, maintenanceByVehicle, tollByVehicle, monthlyTrend] = await Promise.all([
+      this.computeCostTotals(tenantId, filters),
+      this.prisma.fuelSupply.groupBy({ by: ['vehicleId'], where: fuelWhere, _count: true, _sum: { totalAmount: true } }),
+      this.prisma.vehicleMaintenance.groupBy({ by: ['vehicleId'], where: maintenanceWhere, _count: true, _sum: { totalCost: true } }),
+      this.prisma.tollTransaction.groupBy({ by: ['vehicleId'], where: tollWhere, _count: true, _sum: { chargedAmount: true } }),
+      this.computeCostsMonthlyTrend(tenantId, filters),
+    ]);
+
+    const { fuelCost, maintenanceCost, tireCost, tollCost, otherCost, totalCost } = totals;
 
     const costByCategory: FleetCostCategoryEntity[] = [
       this.toCostCategory('FUEL', fuelCost),
       this.toCostCategory('MAINTENANCE', maintenanceCost),
       this.toCostCategory('TIRES', tireCost),
       this.toCostCategory('TOLL', tollCost),
-      ...expenseGroups.map((row) => this.toCostCategory(row.category, toNumberOrNull(row._sum.amount) ?? 0)),
+      ...totals.otherCostByCategory.map((row) => this.toCostCategory(row.category, row.amount)),
     ];
 
     const merged = new Map<string, VehicleRankingAccumulator>();
@@ -439,21 +600,10 @@ export class FleetOperationsMetricsService {
     mergeVehicleAmounts(merged, maintenanceByVehicle, (row) => toNumberOrNull(row._sum.totalCost) ?? 0);
     mergeVehicleAmounts(merged, tollByVehicle, (row) => toNumberOrNull(row._sum.chargedAmount) ?? 0);
 
-    // Fase 85 -- distancia real = pool de leituras de odometro de fuel +
-    // manutencao (mesmo escopo de filtro desta funcao), agregada pelo
-    // mesmo primitivo ja usado pelo custo/km de manutencao (Fase 45) --
-    // nunca TripMetrics.actualDistanceKm (nunca escrito por nenhum service,
-    // ver docs/cost-per-km.md).
-    const odometerPoints: OdometerReadingPoint[] = [
-      ...fuelOdometerRows.map((row) => ({ vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.odometerKm) })),
-      ...maintenanceOdometerRows.flatMap((row) => [
-        { vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.odometerKm) },
-        { vehicleId: row.vehicleId, odometerKm: toNumberOrNull(row.completionOdometerKm) },
-      ]),
-    ];
-    const vehicleDistances = computeVehicleDistancesKm(odometerPoints);
-    const totalDistanceKm =
-      vehicleDistances.size > 0 ? [...vehicleDistances.values()].reduce((sum, d) => sum + d, 0) : null;
+    // Fase 85 -- distancia real calculada em computeCostTotals (nunca
+    // TripMetrics.actualDistanceKm, ver docs/cost-per-km.md).
+    const vehicleDistances = totals.distance?.vehicleDistances ?? new Map<string, number>();
+    const totalDistanceKm = totals.distance?.totalDistanceKm ?? null;
 
     const costPerKm = new FleetCostPerKmEntity();
     costPerKm.distanceKm = totalDistanceKm;
@@ -892,24 +1042,11 @@ export class FleetOperationsMetricsService {
       vehicleId: filters.vehicleId,
       fleetId: filters.fleetId,
     });
-    const dateRange = this.dateRangeFilter(previousFilters);
-
-    const [fuelAgg, maintenanceAgg, tireAgg, retreadAgg, tollAgg, expenseAgg] = await Promise.all([
-      this.prisma.fuelSupply.aggregate({ where: this.buildFuelWhere(tenantId, previousFilters, dateRange), _sum: { totalAmount: true } }),
-      this.prisma.vehicleMaintenance.aggregate({ where: this.buildMaintenanceWhere(tenantId, previousFilters, dateRange), _sum: { totalCost: true } }),
-      this.prisma.tire.aggregate({ where: this.buildTireWhere(tenantId, previousFilters, dateRange), _sum: { purchasePrice: true } }),
-      this.prisma.tireRetread.aggregate({ where: this.buildTireRetreadWhere(tenantId, previousFilters, dateRange), _sum: { cost: true } }),
-      this.prisma.tollTransaction.aggregate({ where: this.buildTollWhere(tenantId, previousFilters, dateRange), _sum: { chargedAmount: true } }),
-      this.prisma.tripExpense.aggregate({ where: this.buildOtherExpenseWhere(tenantId, previousFilters, dateRange), _sum: { amount: true } }),
-    ]);
-
-    const previousTotalCost =
-      (toNumberOrNull(fuelAgg._sum.totalAmount) ?? 0) +
-      (toNumberOrNull(maintenanceAgg._sum.totalCost) ?? 0) +
-      (toNumberOrNull(tireAgg._sum.purchasePrice) ?? 0) +
-      (toNumberOrNull(retreadAgg._sum.cost) ?? 0) +
-      (toNumberOrNull(tollAgg._sum.chargedAmount) ?? 0) +
-      (toNumberOrNull(expenseAgg._sum.amount) ?? 0);
+    // BI 1 -- mesmo nucleo de totais do periodo atual (nunca uma segunda
+    // soma manual das 6 fontes); distancia nao e necessaria aqui.
+    const { totalCost: previousTotalCost } = await this.computeCostTotals(tenantId, previousFilters, {
+      includeDistance: false,
+    });
 
     const entity = new FleetCostsPreviousPeriodEntity();
     entity.totalCost = previousTotalCost;

@@ -14,6 +14,7 @@ import { AppConfig } from './config/configuration';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { BiModule } from './bi/bi.module';
 import { DriverTripsModule } from './driver-trips/driver-trips.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FleetModule } from './fleet/fleet.module';
@@ -94,6 +95,7 @@ import { VehicleIdlePeriodsModule } from './vehicle-idle-periods/vehicle-idle-pe
     FuelStationsModule,
     FuelSuppliesModule,
     DashboardModule,
+    BiModule,
     TiresModule,
     RoutingModule,
     ChecklistsModule,

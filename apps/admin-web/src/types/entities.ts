@@ -4231,3 +4231,123 @@ export interface TollDataSyncRunEntity {
   triggeredBy: string | null;
   createdAt: string;
 }
+
+// ============================================================================
+// BI 1 -- camada oficial de KPIs (espelho de apps/api/src/bi/entities/
+// bi-kpi.entity.ts). Valores sempre calculados pela API: o front nunca
+// recalcula um KPI, so exibe value/comparison/inputs/evidence.
+// ============================================================================
+export type KpiUnit = 'BRL' | 'BRL_PER_KM' | 'KM' | 'LITERS' | 'COUNT' | 'PERCENT' | 'HOURS';
+export type KpiCategory = 'FINANCIAL' | 'OPERATIONAL' | 'FLEET' | 'SERVICE_LEVEL';
+export type KpiDirection = 'HIGHER_IS_BETTER' | 'LOWER_IS_BETTER' | 'NEUTRAL';
+export type KpiComparisonMode = 'PREVIOUS_PERIOD' | 'PREVIOUS_YEAR' | 'CUSTOM' | 'NONE';
+export type KpiEvidenceSource =
+  | 'TRIP_REVENUE'
+  | 'FUEL_SUPPLY'
+  | 'VEHICLE_MAINTENANCE'
+  | 'TIRE_PURCHASE'
+  | 'TIRE_RETREAD'
+  | 'TOLL_TRANSACTION'
+  | 'TRIP_EXPENSE_OTHER'
+  | 'TRIP_COMPLETED'
+  | 'DELIVERY_COMPLETED'
+  | 'TRIP_OCCURRENCE'
+  | 'FLEET_TIME';
+
+export interface KpiPeriodEntity {
+  start: string;
+  end: string;
+}
+
+export interface KpiSourceEntity {
+  entity: string;
+  field: string;
+  dateField: string;
+  rule: string;
+}
+
+export interface KpiInputEntity {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: KpiUnit;
+}
+
+export interface KpiEvidenceEntity {
+  source: KpiEvidenceSource;
+  label: string;
+  recordCount: number;
+  listable: boolean;
+}
+
+export interface KpiComparisonEntity {
+  period: KpiPeriodEntity;
+  value: number | null;
+  /** Em pontos percentuais quando unit = PERCENT. */
+  absoluteChange: number | null;
+  percentChange: number | null;
+  unavailableReason: string | null;
+}
+
+export interface KpiDefinitionEntity {
+  id: string;
+  name: string;
+  description: string;
+  category: KpiCategory;
+  unit: KpiUnit;
+  direction: KpiDirection;
+  formula: string;
+  sources: KpiSourceEntity[];
+  dimensions: string[];
+  limitations: string[];
+}
+
+export interface KpiResultEntity extends KpiDefinitionEntity {
+  status: 'AVAILABLE' | 'UNAVAILABLE';
+  unavailableReason: string | null;
+  value: number | null;
+  period: KpiPeriodEntity;
+  comparison: KpiComparisonEntity | null;
+  inputs: KpiInputEntity[];
+  evidence: KpiEvidenceEntity[];
+}
+
+export interface KpiScopeEntity {
+  tenantId: string;
+  vehicleId: string | null;
+  fleetId: string | null;
+}
+
+export interface KpiSummaryEntity {
+  catalogVersion: string;
+  calculatedAt: string;
+  scope: KpiScopeEntity;
+  period: KpiPeriodEntity;
+  comparisonMode: KpiComparisonMode;
+  comparisonPeriod: KpiPeriodEntity | null;
+  kpis: KpiResultEntity[];
+}
+
+export interface KpiCatalogEntity {
+  catalogVersion: string;
+  kpis: KpiDefinitionEntity[];
+  pending: { id: string; name: string; dependency: string }[];
+}
+
+export interface KpiEvidenceRecordEntity {
+  id: string;
+  date: string | null;
+  amount: number | null;
+  vehicleId: string | null;
+  tripId: string | null;
+  description: string | null;
+}
+
+export interface KpiEvidencePageEntity {
+  kpiId: string;
+  source: KpiEvidenceSource;
+  scope: KpiScopeEntity;
+  period: KpiPeriodEntity;
+  items: KpiEvidenceRecordEntity[];
+  meta: PaginationMeta;
+}

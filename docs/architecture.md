@@ -84,3 +84,13 @@ rotas alternativas por custo, tempo, pedagios e combustivel antes da viagem come
 Transforma o sistema de rastreador em ferramenta de decisao. Depende de
 `RouteVersion`, `TollPrediction` e `TripMetrics`, ja modelados — sera implementado
 como servico de calculo sobre esses dados, sem exigir novas tabelas.
+
+## 12. Camada oficial de KPIs do BI (BI 1)
+
+Os indicadores do BI (roadmap BI 1 → BI 11) têm uma fonte única: o módulo `apps/api/src/bi`
+(`GET /bi/kpis*`). Cada KPI é uma função pura sobre um snapshot bruto do período, declarada no
+catálogo ao lado da sua fórmula, fontes e limitações; o snapshot reaproveita os núcleos já existentes
+de `fleet-operations` (`computeCostTotals`, `computeRevenueTotals`, `loadVehicleIdleData`) em vez de
+recalcular. Resultados são estruturados (valor, comparação, entradas, evidências, escopo) para que uma
+futura camada de IA apenas interprete números determinísticos. Detalhes em
+[`docs/bi-kpis.md`](./bi-kpis.md).

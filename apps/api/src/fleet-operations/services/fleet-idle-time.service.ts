@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { TripStatus, VehicleMaintenanceStatus } from '@prisma/client';
+import { TripStatus, VehicleMaintenanceStatus, VehicleStatus } from '@prisma/client';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
+import { compact } from '../../common/utils/compact.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FindIdleTimeQueryDto } from '../dto/find-idle-time-query.dto';
 import { FleetIdleTimeEntity, FleetVehicleIdleTimeEntity } from '../entities/fleet-idle-time.entity';
@@ -31,6 +32,20 @@ const RELEVANT_TRIP_STATUSES: TripStatus[] = [
   TripStatus.PAUSED,
 ];
 
+export interface VehicleIdleDataScope {
+  vehicleId?: string;
+  fleetId?: string;
+}
+
+export interface VehicleIdleData {
+  vehicleId: string;
+  plate: string;
+  status: VehicleStatus;
+  createdAt: Date;
+  trips: IdleTripBoundary[];
+  maintenanceIntervals: MaintenanceInterval[];
+}
+
 @Injectable()
 export class FleetIdleTimeService {
   constructor(private readonly prisma: PrismaService) {}
@@ -40,26 +55,94 @@ export class FleetIdleTimeService {
     const from = query.from ? new Date(query.from) : null;
     const to = query.to ? new Date(`${query.to}T23:59:59.999Z`) : null;
 
-    const vehicles = await this.prisma.vehicle.findMany({
-      where: {
-        tenantId,
-        deletedAt: null,
-        ...(query.vehicleId ? { id: query.vehicleId } : {}),
-      },
-      select: { id: true, plate: true },
-    });
+    const vehicleData = await this.loadVehicleIdleData(tenantId, compact({ vehicleId: query.vehicleId }));
 
     const result = new FleetIdleTimeEntity();
     result.asOf = now;
 
-    if (vehicles.length === 0) {
+    if (vehicleData.length === 0) {
       result.items = [];
       result.meta = buildPaginationMeta(0, query.page, query.pageSize);
       return result;
     }
 
+    const rows: FleetVehicleIdleTimeEntity[] = [];
+    for (const { vehicleId, plate, trips: vehicleTrips, maintenanceIntervals } of vehicleData) {
+      if (vehicleTrips.length === 0) continue;
+
+      const segments = computeIdleSegments(vehicleTrips, now);
+
+      for (const segment of segments) {
+        const rangeEnd = segment.idleEnd ?? now;
+
+        // Janela from/to: mantem o periodo se ele SOBREPOE [from, to].
+        if (from && rangeEnd.getTime() < from.getTime()) continue;
+        if (to && segment.idleStart.getTime() > to.getTime()) continue;
+
+        const maintenanceMinutes = computeMaintenanceOverlapMinutes(
+          segment.idleStart,
+          rangeEnd,
+          maintenanceIntervals,
+        );
+        const netIdleMinutes = Math.max(0, segment.totalMinutes - maintenanceMinutes);
+
+        const row = new FleetVehicleIdleTimeEntity();
+        row.vehicleId = vehicleId;
+        row.plate = plate;
+        row.lastTripId = segment.previousTripId;
+        row.lastArrival = segment.previousArrival;
+        row.lastDestinationLabel = segment.previousDestinationLabel;
+        row.nextTripId = segment.nextTripId;
+        row.nextDeparture = segment.nextDeparture;
+        row.idleStart = segment.idleStart;
+        row.idleEnd = segment.idleEnd;
+        row.totalMinutes = segment.totalMinutes;
+        row.maintenanceMinutes = maintenanceMinutes;
+        row.netIdleMinutes = netIdleMinutes;
+        row.isCurrentlyIdle = segment.isCurrent;
+        row.isEstimate = segment.isCurrent;
+        rows.push(row);
+      }
+    }
+
+    // Ordenacao deterministica: periodo em aberto primeiro (maior
+    // ociosidade liquida no topo), depois o historico do mais recente para
+    // o mais antigo. Desempate por placa.
+    rows.sort((a, b) => {
+      if (a.isCurrentlyIdle !== b.isCurrentlyIdle) return a.isCurrentlyIdle ? -1 : 1;
+      if (a.isCurrentlyIdle && b.isCurrentlyIdle) {
+        if (b.netIdleMinutes !== a.netIdleMinutes) return b.netIdleMinutes - a.netIdleMinutes;
+        return a.plate.localeCompare(b.plate);
+      }
+      const diff = b.idleStart.getTime() - a.idleStart.getTime();
+      if (diff !== 0) return diff;
+      return a.plate.localeCompare(b.plate);
+    });
+
+    const total = rows.length;
+    const startIndex = (query.page - 1) * query.pageSize;
+    result.items = rows.slice(startIndex, startIndex + query.pageSize);
+    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
+    return result;
+  }
+
+  // BI 1 -- carga em lote (veiculos do escopo + viagens relevantes + OS nao
+  // canceladas), extraida de getIdleTime sem mudar nenhuma regra, para ser
+  // reaproveitada pelos KPIs de ociosidade/utilizacao/disponibilidade
+  // (BiKpiSnapshotService). Sempre 3 queries fixas, nunca 1 por veiculo.
+  async loadVehicleIdleData(tenantId: string, scope: VehicleIdleDataScope): Promise<VehicleIdleData[]> {
+    const vehicles = await this.prisma.vehicle.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+        ...(scope.vehicleId ? { id: scope.vehicleId } : {}),
+        ...(scope.fleetId ? { fleetId: scope.fleetId } : {}),
+      },
+      select: { id: true, plate: true, status: true, createdAt: true },
+    });
+    if (vehicles.length === 0) return [];
+
     const vehicleIds = vehicles.map((v) => v.id);
-    const plateById = new Map(vehicles.map((v) => [v.id, v.plate]));
 
     const [trips, maintenances] = await Promise.all([
       this.prisma.trip.findMany({
@@ -123,65 +206,13 @@ export class FleetIdleTimeService {
       maintByVehicle.set(m.vehicleId, list);
     }
 
-    const rows: FleetVehicleIdleTimeEntity[] = [];
-    for (const vehicleId of vehicleIds) {
-      const vehicleTrips = tripsByVehicle.get(vehicleId) ?? [];
-      if (vehicleTrips.length === 0) continue;
-
-      const segments = computeIdleSegments(vehicleTrips, now);
-      const maintenanceIntervals = maintByVehicle.get(vehicleId) ?? [];
-
-      for (const segment of segments) {
-        const rangeEnd = segment.idleEnd ?? now;
-
-        // Janela from/to: mantem o periodo se ele SOBREPOE [from, to].
-        if (from && rangeEnd.getTime() < from.getTime()) continue;
-        if (to && segment.idleStart.getTime() > to.getTime()) continue;
-
-        const maintenanceMinutes = computeMaintenanceOverlapMinutes(
-          segment.idleStart,
-          rangeEnd,
-          maintenanceIntervals,
-        );
-        const netIdleMinutes = Math.max(0, segment.totalMinutes - maintenanceMinutes);
-
-        const row = new FleetVehicleIdleTimeEntity();
-        row.vehicleId = vehicleId;
-        row.plate = plateById.get(vehicleId) ?? '—';
-        row.lastTripId = segment.previousTripId;
-        row.lastArrival = segment.previousArrival;
-        row.lastDestinationLabel = segment.previousDestinationLabel;
-        row.nextTripId = segment.nextTripId;
-        row.nextDeparture = segment.nextDeparture;
-        row.idleStart = segment.idleStart;
-        row.idleEnd = segment.idleEnd;
-        row.totalMinutes = segment.totalMinutes;
-        row.maintenanceMinutes = maintenanceMinutes;
-        row.netIdleMinutes = netIdleMinutes;
-        row.isCurrentlyIdle = segment.isCurrent;
-        row.isEstimate = segment.isCurrent;
-        rows.push(row);
-      }
-    }
-
-    // Ordenacao deterministica: periodo em aberto primeiro (maior
-    // ociosidade liquida no topo), depois o historico do mais recente para
-    // o mais antigo. Desempate por placa.
-    rows.sort((a, b) => {
-      if (a.isCurrentlyIdle !== b.isCurrentlyIdle) return a.isCurrentlyIdle ? -1 : 1;
-      if (a.isCurrentlyIdle && b.isCurrentlyIdle) {
-        if (b.netIdleMinutes !== a.netIdleMinutes) return b.netIdleMinutes - a.netIdleMinutes;
-        return a.plate.localeCompare(b.plate);
-      }
-      const diff = b.idleStart.getTime() - a.idleStart.getTime();
-      if (diff !== 0) return diff;
-      return a.plate.localeCompare(b.plate);
-    });
-
-    const total = rows.length;
-    const startIndex = (query.page - 1) * query.pageSize;
-    result.items = rows.slice(startIndex, startIndex + query.pageSize);
-    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
-    return result;
+    return vehicles.map((v) => ({
+      vehicleId: v.id,
+      plate: v.plate,
+      status: v.status,
+      createdAt: v.createdAt,
+      trips: tripsByVehicle.get(v.id) ?? [],
+      maintenanceIntervals: maintByVehicle.get(v.id) ?? [],
+    }));
   }
 }
