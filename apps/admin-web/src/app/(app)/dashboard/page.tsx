@@ -1,271 +1,199 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import {
-  AlertTriangle,
-  Banknote,
-  Fuel,
-  Gauge,
-  MapPin,
-  PiggyBank,
-  Route as RouteIcon,
-  TrendingDown,
-  TrendingUp,
-  Truck,
-  Users,
-  Wallet,
-  Wrench,
-} from 'lucide-react';
-import { useState } from 'react';
-import { DatePicker } from '../../../components/ui/date-picker';
+import { Info, ShieldAlert } from 'lucide-react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useMemo, useState } from 'react';
+import { EmptyState } from '../../../components/ui/empty-state';
 import { ErrorState } from '../../../components/ui/error-state';
-import { FilterBar } from '../../../components/ui/filter-bar';
-import { FormField } from '../../../components/ui/form-field';
+import { FullPageLoading } from '../../../components/ui/loading-state';
 import { PageHeader } from '../../../components/ui/page-header';
-import { SkeletonCards } from '../../../components/ui/skeleton';
-import { StatCard } from '../../../components/ui/stat-card';
-import { MonthlyChartCard } from '../../../features/dashboard/monthly-chart-card';
-import { getDashboard } from '../../../lib/api/dashboard.api';
-import { formatCurrency, formatNumber, formatPercent } from '../../../utils/format';
+import { Skeleton } from '../../../components/ui/skeleton';
+import { Tabs } from '../../../components/ui/tabs';
+import {
+  DEFAULT_INTELLIGENCE_TAB,
+  INTELLIGENCE_TAB_CONFIG,
+  isIntelligenceTab,
+  type IntelligenceTab,
+} from '../../../features/intelligence/intelligence-config';
+import { KpiDetailDrawer } from '../../../features/intelligence/kpi-detail-drawer';
+import { indexKpis } from '../../../features/intelligence/kpi-format';
+import { OperationTab } from '../../../features/intelligence/operation-tab';
+import { OverviewTab } from '../../../features/intelligence/overview-tab';
+import {
+  DEFAULT_PERIOD_PRESET,
+  formatPeriodLabel,
+  isPeriodPreset,
+  resolvePeriodRange,
+  type PeriodPreset,
+} from '../../../features/intelligence/period';
+import { PeriodSelector } from '../../../features/intelligence/period-selector';
+import { UpcomingTab } from '../../../features/intelligence/upcoming-tab';
+import { useAuth } from '../../../hooks/use-auth';
+import { getKpiSummary } from '../../../lib/api/bi.api';
+import { ApiError } from '../../../lib/api/errors';
+import { DASHBOARD_ROLES, hasRole } from '../../../lib/auth/roles';
+import type { KpiResultEntity } from '../../../types/entities';
 
-export default function DashboardPage(): JSX.Element {
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+const DATA_TABS: IntelligenceTab[] = ['overview', 'operation'];
+const timeFormatter = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-  const query = useQuery({
-    queryKey: ['dashboard', { startDate, endDate }],
-    queryFn: ({ signal }) =>
-      getDashboard({ startDate: startDate || undefined, endDate: endDate || undefined }, signal),
+function LoadingKpis(): JSX.Element {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-busy="true" aria-label="Carregando indicadores">
+      {Array.from({ length: 8 }).map((_, index) => (
+        <div key={index} className="rounded-lg border border-border bg-white p-5">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="mt-4 h-7 w-32" />
+          <Skeleton className="mt-3 h-4 w-20" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// BI 2 -- /dashboard passa a ser a Central de Inteligencia. Todos os
+// numeros vem da camada oficial de KPIs (GET /bi/kpis/summary): uma unica
+// chamada por periodo, compartilhada por Visao geral e Operacao. Aba e
+// periodo ficam na URL (?aba=&periodo=&de=&ate=) para links e voltar/avancar.
+function IntelligenceCenter(): JSX.Element {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { user } = useAuth();
+  const allowed = hasRole(user?.role, DASHBOARD_ROLES);
+
+  const tabParam = searchParams.get('aba');
+  const periodParam = searchParams.get('periodo');
+  const tab: IntelligenceTab = isIntelligenceTab(tabParam) ? tabParam : DEFAULT_INTELLIGENCE_TAB;
+  const preset: PeriodPreset = isPeriodPreset(periodParam) ? periodParam : DEFAULT_PERIOD_PRESET;
+  const customFrom = searchParams.get('de') ?? '';
+  const customTo = searchParams.get('ate') ?? '';
+
+  const [explained, setExplained] = useState<KpiResultEntity | null>(null);
+
+  const updateParams = useCallback(
+    (changes: Record<string, string | null>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      for (const [key, value] of Object.entries(changes)) {
+        if (value === null || value === '') params.delete(key);
+        else params.set(key, value);
+      }
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : (pathname ?? '/dashboard'), { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  // Limites em dias locais: o intervalo e estavel durante o dia inteiro, e a
+  // queryKey (comparada por valor) reaproveita o cache entre as abas.
+  const range = resolvePeriodRange(preset, new Date(), { from: customFrom, to: customTo });
+
+  const needsData = DATA_TABS.includes(tab);
+  const summary = useQuery({
+    queryKey: ['bi', 'kpis', 'summary', range],
+    queryFn: ({ signal }) => {
+      if (!range) throw new Error('Período inválido.');
+      return getKpiSummary({ startDate: range.startDate, endDate: range.endDate }, signal);
+    },
+    enabled: allowed && needsData && range !== null,
+    staleTime: 60_000,
   });
 
-  const hasActiveFilters = Boolean(startDate || endDate);
+  const kpis = useMemo(() => indexKpis(summary.data?.kpis), [summary.data]);
+  const activeTab = INTELLIGENCE_TAB_CONFIG.find((config) => config.value === tab);
+
+  if (!allowed) {
+    return (
+      <div>
+        <PageHeader title="Central de Inteligência" />
+        <EmptyState
+          icon={ShieldAlert}
+          title="Acesso restrito"
+          description="Os indicadores da Central estão disponíveis para administradores e gestores."
+        />
+      </div>
+    );
+  }
+
+  const forbidden = summary.error instanceof ApiError && summary.error.statusCode === 403;
+  const noMovement =
+    summary.data !== undefined &&
+    summary.data.kpis.every((kpi) => kpi.value === null || kpi.value === 0 || kpi.unit === 'PERCENT');
 
   return (
     <div>
       <PageHeader
-        title="Dashboard executivo"
-        description="Indicadores estratégicos de operação, frota e financeiro."
+        title="Central de Inteligência"
+        description="Indicadores oficiais da operação, com comparação ao período anterior."
+        actions={
+          <PeriodSelector
+            preset={preset}
+            customFrom={customFrom}
+            customTo={customTo}
+            onPresetChange={(value) =>
+              updateParams({ periodo: value === DEFAULT_PERIOD_PRESET ? null : value, ...(value === 'custom' ? {} : { de: null, ate: null }) })
+            }
+            onCustomChange={({ from, to }) => updateParams({ periodo: 'custom', de: from, ate: to })}
+          />
+        }
       />
 
-      <FilterBar
-        hasActiveFilters={hasActiveFilters}
-        onClear={() => {
-          setStartDate('');
-          setEndDate('');
-        }}
-      >
-        <FormField label="De" htmlFor="dash-start">
-          <DatePicker
-            id="dash-start"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
+      <Tabs
+        tabs={INTELLIGENCE_TAB_CONFIG.map((config) => ({ value: config.value, label: config.label }))}
+        active={tab}
+        onChange={(value) => updateParams({ aba: value === DEFAULT_INTELLIGENCE_TAB ? null : value })}
+      />
+
+      <div className="mt-5" role="tabpanel" aria-label={activeTab?.label}>
+        {needsData && summary.data && (
+          <p className="mb-5 text-sm text-ink-muted">
+            <span className="font-medium text-ink">{formatPeriodLabel(summary.data.period.start, summary.data.period.end)}</span>
+            {summary.data.comparisonPeriod && (
+              <>
+                {' '}comparado com {formatPeriodLabel(summary.data.comparisonPeriod.start, summary.data.comparisonPeriod.end)}
+              </>
+            )}
+            <span className="text-ink-subtle">. Atualizado às {timeFormatter.format(new Date(summary.data.calculatedAt))}.</span>
+          </p>
+        )}
+
+        {needsData && range === null && (
+          <EmptyState title="Escolha o período" description="Informe a data inicial e a final para ver os indicadores." />
+        )}
+
+        {needsData && range !== null && summary.isLoading && <LoadingKpis />}
+
+        {needsData && summary.isError && (
+          <ErrorState
+            title={forbidden ? 'Você não tem acesso a estes indicadores.' : 'Não foi possível carregar os indicadores.'}
+            description={forbidden ? undefined : 'Verifique a conexão e tente de novo.'}
+            onRetry={forbidden ? undefined : () => summary.refetch()}
           />
-        </FormField>
-        <FormField label="Até" htmlFor="dash-end">
-          <DatePicker id="dash-end" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-        </FormField>
-      </FilterBar>
+        )}
 
-      {query.isLoading && <SkeletonCards count={4} />}
+        {needsData && noMovement && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg border border-info-100 bg-info-50 px-4 py-3 text-sm text-info-700">
+            <Info size={16} className="mt-0.5 shrink-0" aria-hidden />
+            Nenhuma movimentação registrada no período. Tente um período maior.
+          </div>
+        )}
 
-      {query.isError && <ErrorState onRetry={() => query.refetch()} />}
+        {tab === 'overview' && summary.data && <OverviewTab kpis={kpis} onExplain={setExplained} />}
+        {tab === 'operation' && summary.data && <OperationTab kpis={kpis} onExplain={setExplained} />}
+        {activeTab?.upcoming && <UpcomingTab tab={activeTab} />}
+      </div>
 
-      {query.data && (
-        <div className="flex flex-col gap-6">
-          <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
-              Visão geral
-            </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                label="Viagens totais"
-                value={formatNumber(query.data.overview.totalTrips)}
-                icon={RouteIcon}
-              />
-              <StatCard
-                label="Viagens ativas"
-                value={formatNumber(query.data.overview.activeTrips)}
-                icon={Gauge}
-                tone="info"
-              />
-              <StatCard
-                label="Viagens concluídas"
-                value={formatNumber(query.data.overview.finishedTrips)}
-                icon={TrendingUp}
-                tone="success"
-              />
-              <StatCard
-                label="Viagens canceladas"
-                value={formatNumber(query.data.overview.cancelledTrips)}
-                icon={TrendingDown}
-                tone="danger"
-              />
-              <StatCard
-                label="Motoristas ativos"
-                value={`${formatNumber(query.data.overview.activeDrivers)} / ${formatNumber(query.data.overview.totalDrivers)}`}
-                icon={Users}
-              />
-              <StatCard
-                label="Veículos disponíveis"
-                value={`${formatNumber(query.data.overview.availableVehicles)} / ${formatNumber(query.data.overview.totalVehicles)}`}
-                icon={Truck}
-              />
-              <StatCard
-                label="Veículos em manutenção"
-                value={formatNumber(query.data.overview.maintenanceVehicles)}
-                icon={Wrench}
-                tone="warning"
-              />
-              <StatCard
-                label="Clientes"
-                value={formatNumber(query.data.overview.customers)}
-                icon={MapPin}
-              />
-            </div>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
-              Financeiro
-            </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                label="Receita total"
-                value={formatCurrency(query.data.financial.totalRevenue)}
-                icon={TrendingUp}
-                tone="success"
-              />
-              <StatCard
-                label="Despesas aprovadas"
-                value={formatCurrency(query.data.financial.approvedExpenses)}
-                icon={Wallet}
-                tone="danger"
-              />
-              <StatCard
-                label="Adiantamentos"
-                value={formatCurrency(query.data.financial.advances)}
-                icon={Banknote}
-              />
-              <StatCard
-                label="Resultado líquido"
-                value={formatCurrency(query.data.financial.netResult)}
-                icon={PiggyBank}
-                tone={query.data.financial.netResult >= 0 ? 'success' : 'danger'}
-              />
-              <StatCard label="Lucro" value={formatCurrency(query.data.financial.profit)} />
-              <StatCard label="Margem" value={formatPercent(query.data.financial.margin)} />
-              <StatCard
-                label="Ticket médio (receita)"
-                value={formatCurrency(query.data.financial.averageTripRevenue)}
-              />
-              <StatCard
-                label="Ticket médio (despesa)"
-                value={formatCurrency(query.data.financial.averageTripExpense)}
-              />
-            </div>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
-              Operacional
-            </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                label="Viagens hoje"
-                value={formatNumber(query.data.operational.todayTrips)}
-              />
-              <StatCard
-                label="Viagens atrasadas"
-                value={formatNumber(query.data.operational.lateTrips)}
-                icon={AlertTriangle}
-                tone="warning"
-              />
-              <StatCard
-                label="Em andamento"
-                value={formatNumber(query.data.operational.tripsInProgress)}
-              />
-              <StatCard
-                label="Concluídas hoje"
-                value={formatNumber(query.data.operational.completedToday)}
-              />
-              <StatCard
-                label="Km rodados"
-                value={`${formatNumber(query.data.operational.kmDriven)} km`}
-              />
-              <StatCard
-                label="Distância média/viagem"
-                value={`${formatNumber(query.data.operational.averageTripDistance)} km`}
-              />
-            </div>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
-              Frota
-            </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                label="Combustível consumido"
-                value={`${formatNumber(query.data.fleet.fuelConsumed, 1)} L`}
-                icon={Fuel}
-              />
-              <StatCard
-                label="Custo com combustível"
-                value={formatCurrency(query.data.fleet.fuelCost)}
-              />
-              <StatCard
-                label="Consumo médio"
-                value={`${formatNumber(query.data.fleet.averageConsumptionKmL, 1)} km/L`}
-              />
-              <StatCard label="Custo por km" value={formatCurrency(query.data.fleet.costPerKm)} />
-              <StatCard
-                label="Custo com manutenção"
-                value={formatCurrency(query.data.fleet.maintenanceCost)}
-                icon={Wrench}
-              />
-              <StatCard
-                label="Manutenções em aberto"
-                value={formatNumber(query.data.fleet.maintenanceOpen)}
-                tone="warning"
-              />
-              <StatCard
-                label="Manutenções encerradas"
-                value={formatNumber(query.data.fleet.maintenanceClosed)}
-                tone="success"
-              />
-            </div>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle">
-              Evolução (últimos 12 meses)
-            </h2>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <MonthlyChartCard
-                title="Receita mensal"
-                data={query.data.charts.monthlyRevenue}
-                color="#16a34a"
-              />
-              <MonthlyChartCard
-                title="Despesas mensais"
-                data={query.data.charts.monthlyExpenses}
-                color="#dc2626"
-              />
-              <MonthlyChartCard
-                title="Custo de combustível mensal"
-                data={query.data.charts.monthlyFuelCost}
-                color="#d97706"
-              />
-              <MonthlyChartCard
-                title="Viagens por mês"
-                data={query.data.charts.monthlyTrips}
-                color="#4f46e5"
-                valueFormatter={(v) => formatNumber(v)}
-              />
-            </div>
-          </section>
-        </div>
-      )}
+      <KpiDetailDrawer kpi={explained} onClose={() => setExplained(null)} />
     </div>
+  );
+}
+
+export default function DashboardPage(): JSX.Element {
+  // useSearchParams exige Suspense no App Router (renderizacao estatica).
+  return (
+    <Suspense fallback={<FullPageLoading />}>
+      <IntelligenceCenter />
+    </Suspense>
   );
 }

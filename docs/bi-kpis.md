@@ -190,3 +190,30 @@ fonte que não compõe o KPI ou derivada `FLEET_TIME`), 404 (KPI desconhecido no
   MANAGER → 200, sem token → 401), validação.
 - **Regressão**: e2e de `cost-per-km`, `fleet-operations-financial`, `fleet-operations-fuel`,
   `fleet-operations-idle-time`, `dashboard`, `fleet-operations`.
+
+## 12. BI 2 — Central de Inteligência (`/dashboard`)
+
+O `/dashboard` do admin-web passou a ser a **Central de Inteligência** e consome **somente**
+`GET /bi/kpis/summary` (uma chamada por período, compartilhada entre as abas de dados via cache do
+React Query). O endpoint antigo `GET /dashboard` continua na API (sem alteração, com seus e2e), mas
+não é mais usado pela tela — com isso saíram da visão os indicadores divergentes listados no §7
+(`profit`, contadores por `createdAt`, `kmDriven`); a utilização exibida é `fleet_utilization`.
+
+- **Abas** (`?aba=`): Visão geral e Operação com dados; Financeiro (BI 3), Frota (BI 4), Custos (BI 5),
+  Prazos (BI 6) e Ocorrências (BI 8) só com navegação e atalhos para as telas detalhadas existentes —
+  sem números fictícios e sem chamada à API.
+- **Período único** (`?periodo=today|7d|30d|3m|custom&de=&ate=`), em dias locais, enviado como ISO;
+  comparação padrão com o período anterior equivalente.
+- **Cor = significado**: verde/vermelho seguem o `direction` do KPI (melhora/piora, não subida/descida),
+  azul para variação neutra, amarelo para indisponível/cobertura baixa, roxo para “Como é calculado”.
+- **Contexto do KPI** (“Como é calculado”): fórmula, valores considerados (`inputs`), contagem de
+  registros de origem (`evidence`), fontes e limitações — tudo da resposta do summary, sem chamada extra.
+- **Drill-down**: cada KPI com tela detalhada já existente recebe link (mapa em
+  `apps/admin-web/src/features/intelligence/intelligence-config.ts`).
+- Perfis fora de `DASHBOARD_ROLES` veem “Acesso restrito” e a tela não chama a API (o backend continua
+  sendo a autoridade: 403).
+
+**Dependência para fases seguintes**: não existe série temporal por KPI na API (ex.: viagens por
+semana/mês com a regra oficial). Por isso a “evolução” da aba Operação é a comparação período atual ×
+anterior. Um endpoint de série (`/bi/kpis/series`, mesmo `compute` do catálogo por intervalo) é
+pré-requisito para gráficos de evolução no BI 3 e para o BI 7.
