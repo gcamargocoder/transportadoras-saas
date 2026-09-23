@@ -1,5 +1,5 @@
 import { safeRatio } from '../utils/kpi-period.util';
-import { BiPeriodSnapshot, KpiDefinition, KpiEvidenceCount, KpiInput, KpiSource } from './kpi.types';
+import { BiPeriodSnapshot, KpiDefinition, KpiDimension, KpiEvidenceCount, KpiInput, KpiSource } from './kpi.types';
 
 // ============================================================================
 // BI 1 -- CATALOGO OFICIAL DE KPIs.
@@ -13,9 +13,11 @@ import { BiPeriodSnapshot, KpiDefinition, KpiEvidenceCount, KpiInput, KpiSource 
 //
 // Mudou uma formula? Incremente KPI_CATALOG_VERSION.
 // ============================================================================
-export const KPI_CATALOG_VERSION = '1';
+// v2 (BI 3): + tire_cost/other_cost, metadados additive/requires e dimensao
+// customer (receita). Nenhuma formula existente mudou.
+export const KPI_CATALOG_VERSION = '2';
 
-const PERIOD_VEHICLE_FLEET = ['period', 'vehicle', 'fleet'];
+const PERIOD_VEHICLE_FLEET: KpiDimension[] = ['period', 'vehicle', 'fleet'];
 
 // ---------------------------------------------------------------------------
 // Fontes (reaproveitadas por varios KPIs -- uma unica descricao por fonte).
@@ -207,8 +209,10 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     direction: 'HIGHER_IS_BETTER',
     formula: 'SUM(TripRevenue.amount) com receivedAt no periodo',
     sources: [SRC.revenue],
-    dimensions: PERIOD_VEHICLE_FLEET,
+    dimensions: [...PERIOD_VEHICLE_FLEET, 'customer'],
     limitations: ['Receita sem viagem com veiculo vinculado nao entra quando filtrado por veiculo/frota.'],
+    additive: true,
+    requires: ['revenue'],
     compute: (s) => ({
       value: s.revenue.totalRevenue,
       inputs: [{ key: 'totalRevenue', label: 'Receita', value: s.revenue.totalRevenue, unit: 'BRL' }],
@@ -229,6 +233,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       'Mesma regra de GET /fleet-operations/costs (totalCost). Difere de GET /dashboard financial.approvedExpenses, que soma apenas TripExpense aprovada.',
       'Recapagem nao possui vehicleId direto: filtrada pelo veiculo/frota ATUAL do pneu.',
     ],
+    additive: true,
+    requires: ['costs'],
     compute: (s) => ({ value: s.costs.totalCost, inputs: costInputs(s), evidence: costEvidence(s) }),
   },
   {
@@ -245,6 +251,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       'Mesma regra de GET /fleet-operations/financial (summary.result). Nao desconta adiantamentos (TripAdvance nao e custo).',
       'Difere de GET /dashboard financial.profit (receita - TripExpense aprovada).',
     ],
+    additive: true,
+    requires: ['revenue', 'costs'],
     compute: (s) => ({
       value: s.revenue.totalRevenue - s.costs.totalCost,
       inputs: [
@@ -265,6 +273,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.revenue, ...COST_SOURCES],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Indisponivel quando nao ha receita no periodo.'],
+    additive: false,
+    requires: ['revenue', 'costs'],
     compute: (s) => {
       const ratio = safeRatio(s.revenue.totalRevenue - s.costs.totalCost, s.revenue.totalRevenue);
       return {
@@ -289,6 +299,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.fuel],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: [],
+    additive: true,
+    requires: ['costs'],
     compute: (s) => ({
       value: s.costs.fuelCost,
       inputs: [{ key: 'fuelCost', label: 'Combustivel', value: s.costs.fuelCost, unit: 'BRL' }],
@@ -306,6 +318,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.toll],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Depende do lancamento/importacao das transacoes reais de pedagio.'],
+    additive: true,
+    requires: ['costs'],
     compute: (s) => ({
       value: s.costs.tollCost,
       inputs: [{ key: 'tollCost', label: 'Pedagio', value: s.costs.tollCost, unit: 'BRL' }],
@@ -323,10 +337,65 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.maintenance],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Recortado pela data de ABERTURA da OS (openedAt), mesma regra do dashboard de custos.'],
+    additive: true,
+    requires: ['costs'],
     compute: (s) => ({
       value: s.costs.maintenanceCost,
       inputs: [{ key: 'maintenanceCost', label: 'Manutencao', value: s.costs.maintenanceCost, unit: 'BRL' }],
       evidence: [{ source: 'VEHICLE_MAINTENANCE', recordCount: s.costs.recordCounts.maintenances }],
+    }),
+  },
+
+  {
+    id: 'tire_cost',
+    name: 'Custo de pneus',
+    description: 'Compras de pneus e recapagens no periodo.',
+    category: 'FINANCIAL',
+    unit: 'BRL',
+    direction: 'LOWER_IS_BETTER',
+    formula: 'SUM(Tire.purchasePrice) + SUM(TireRetread.cost)',
+    sources: [SRC.tires],
+    dimensions: PERIOD_VEHICLE_FLEET,
+    limitations: [
+      'Custo de aquisicao/recapagem no mes da compra, nao depreciacao ao longo do uso.',
+      'Recapagem nao possui vehicleId direto: filtrada pelo veiculo/frota ATUAL do pneu.',
+    ],
+    additive: true,
+    requires: ['costs'],
+    compute: (s) => ({
+      value: s.costs.tireCost,
+      inputs: [{ key: 'tireCost', label: 'Pneus', value: s.costs.tireCost, unit: 'BRL' }],
+      evidence: [
+        { source: 'TIRE_PURCHASE', recordCount: s.costs.recordCounts.tires },
+        { source: 'TIRE_RETREAD', recordCount: s.costs.recordCounts.tireRetreads },
+      ],
+    }),
+  },
+  {
+    id: 'other_cost',
+    name: 'Outras despesas',
+    description: 'Despesas de viagem aprovadas fora de combustivel, manutencao e pneus (alimentacao, hospedagem, estacionamento etc.).',
+    category: 'FINANCIAL',
+    unit: 'BRL',
+    direction: 'LOWER_IS_BETTER',
+    formula: 'SUM(TripExpense.amount) APPROVED, exceto FUEL/MAINTENANCE/TIRES',
+    sources: [SRC.otherExpense],
+    dimensions: PERIOD_VEHICLE_FLEET,
+    limitations: ['Adiantamentos (TripAdvance) nao sao custo e nao entram.'],
+    additive: true,
+    requires: ['costs'],
+    compute: (s) => ({
+      value: s.costs.otherCost,
+      inputs: [
+        { key: 'otherCost', label: 'Outras despesas', value: s.costs.otherCost, unit: 'BRL' },
+        ...s.costs.otherCostByCategory.map((row) => ({
+          key: `otherCost.${row.category}`,
+          label: `Categoria ${row.category}`,
+          value: row.amount,
+          unit: 'BRL' as const,
+        })),
+      ],
+      evidence: [{ source: 'TRIP_EXPENSE_OTHER', recordCount: s.costs.recordCounts.otherExpenses }],
     }),
   },
 
@@ -344,6 +413,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     limitations: [
       'Recorta por actualArrival (conclusao real). Os contadores de GET /dashboard usam createdAt e medem outra coisa (viagens criadas).',
     ],
+    additive: true,
+    requires: ['trips'],
     compute: (s) => ({
       value: s.trips.completed,
       inputs: [{ key: 'completedTrips', label: 'Viagens concluidas', value: s.trips.completed, unit: 'COUNT' }],
@@ -361,6 +432,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.deliveries],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Viagens sem paradas de entrega cadastradas nao geram entregas.'],
+    additive: true,
+    requires: ['deliveries'],
     compute: (s) => ({
       value: s.deliveries.completed,
       inputs: [{ key: 'completedDeliveries', label: 'Entregas concluidas', value: s.deliveries.completed, unit: 'COUNT' }],
@@ -381,6 +454,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       'Mesma distancia de GET /fleet-operations/costs (costPerKm.distanceKm). Depende de abastecimentos/OS com odometro; veiculo com < 2 leituras fica de fora.',
       'TripMetrics.actualDistanceKm (so preenchido quando a viagem e concluida com odometro final) nao e usado: cobertura parcial.',
     ],
+    additive: false,
+    requires: ['costs', 'distance'],
     compute: (s) => {
       const value = s.costs.distance?.totalDistanceKm ?? null;
       return {
@@ -404,6 +479,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     limitations: [
       'Mesmo valor de GET /fleet-operations/costs (costPerKm.value): custo TOTAL do escopo sobre a distancia dos veiculos qualificados.',
     ],
+    additive: false,
+    requires: ['costs', 'distance'],
     compute: (s) => perKm(s.costs.totalCost, costInputs(s), costEvidence(s), s),
   },
   {
@@ -417,6 +494,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.revenue, SRC.odometer],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Distancia inclui deslocamentos vazios -- mede receita por km RODADO, nao por km carregado.'],
+    additive: false,
+    requires: ['revenue', 'costs', 'distance'],
     compute: (s) =>
       perKm(
         s.revenue.totalRevenue,
@@ -436,6 +515,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.fuelLiters],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Litros abastecidos, nao consumo medido. Consumo km/L segue em GET /fleet-operations/fuel.'],
+    additive: true,
+    requires: ['costs'],
     compute: (s) => ({
       value: s.costs.fuelLiters,
       inputs: [{ key: 'fuelLiters', label: 'Litros', value: s.costs.fuelLiters, unit: 'LITERS' }],
@@ -453,6 +534,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.occurrences],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Com filtro de veiculo/frota, ocorrencias sem vehicleId ficam de fora.'],
+    additive: true,
+    requires: ['occurrences'],
     compute: (s) => ({
       value: s.occurrences.total,
       inputs: [
@@ -473,6 +556,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     sources: [SRC.occurrences],
     dimensions: PERIOD_VEHICLE_FLEET,
     limitations: ['Com filtro de veiculo/frota, ocorrencias sem vehicleId ficam de fora.'],
+    additive: true,
+    requires: ['occurrences'],
     compute: (s) => ({
       value: s.occurrences.critical,
       inputs: [{ key: 'criticalOccurrences', label: 'Criticas', value: s.occurrences.critical, unit: 'COUNT' }],
@@ -495,6 +580,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       'plannedArrival e informado manualmente (opcional): entregas sem previsao nao entram no denominador -- veja o input coverage.',
       'Sem tolerancia: 1 minuto apos a previsao ja conta como atraso.',
     ],
+    additive: false,
+    requires: ['deliveries'],
     compute: (s) => {
       const ratio = safeRatio(s.deliveries.onTime, s.deliveries.withDeadline);
       const coverage = safeRatio(s.deliveries.withDeadline, s.deliveries.completed);
@@ -530,6 +617,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       'Periodo em andamento conta so ate agora.',
       'GET /fleet-operations/operations (utilizationPercent) usa uma aproximacao anterior (duracao total de viagens CRIADAS no periodo / veiculos ACTIVE); este KPI e a regra oficial do BI.',
     ],
+    additive: false,
+    requires: ['fleetTime'],
     compute: (s) => {
       const ratio = safeRatio(s.fleetTime.tripMinutes, s.fleetTime.capacityMinutes);
       return {
@@ -553,6 +642,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
     limitations: [
       'Indisponibilidade considera apenas OS de manutencao (datas de execucao). Suspensao/inatividade administrativa nao tem historico.',
     ],
+    additive: false,
+    requires: ['fleetTime'],
     compute: (s) => {
       const t = s.fleetTime;
       const ratio = safeRatio(t.capacityMinutes - t.maintenanceMinutes, t.capacityMinutes);
@@ -578,6 +669,8 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       'Mesma regra de GET /fleet-operations/idle-time, recortada ao periodo. Veiculo sem nenhuma viagem concluida nao gera ociosidade (nao ha ancora).',
       'Periodo ocioso corrente (veiculo parado ate agora) e estimativa.',
     ],
+    additive: true,
+    requires: ['fleetTime'],
     compute: (s) => ({
       value: s.fleetTime.vehiclesConsidered > 0 ? s.fleetTime.idleNetMinutes / 60 : null,
       ...(s.fleetTime.vehiclesConsidered > 0 ? {} : { unavailableReason: NO_FLEET_CAPACITY }),

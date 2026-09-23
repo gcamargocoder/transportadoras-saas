@@ -120,6 +120,9 @@ export class KpiDefinitionEntity {
 
   @ApiProperty({ type: [String], description: 'Limitacoes conhecidas / dependencias de dados.' })
   limitations!: string[];
+
+  @ApiProperty({ description: 'true quando a soma dos pontos da serie temporal = valor do periodo inteiro.' })
+  additive!: boolean;
 }
 
 export class KpiResultEntity extends KpiDefinitionEntity {
@@ -154,6 +157,9 @@ export class KpiScopeEntity {
 
   @ApiPropertyOptional({ format: 'uuid', nullable: true, type: String })
   fleetId!: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, type: String })
+  customerId!: string | null;
 }
 
 export class KpiSummaryEntity {
@@ -239,4 +245,123 @@ export class KpiCatalogEntity {
 
   @ApiProperty({ type: [KpiPendingDependencyEntity], description: 'KPIs ainda nao calculados e o motivo.' })
   pending!: KpiPendingDependencyEntity[];
+}
+
+// ============================================================================
+// BI 3 -- serie temporal. Cada ponto e o MESMO calculo do catalogo aplicado
+// ao balde (nunca uma formula de grafico) e carrega entradas/evidencias
+// proprias: da para explicar a origem de cada ponto.
+// ============================================================================
+export class KpiSeriesPointEntity {
+  @ApiProperty({ example: '2026-09', description: 'Inicio do balde no fuso do tenant (dia/semana: AAAA-MM-DD; mes: AAAA-MM).' })
+  label!: string;
+
+  @ApiProperty()
+  start!: Date;
+
+  @ApiProperty()
+  end!: Date;
+
+  @ApiProperty({ description: 'Balde recortado pelo periodo ou ainda em andamento -- nao e um intervalo completo.' })
+  partial!: boolean;
+
+  @ApiProperty({ enum: ['AVAILABLE', 'UNAVAILABLE'] })
+  status!: 'AVAILABLE' | 'UNAVAILABLE';
+
+  @ApiProperty({ nullable: true, type: Number, description: 'null quando indisponivel no balde -- nunca 0 inventado.' })
+  value!: number | null;
+
+  @ApiProperty({ nullable: true, type: String })
+  unavailableReason!: string | null;
+
+  @ApiProperty({ type: [KpiInputEntity] })
+  inputs!: KpiInputEntity[];
+
+  @ApiProperty({ type: [KpiEvidenceEntity] })
+  evidence!: KpiEvidenceEntity[];
+}
+
+export class KpiSeriesEntity extends KpiDefinitionEntity {
+  @ApiProperty({ type: [KpiSeriesPointEntity] })
+  points!: KpiSeriesPointEntity[];
+
+  @ApiProperty({
+    type: [KpiSeriesPointEntity],
+    nullable: true,
+    description: 'Pontos do periodo de comparacao, com a mesma granularidade, pareados por posicao.',
+  })
+  comparisonPoints!: KpiSeriesPointEntity[] | null;
+}
+
+export class KpiSeriesResponseEntity {
+  @ApiProperty()
+  catalogVersion!: string;
+
+  @ApiProperty()
+  calculatedAt!: Date;
+
+  @ApiProperty({ type: KpiScopeEntity })
+  scope!: KpiScopeEntity;
+
+  @ApiProperty({ type: KpiPeriodEntity })
+  period!: KpiPeriodEntity;
+
+  @ApiProperty({ enum: ['day', 'week', 'month'] })
+  granularity!: 'day' | 'week' | 'month';
+
+  @ApiProperty({ example: 'America/Sao_Paulo', description: 'Fuso do tenant usado para montar os baldes.' })
+  timezone!: string;
+
+  @ApiProperty({ enum: KPI_COMPARISON_MODES })
+  comparisonMode!: KpiComparisonMode;
+
+  @ApiProperty({ type: KpiPeriodEntity, nullable: true })
+  comparisonPeriod!: KpiPeriodEntity | null;
+
+  @ApiProperty({ type: [KpiSeriesEntity] })
+  series!: KpiSeriesEntity[];
+}
+
+// ============================================================================
+// BI 3 -- recorte de um KPI por dimensao (hoje: receita x cliente). Mesmo
+// where do KPI, particionado: a soma dos itens + "outros" = valor do KPI.
+// ============================================================================
+export class KpiBreakdownItemEntity {
+  @ApiProperty({ nullable: true, type: String, description: 'Id do cliente; null = receita sem cliente vinculado.' })
+  key!: string | null;
+
+  @ApiProperty()
+  label!: string;
+
+  @ApiProperty()
+  value!: number;
+
+  @ApiProperty({ nullable: true, type: Number, description: 'Participacao no total (%); null quando o total e 0.' })
+  share!: number | null;
+
+  @ApiProperty()
+  recordCount!: number;
+}
+
+export class KpiBreakdownEntity {
+  @ApiProperty()
+  kpiId!: string;
+
+  @ApiProperty({ enum: ['customer'] })
+  dimension!: 'customer';
+
+  @ApiProperty({ type: KpiScopeEntity })
+  scope!: KpiScopeEntity;
+
+  @ApiProperty({ type: KpiPeriodEntity })
+  period!: KpiPeriodEntity;
+
+  @ApiProperty({ description: 'Valor do KPI no periodo (= soma de items + others).' })
+  total!: number;
+
+  @ApiProperty({ type: [KpiBreakdownItemEntity] })
+  items!: KpiBreakdownItemEntity[];
+
+  @ApiProperty({ type: KpiBreakdownItemEntity, nullable: true, description: 'Demais valores fora do limite pedido.' })
+  others!: KpiBreakdownItemEntity | null;
 }

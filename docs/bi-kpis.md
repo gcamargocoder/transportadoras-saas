@@ -83,6 +83,8 @@ a soma dos registros listados bate com o KPI (testado).
 | `fuel_cost` | BRL | Σ `FuelSupply.totalAmount` | `supplyDate` |
 | `toll_cost` | BRL | Σ `TollTransaction.chargedAmount` (cobrança real) | `chargedAt` |
 | `maintenance_cost` | BRL | Σ `VehicleMaintenance.totalCost`, exceto CANCELLED | `openedAt` |
+| `tire_cost` (BI 3) | BRL | Σ `Tire.purchasePrice` + Σ `TireRetread.cost` | `purchaseDate` / `retreadDate` |
+| `other_cost` (BI 3) | BRL | Σ `TripExpense.amount` APPROVED, exceto FUEL/MAINTENANCE/TIRES (inputs por categoria) | `expenseDate` |
 | `trips_completed` | un. | COUNT `Trip` COMPLETED, não excluída | `actualArrival` |
 | `deliveries_completed` | un. | COUNT `TripDeliveryStop` COMPLETED | `deliveredAt` |
 | `distance_km` | km | Σ por veículo (máx − mín odômetro), ≥ 2 leituras | `FuelSupply`/`VehicleMaintenance` |
@@ -103,6 +105,7 @@ Detalhes das regras de tempo de frota (`bi/utils/fleet-time.util.ts`):
 - manutenção: OS aberta vai até o fim efetivo; sobreposições unidas (`mergeIntervals`).
 
 Dimensões aceitas hoje por todos os KPIs: `period`, `vehicle` (`vehicleId`), `fleet` (`fleetId`).
+BI 3: `customer` (`customerId`) só em `revenue` — ver §13.
 
 ## 5. Composição de `operating_cost` (reaproveitada da Fase 40/85, sem alteração)
 
@@ -199,9 +202,9 @@ React Query). O endpoint antigo `GET /dashboard` continua na API (sem alteraçã
 não é mais usado pela tela — com isso saíram da visão os indicadores divergentes listados no §7
 (`profit`, contadores por `createdAt`, `kmDriven`); a utilização exibida é `fleet_utilization`.
 
-- **Abas** (`?aba=`): Visão geral e Operação com dados; Financeiro (BI 3), Frota (BI 4), Custos (BI 5),
-  Prazos (BI 6) e Ocorrências (BI 8) só com navegação e atalhos para as telas detalhadas existentes —
-  sem números fictícios e sem chamada à API.
+- **Abas** (`?aba=`): Visão geral, Operação e — desde o BI 3 — Financeiro com dados (§13.4); Frota (BI 4),
+  Custos (BI 5), Prazos (BI 6) e Ocorrências (BI 8) só com navegação e atalhos para as telas detalhadas
+  existentes — sem números fictícios e sem chamada à API.
 - **Período único** (`?periodo=today|7d|30d|3m|custom&de=&ate=`), em dias locais, enviado como ISO;
   comparação padrão com o período anterior equivalente.
 - **Cor = significado**: verde/vermelho seguem o `direction` do KPI (melhora/piora, não subida/descida),
@@ -216,4 +219,104 @@ não é mais usado pela tela — com isso saíram da visão os indicadores diver
 **Dependência para fases seguintes**: não existe série temporal por KPI na API (ex.: viagens por
 semana/mês com a regra oficial). Por isso a “evolução” da aba Operação é a comparação período atual ×
 anterior. Um endpoint de série (`/bi/kpis/series`, mesmo `compute` do catálogo por intervalo) é
-pré-requisito para gráficos de evolução no BI 3 e para o BI 7.
+pré-requisito para gráficos de evolução no BI 3 e para o BI 7. **Atendido no BI 3 (§13.2)**; a aba
+Operação ainda usa só a comparação — adotar a série nela fica para o BI 4/7.
+
+## 13. BI 3 — Série temporal, recorte por cliente e aba Financeiro
+
+### 13.1 Catálogo v2
+
+`KPI_CATALOG_VERSION = '2'`. **Nenhuma fórmula mudou.** Entraram `tire_cost` e `other_cost` (as
+duas parcelas de `operating_cost` que ainda não eram KPI) e dois metadados por KPI:
+
+- `requires` — partes do snapshot que o `compute` lê (`revenue`, `costs`, `distance`, `trips`,
+  `deliveries`, `occurrences`, `fleetTime`). Um teste roda cada KPI com as partes não declaradas
+  “envenenadas” (lançam erro se lidas), garantindo que a série pode pular a coleta delas.
+- `additive` — `true` quando a soma dos pontos da série = valor do período (somas e contagens).
+  Razões (`*_per_km`, margem, pontualidade, utilização, disponibilidade) e `distance_km` são `false`.
+
+### 13.2 `GET /bi/kpis/series`
+
+Parâmetros: `kpis` (1..12, CSV), `startDate`, `endDate`, `granularity` (`day|week|month`; omitido =
+automático: ≤45 dias → dia, ≤190 → semana, senão mês), `comparison` (`PREVIOUS_PERIOD|PREVIOUS_YEAR|NONE`,
+padrão `NONE`), `vehicleId`, `fleetId`, `customerId`. Mesmo RBAC/módulo do summary.
+
+```
+BiKpisService.getSeries
+  ├─ parsePeriod / resolveScope (mesmas validações do summary; ids de outro tenant → 404)
+  ├─ timezone = TenantSettings.timezone (lido no servidor; inválido → America/Sao_Paulo)
+  ├─ buildKpiBuckets(período, granularidade, fuso)   dia / semana ISO / mês do calendário do tenant
+  └─ BiKpiSeriesService.build
+       ├─ requiredParts(KPIs)                          união de `requires`
+       ├─ BiKpiSnapshotService.collect(baldes, parts)  MESMO coletor do summary, 4 baldes por vez
+       └─ computeKpi(definição, snapshot do balde)     MESMO compute do catálogo
+```
+
+- **Uma única fórmula**: cada balde é tratado como um período comum; não existe cálculo “de gráfico”.
+  Testado: para KPIs aditivos, soma dos pontos = valor do summary no mesmo período.
+- **Pontos**: `label` (início do balde no fuso do tenant: `AAAA-MM-DD` ou `AAAA-MM`), `start`/`end`,
+  `partial` (balde recortado pelo período ou ainda em andamento), `status`, `value`,
+  `unavailableReason`, `inputs`, `evidence` (contagem de registros de origem por ponto; o drill até os
+  registros usa `GET /bi/kpis/:kpiId/evidence` com `start`/`end` do ponto).
+- **Sem pontos artificiais**: balde sem registros tem o valor real (0 para somas, com `recordCount: 0`);
+  razão sem denominador é `null`/`UNAVAILABLE`.
+- **Comparação**: `comparisonPoints` = mesmo recorte de baldes no período de comparação, pareados por
+  posição (ex.: PREVIOUS_YEAR mensal alinha nov↔nov).
+- **Limites**: dia ≤ 62 pontos, semana ≤ 53, mês ≤ 25 (período máximo continua 731 dias) → 400 com
+  orientação para aumentar a granularidade.
+- **Custo de consulta**: por balde, só as agregações das partes pedidas (receita = 1 aggregate; custos =
+  6 aggregates + 2 leituras de odômetro quando há KPI por km). Sem N+1 por registro: o número de queries
+  cresce com o número de baldes, não com o volume de dados. Nenhum índice/migration novo foi necessário;
+  se o volume crescer, a evolução natural é um agregado diário materializado alimentado pelas mesmas funções.
+- **Distância por balde**: `distance_km`/`*_per_km` usam o odômetro DENTRO de cada balde; a soma das
+  distâncias dos baldes é menor que a do período inteiro (o trecho entre a última leitura de um balde e a
+  primeira do seguinte não pertence a nenhum). Por isso são `additive: false`.
+
+### 13.3 Dimensões
+
+| Dimensão | Situação | Motivo |
+|---|---|---|
+| período, veículo, frota | Todos os KPIs | Já existiam (BI 1) |
+| **cliente** | **Só `revenue`** (`customerId` no summary/série/evidências + `GET /bi/kpis/breakdown`) | `TripRevenue.customerId` é vínculo direto, indexado `(tenantId, customerId)`. KPIs sem a dimensão voltam `UNAVAILABLE` com motivo (nunca receita do cliente − custo da frota inteira) |
+| custo por cliente | Não implementado | Manutenção/pneus não têm viagem; combustível tem `tripId` opcional. Atribuir custo a cliente exige regra de rateio — decisão de negócio para o BI 5 |
+| rota | Não implementado | Não existe entidade “rota” estável (origem/destino são `Location` por viagem); agrupar exige definição de rota — BI 5/7 |
+| viagem | Coberto por drill-down | O resultado por viagem já existe em `GET /trips/:id/financial-result` |
+| motorista | Fora do escopo do BI 3 | — |
+
+`GET /bi/kpis/breakdown?kpiId=revenue&dimension=customer&limit=5`: mesmo where do KPI `revenue`,
+particionado por `TripRevenue.customerId` (`null` = “Sem cliente”); o que passa do `limit` vira `others`.
+Testado: soma(items) + others = revenue. Nomes resolvidos com `tenantId` no filtro.
+
+### 13.4 Aba Financeiro (admin-web)
+
+- **Resumo** (mesmo summary das outras abas, sem nova chamada): `revenue`, `operating_cost`,
+  `operating_result`, `operating_margin`, `cost_per_km`, `revenue_per_km`, com comparação,
+  “Como é calculado” e drill-down para `/operations/fleet/financial` e `/operations/fleet/costs`.
+- **Evolução** (1 chamada a `/series` com 9 KPIs e `PREVIOUS_PERIOD`): receita, despesas operacionais e
+  margem (linha atual × anterior tracejada) e resultado (barras verde/vermelho pelo sinal). Agrupamento
+  dia/semana/mês na URL (`?agrupar=`); opções que a API recusaria ficam desabilitadas. Tabela acessível
+  com os mesmos pontos.
+- **Composição dos custos**: barras empilhadas por balde (`fuel_cost`, `maintenance_cost`, `tire_cost`,
+  `toll_cost`, `other_cost`) + lista do período com valores e participação (entradas oficiais de
+  `operating_cost`). Paleta categórica validada (CVD/visão normal); o contraste baixo de 3 cores é
+  compensado por legenda e valores em texto.
+- **Receita por cliente**: top 5 + demais, com link para `/customers/:id`.
+
+Escopo financeiro × BI 5: o BI 3 cobre o **resultado operacional** (receita de viagem − custos
+realizados da frota). Ficam para o BI 5: rentabilidade por cliente/rota/veículo com rateio de custos,
+custo por viagem consolidado e a ponte com o financeiro contábil.
+
+**Operacional × contábil**: os KPIs do BI são operacionais (data do evento: `receivedAt`, `supplyDate`...).
+Contas a receber/pagar, fluxo de caixa (`/finance/cash-flow`) e o fechamento mensal (`FinancialPeriod`,
+Fase 76) são o mundo contábil e **não** foram misturados aqui — os números podem divergir legitimamente.
+
+### 13.5 Legado `GET /dashboard`
+
+- admin-web: nenhuma tela chama o endpoint; resta só o cliente `lib/api/dashboard.api.ts`, sem uso.
+- driver-app: não usa.
+- API: `dashboard.e2e-spec.ts` o testa, e **`DashboardChartPointEntity` (dashboard/entities) é importada
+  por `fleet-operations`** (`computeCostsMonthlyTrend`) — remover o módulo quebraria esse import.
+
+Recomendação: descontinuar em fase própria — mover `DashboardChartPointEntity` para `common/`, marcar o
+endpoint como deprecated no Swagger por um ciclo, remover `dashboard.api.ts` e só então o módulo.
+Nada foi removido no BI 3.

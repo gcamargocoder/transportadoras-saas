@@ -4300,6 +4300,8 @@ export interface KpiDefinitionEntity {
   sources: KpiSourceEntity[];
   dimensions: string[];
   limitations: string[];
+  /** true quando a soma dos pontos da serie = valor do periodo inteiro. */
+  additive: boolean;
 }
 
 export interface KpiResultEntity extends KpiDefinitionEntity {
@@ -4316,6 +4318,7 @@ export interface KpiScopeEntity {
   tenantId: string;
   vehicleId: string | null;
   fleetId: string | null;
+  customerId: string | null;
 }
 
 export interface KpiSummaryEntity {
@@ -4350,4 +4353,56 @@ export interface KpiEvidencePageEntity {
   period: KpiPeriodEntity;
   items: KpiEvidenceRecordEntity[];
   meta: PaginationMeta;
+}
+
+// BI 3 -- serie temporal e recorte por dimensao (espelho de bi-kpi.entity.ts).
+export type KpiGranularity = 'day' | 'week' | 'month';
+
+export interface KpiSeriesPointEntity {
+  /** Inicio do balde no fuso do tenant: AAAA-MM-DD (dia/semana) ou AAAA-MM (mes). */
+  label: string;
+  start: string;
+  end: string;
+  /** Balde recortado pelo periodo ou ainda em andamento. */
+  partial: boolean;
+  status: 'AVAILABLE' | 'UNAVAILABLE';
+  value: number | null;
+  unavailableReason: string | null;
+  inputs: KpiInputEntity[];
+  evidence: KpiEvidenceEntity[];
+}
+
+export interface KpiSeriesEntity extends KpiDefinitionEntity {
+  points: KpiSeriesPointEntity[];
+  comparisonPoints: KpiSeriesPointEntity[] | null;
+}
+
+export interface KpiSeriesResponseEntity {
+  catalogVersion: string;
+  calculatedAt: string;
+  scope: KpiScopeEntity;
+  period: KpiPeriodEntity;
+  granularity: KpiGranularity;
+  timezone: string;
+  comparisonMode: 'PREVIOUS_PERIOD' | 'PREVIOUS_YEAR' | 'NONE';
+  comparisonPeriod: KpiPeriodEntity | null;
+  series: KpiSeriesEntity[];
+}
+
+export interface KpiBreakdownItemEntity {
+  key: string | null;
+  label: string;
+  value: number;
+  share: number | null;
+  recordCount: number;
+}
+
+export interface KpiBreakdownEntity {
+  kpiId: string;
+  dimension: 'customer';
+  scope: KpiScopeEntity;
+  period: KpiPeriodEntity;
+  total: number;
+  items: KpiBreakdownItemEntity[];
+  others: KpiBreakdownItemEntity | null;
 }

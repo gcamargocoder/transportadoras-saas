@@ -2,27 +2,40 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { compact } from '../../common/utils/compact.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { PrismaService } from '../../prisma/prisma.service';
-import { BiKpiEvidenceQueryDto, BiKpiScopeQueryDto, BiKpiSummaryQueryDto } from '../dto/bi-kpi-query.dto';
 import {
+  BiKpiBreakdownQueryDto,
+  BiKpiEvidenceQueryDto,
+  BiKpiScopeQueryDto,
+  BiKpiSeriesQueryDto,
+  BiKpiSummaryQueryDto,
+} from '../dto/bi-kpi-query.dto';
+import {
+  KpiBreakdownEntity,
   KpiCatalogEntity,
   KpiEvidencePageEntity,
   KpiPeriodEntity,
   KpiScopeEntity,
+  KpiSeriesResponseEntity,
   KpiSummaryEntity,
 } from '../entities/bi-kpi.entity';
 import { findKpiDefinition, KPI_CATALOG, KPI_CATALOG_VERSION, KPI_PENDING_DEPENDENCIES } from '../kpis/kpi-catalog';
 import { KpiDefinition, KpiEvidenceSource, LISTABLE_EVIDENCE_SOURCES } from '../kpis/kpi.types';
 import { BiScope } from '../utils/bi-where.util';
 import { buildKpiResults, toKpiDefinitionEntity } from '../utils/build-kpi-results.util';
+import { buildKpiBuckets, isValidTimeZone, MAX_BUCKETS, resolveGranularity } from '../utils/kpi-buckets.util';
 import { evidenceSourcesOf } from '../utils/kpi-evidence-sources.util';
 import { KpiPeriod, parsePeriodEnd, parsePeriodStart, resolveComparisonPeriod } from '../utils/kpi-period.util';
+import { BiKpiBreakdownService } from './bi-kpi-breakdown.service';
 import { BiKpiEvidenceService } from './bi-kpi-evidence.service';
+import { BiKpiSeriesService } from './bi-kpi-series.service';
 import { BiKpiSnapshotService } from './bi-kpi-snapshot.service';
 
 // Janela maxima de apuracao -- protege o banco (a carga de tempo de frota
 // e proporcional ao historico de viagens do escopo).
 const MAX_PERIOD_DAYS = 731;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+// Mesmo default de TenantSettings.timezone no schema.
+const DEFAULT_TIMEZONE = 'America/Sao_Paulo';
 
 // BI 1 -- fonte OFICIAL dos indicadores do BI. Somente leitura (nunca grava
 // AuditLog, mesmo principio do dashboard executivo).
@@ -32,6 +45,8 @@ export class BiKpisService {
     private readonly prisma: PrismaService,
     private readonly snapshots: BiKpiSnapshotService,
     private readonly evidence: BiKpiEvidenceService,
+    private readonly series: BiKpiSeriesService,
+    private readonly breakdown: BiKpiBreakdownService,
   ) {}
 
   getCatalog(): KpiCatalogEntity {
@@ -73,7 +88,7 @@ export class BiKpisService {
     entity.period = this.toPeriodEntity(period);
     entity.comparisonMode = comparisonMode;
     entity.comparisonPeriod = comparisonPeriod ? this.toPeriodEntity(comparisonPeriod) : null;
-    entity.kpis = buildKpiResults(definitions, current, comparison ?? null);
+    entity.kpis = buildKpiResults(definitions, current, comparison ?? null, { customer: scope.customerId !== undefined });
     return entity;
   }
 
@@ -85,6 +100,10 @@ export class BiKpisService {
     }
     if (!evidenceSourcesOf(definition).includes(source)) {
       throw new BadRequestException(`A fonte ${source} nao compoe o KPI ${kpiId}.`);
+    }
+
+    if (query.customerId && !definition.dimensions.includes('customer')) {
+      throw new BadRequestException(`O KPI ${kpiId} nao suporta recorte por cliente.`);
     }
 
     const period = this.parsePeriod(query.startDate, query.endDate);
@@ -108,7 +127,79 @@ export class BiKpisService {
     return entity;
   }
 
+  // BI 3 -- serie temporal. Baldes no fuso do tenant (lido do banco, nunca
+  // do cliente); mesma validacao de periodo/escopo do summary.
+  async getSeries(tenantId: string, query: BiKpiSeriesQueryDto): Promise<KpiSeriesResponseEntity> {
+    const period = this.parsePeriod(query.startDate, query.endDate);
+    const scope = await this.resolveScope(tenantId, query);
+    const definitions = this.selectDefinitions(query.kpis);
+    const granularity = query.granularity ?? resolveGranularity(period);
+    const timezone = await this.resolveTimeZone(tenantId);
+    const now = new Date();
+
+    const buckets = buildKpiBuckets(period, granularity, timezone, now);
+    if (buckets.length > MAX_BUCKETS[granularity]) {
+      throw new BadRequestException(
+        `Periodo longo demais para granularidade "${granularity}" (maximo ${MAX_BUCKETS[granularity]} pontos). Use uma granularidade maior.`,
+      );
+    }
+
+    const comparisonMode = query.comparison ?? 'NONE';
+    const comparisonPeriod = resolveComparisonPeriod(comparisonMode, period);
+    const comparisonBuckets = comparisonPeriod
+      ? buildKpiBuckets(comparisonPeriod, granularity, timezone, now).slice(0, MAX_BUCKETS[granularity])
+      : null;
+
+    const entity = new KpiSeriesResponseEntity();
+    entity.catalogVersion = KPI_CATALOG_VERSION;
+    entity.calculatedAt = now;
+    entity.scope = this.toScopeEntity(tenantId, scope);
+    entity.period = this.toPeriodEntity(period);
+    entity.granularity = granularity;
+    entity.timezone = timezone;
+    entity.comparisonMode = comparisonMode;
+    entity.comparisonPeriod = comparisonPeriod ? this.toPeriodEntity(comparisonPeriod) : null;
+    entity.series = await this.series.build(
+      tenantId,
+      scope,
+      definitions,
+      buckets,
+      comparisonBuckets,
+      { customer: scope.customerId !== undefined },
+      now,
+    );
+    return entity;
+  }
+
+  // BI 3 -- recorte de KPI por dimensao. Hoje: receita x cliente (unico par
+  // com vinculo direto e confiavel na fonte).
+  async getBreakdown(tenantId: string, query: BiKpiBreakdownQueryDto): Promise<KpiBreakdownEntity> {
+    const definition = this.requireDefinition(query.kpiId);
+    if (definition.id !== 'revenue' || query.dimension !== 'customer') {
+      throw new BadRequestException(`Recorte por ${query.dimension} nao disponivel para o KPI ${query.kpiId}.`);
+    }
+    const period = this.parsePeriod(query.startDate, query.endDate);
+    const scope = await this.resolveScope(tenantId, query);
+    const result = await this.breakdown.revenueByCustomer(tenantId, scope, period, query.limit);
+
+    const entity = new KpiBreakdownEntity();
+    entity.kpiId = definition.id;
+    entity.dimension = query.dimension;
+    entity.scope = this.toScopeEntity(tenantId, scope);
+    entity.period = this.toPeriodEntity(period);
+    entity.total = result.total;
+    entity.items = result.items;
+    entity.others = result.others;
+    return entity;
+  }
+
   // --------------------------------------------------------------------------
+
+  private async resolveTimeZone(tenantId: string): Promise<string> {
+    const settings = await this.prisma.tenantSettings.findUnique({ where: { tenantId }, select: { timezone: true } });
+    const timezone = settings?.timezone;
+    return timezone && isValidTimeZone(timezone) ? timezone : DEFAULT_TIMEZONE;
+  }
 
   private parsePeriod(startDate: string, endDate: string): KpiPeriod {
     const start = parsePeriodStart(startDate);
@@ -129,17 +220,21 @@ export class BiKpisService {
   // tenant do token (404 caso contrario -- nunca revela se o id existe em
   // outro tenant). Todas as consultas seguintes tambem filtram por tenantId.
   private async resolveScope(tenantId: string, query: BiKpiScopeQueryDto): Promise<BiScope> {
-    const [vehicle, fleet] = await Promise.all([
+    const [vehicle, fleet, customer] = await Promise.all([
       query.vehicleId
         ? this.prisma.vehicle.findFirst({ where: { id: query.vehicleId, tenantId, deletedAt: null }, select: { id: true } })
         : Promise.resolve(undefined),
       query.fleetId
         ? this.prisma.fleet.findFirst({ where: { id: query.fleetId, tenantId }, select: { id: true } })
         : Promise.resolve(undefined),
+      query.customerId
+        ? this.prisma.customer.findFirst({ where: { id: query.customerId, tenantId }, select: { id: true } })
+        : Promise.resolve(undefined),
     ]);
     if (vehicle === null) throw new NotFoundException('Veiculo nao encontrado.');
     if (fleet === null) throw new NotFoundException('Frota nao encontrada.');
-    return compact({ vehicleId: query.vehicleId, fleetId: query.fleetId });
+    if (customer === null) throw new NotFoundException('Cliente nao encontrado.');
+    return compact({ vehicleId: query.vehicleId, fleetId: query.fleetId, customerId: query.customerId });
   }
 
   private selectDefinitions(ids: string[] | undefined): readonly KpiDefinition[] {
@@ -162,6 +257,7 @@ export class BiKpisService {
     entity.tenantId = tenantId;
     entity.vehicleId = scope.vehicleId ?? null;
     entity.fleetId = scope.fleetId ?? null;
+    entity.customerId = scope.customerId ?? null;
     return entity;
   }
 

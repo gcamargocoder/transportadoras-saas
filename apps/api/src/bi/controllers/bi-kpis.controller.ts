@@ -5,8 +5,19 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { DASHBOARD_ROLES } from '../../dashboard/constants/dashboard-roles.constants';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
-import { BiKpiEvidenceQueryDto, BiKpiSummaryQueryDto } from '../dto/bi-kpi-query.dto';
-import { KpiCatalogEntity, KpiEvidencePageEntity, KpiSummaryEntity } from '../entities/bi-kpi.entity';
+import {
+  BiKpiBreakdownQueryDto,
+  BiKpiEvidenceQueryDto,
+  BiKpiSeriesQueryDto,
+  BiKpiSummaryQueryDto,
+} from '../dto/bi-kpi-query.dto';
+import {
+  KpiBreakdownEntity,
+  KpiCatalogEntity,
+  KpiEvidencePageEntity,
+  KpiSeriesResponseEntity,
+  KpiSummaryEntity,
+} from '../entities/bi-kpi.entity';
 import { BiKpisService } from '../services/bi-kpis.service';
 
 // BI 1 -- camada oficial de indicadores. Mesmo modulo de plano
@@ -45,6 +56,31 @@ export class BiKpisController {
   @ApiOkResponse({ type: KpiSummaryEntity })
   getSummary(@Query() query: BiKpiSummaryQueryDto): Promise<KpiSummaryEntity> {
     return this.kpisService.getSummary(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('series')
+  @Roles(...DASHBOARD_ROLES)
+  @ApiOperation({
+    summary:
+      'Serie temporal de 1..12 KPIs (kpis=revenue,operating_cost...) em baldes dia/semana/mes no fuso do tenant. ' +
+      'Cada ponto usa o MESMO calculo do summary, com entradas/evidencias proprias. comparison=PREVIOUS_PERIOD|' +
+      'PREVIOUS_YEAR adiciona os pontos do periodo de comparacao, pareados por posicao.',
+  })
+  @ApiOkResponse({ type: KpiSeriesResponseEntity })
+  getSeries(@Query() query: BiKpiSeriesQueryDto): Promise<KpiSeriesResponseEntity> {
+    return this.kpisService.getSeries(this.tenantContext.requireTenantId(), query);
+  }
+
+  @Get('breakdown')
+  @Roles(...DASHBOARD_ROLES)
+  @ApiOperation({
+    summary:
+      'Recorte de um KPI por dimensao (hoje: kpiId=revenue, dimension=customer). Mesmo where do KPI: ' +
+      'soma dos itens + others = valor do KPI.',
+  })
+  @ApiOkResponse({ type: KpiBreakdownEntity })
+  getBreakdown(@Query() query: BiKpiBreakdownQueryDto): Promise<KpiBreakdownEntity> {
+    return this.kpisService.getBreakdown(this.tenantContext.requireTenantId(), query);
   }
 
   @Get(':kpiId/evidence')

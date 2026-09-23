@@ -4,7 +4,8 @@ import { compact } from '../../common/utils/compact.util';
 import { FleetIdleTimeService, VehicleIdleData } from '../../fleet-operations/services/fleet-idle-time.service';
 import { FleetOperationsMetricsService } from '../../fleet-operations/services/fleet-operations-metrics.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { BiPeriodSnapshot } from '../kpis/kpi.types';
+import { EMPTY_SNAPSHOT } from '../kpis/empty-snapshot';
+import { BiPeriodSnapshot, SNAPSHOT_PARTS, SnapshotPart } from '../kpis/kpi.types';
 import {
   BiScope,
   buildCompletedDeliveryWhere,
@@ -14,6 +15,12 @@ import {
 } from '../utils/bi-where.util';
 import { computeFleetTimeTotals } from '../utils/fleet-time.util';
 import { KpiPeriod } from '../utils/kpi-period.util';
+import { mapWithConcurrency } from '../utils/concurrency.util';
+
+// BI 3 -- periodos coletados em paralelo, no maximo N por vez: a serie
+// temporal pede dezenas de baldes e cada um dispara algumas agregacoes;
+// sem limite, um unico request esgotaria o pool de conexoes do Prisma.
+const PERIOD_CONCURRENCY = 4;
 
 // BI 1 -- coleta os dados BRUTOS de cada periodo. Nao calcula KPI (isso e
 // o catalogo, puro) e nao reimplementa nenhuma regra ja existente:
@@ -24,6 +31,8 @@ import { KpiPeriod } from '../utils/kpi-period.util';
 //  - tempo de frota -> FleetIdleTimeService.loadVehicleIdleData (mesma carga
 //    de GET /fleet-operations/idle-time), carregada UMA vez e recortada por
 //    periodo em memoria (a carga independe do periodo).
+// BI 3 -- `parts` restringe a coleta ao que os KPIs pedidos leem (partes
+// nao pedidas ficam com o valor de EMPTY_SNAPSHOT e nunca sao lidas).
 // Toda consulta recebe tenantId do TenantContext (nunca do cliente).
 @Injectable()
 export class BiKpiSnapshotService {
@@ -38,9 +47,13 @@ export class BiKpiSnapshotService {
     scope: BiScope,
     periods: KpiPeriod[],
     now: Date = new Date(),
+    parts: readonly SnapshotPart[] = SNAPSHOT_PARTS,
   ): Promise<BiPeriodSnapshot[]> {
-    const vehicleData = await this.idleTime.loadVehicleIdleData(tenantId, scope);
-    return Promise.all(periods.map((period) => this.collectPeriod(tenantId, scope, period, vehicleData, now)));
+    const wanted = new Set(parts);
+    const vehicleData = wanted.has('fleetTime') ? await this.idleTime.loadVehicleIdleData(tenantId, scope) : [];
+    return mapWithConcurrency(periods, PERIOD_CONCURRENCY, (period) =>
+      this.collectPeriod(tenantId, scope, period, vehicleData, now, wanted),
+    );
   }
 
   private async collectPeriod(
@@ -49,42 +62,67 @@ export class BiKpiSnapshotService {
     period: KpiPeriod,
     vehicleData: VehicleIdleData[],
     now: Date,
+    wanted: Set<SnapshotPart>,
   ): Promise<BiPeriodSnapshot> {
+    // customerId so e lido pelo where de receita (ver FleetMetricsScope).
     const fleetScope = compact({ startDate: period.start, endDate: period.end, ...scope });
     const deliveryWhere = buildCompletedDeliveryWhere(tenantId, scope, period);
+    const needsCosts = wanted.has('costs') || wanted.has('distance');
 
-    const [costs, revenue, completedTrips, completedDeliveries, deadlineRows, occurrences, criticalOccurrences] =
-      await Promise.all([
-        this.fleetMetrics.computeCostTotals(tenantId, fleetScope),
-        this.fleetMetrics.computeRevenueTotals(tenantId, fleetScope),
-        this.prisma.trip.count({ where: buildCompletedTripWhere(tenantId, scope, period) }),
-        this.prisma.tripDeliveryStop.count({ where: deliveryWhere }),
-        // Comparar 2 colunas exigiria SQL bruto -- projecao minima (3 datas)
-        // so das entregas elegiveis, comparada em memoria.
-        this.prisma.tripDeliveryStop.findMany({
-          where: { ...deliveryWhere, plannedArrival: { not: null } },
-          select: { plannedArrival: true, actualArrival: true, deliveredAt: true },
-        }),
-        this.prisma.tripOccurrence.count({ where: buildOccurrenceWhere(tenantId, scope, period) }),
-        this.prisma.tripOccurrence.count({
-          where: buildOccurrenceWhere(tenantId, scope, period, TripOccurrenceSeverity.CRITICAL),
-        }),
-      ]);
-
-    const onTime = deadlineRows.filter(
-      (row) =>
-        row.plannedArrival !== null &&
-        isDeliveredOnTime({ plannedArrival: row.plannedArrival, actualArrival: row.actualArrival, deliveredAt: row.deliveredAt }),
-    ).length;
+    const [costs, revenue, completedTrips, deliveries, occurrences] = await Promise.all([
+      needsCosts
+        ? this.fleetMetrics.computeCostTotals(tenantId, fleetScope, { includeDistance: wanted.has('distance') })
+        : EMPTY_SNAPSHOT.costs,
+      wanted.has('revenue') ? this.fleetMetrics.computeRevenueTotals(tenantId, fleetScope) : EMPTY_SNAPSHOT.revenue,
+      wanted.has('trips')
+        ? this.prisma.trip.count({ where: buildCompletedTripWhere(tenantId, scope, period) })
+        : EMPTY_SNAPSHOT.trips.completed,
+      wanted.has('deliveries') ? this.collectDeliveries(deliveryWhere) : EMPTY_SNAPSHOT.deliveries,
+      wanted.has('occurrences') ? this.collectOccurrences(tenantId, scope, period) : EMPTY_SNAPSHOT.occurrences,
+    ]);
 
     return {
       period,
       revenue,
       costs,
       trips: { completed: completedTrips },
-      deliveries: { completed: completedDeliveries, withDeadline: deadlineRows.length, onTime },
-      occurrences: { total: occurrences, critical: criticalOccurrences },
-      fleetTime: computeFleetTimeTotals(vehicleData, period, now),
+      deliveries,
+      occurrences,
+      fleetTime: wanted.has('fleetTime') ? computeFleetTimeTotals(vehicleData, period, now) : EMPTY_SNAPSHOT.fleetTime,
     };
+  }
+
+  private async collectDeliveries(
+    where: ReturnType<typeof buildCompletedDeliveryWhere>,
+  ): Promise<BiPeriodSnapshot['deliveries']> {
+    const [completed, deadlineRows] = await Promise.all([
+      this.prisma.tripDeliveryStop.count({ where }),
+      // Comparar 2 colunas exigiria SQL bruto -- projecao minima (3 datas)
+      // so das entregas elegiveis, comparada em memoria.
+      this.prisma.tripDeliveryStop.findMany({
+        where: { ...where, plannedArrival: { not: null } },
+        select: { plannedArrival: true, actualArrival: true, deliveredAt: true },
+      }),
+    ]);
+    const onTime = deadlineRows.filter(
+      (row) =>
+        row.plannedArrival !== null &&
+        isDeliveredOnTime({ plannedArrival: row.plannedArrival, actualArrival: row.actualArrival, deliveredAt: row.deliveredAt }),
+    ).length;
+    return { completed, withDeadline: deadlineRows.length, onTime };
+  }
+
+  private async collectOccurrences(
+    tenantId: string,
+    scope: BiScope,
+    period: KpiPeriod,
+  ): Promise<BiPeriodSnapshot['occurrences']> {
+    const [total, critical] = await Promise.all([
+      this.prisma.tripOccurrence.count({ where: buildOccurrenceWhere(tenantId, scope, period) }),
+      this.prisma.tripOccurrence.count({
+        where: buildOccurrenceWhere(tenantId, scope, period, TripOccurrenceSeverity.CRITICAL),
+      }),
+    ]);
+    return { total, critical };
   }
 }

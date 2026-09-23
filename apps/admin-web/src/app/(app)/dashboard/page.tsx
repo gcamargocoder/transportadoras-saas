@@ -16,6 +16,7 @@ import {
   isIntelligenceTab,
   type IntelligenceTab,
 } from '../../../features/intelligence/intelligence-config';
+import { FinancialTab } from '../../../features/intelligence/financial-tab';
 import { KpiDetailDrawer } from '../../../features/intelligence/kpi-detail-drawer';
 import { indexKpis } from '../../../features/intelligence/kpi-format';
 import { OperationTab } from '../../../features/intelligence/operation-tab';
@@ -33,9 +34,10 @@ import { useAuth } from '../../../hooks/use-auth';
 import { getKpiSummary } from '../../../lib/api/bi.api';
 import { ApiError } from '../../../lib/api/errors';
 import { DASHBOARD_ROLES, hasRole } from '../../../lib/auth/roles';
-import type { KpiResultEntity } from '../../../types/entities';
+import type { KpiGranularity, KpiResultEntity } from '../../../types/entities';
 
-const DATA_TABS: IntelligenceTab[] = ['overview', 'operation'];
+const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial'];
+const GRANULARITIES: KpiGranularity[] = ['day', 'week', 'month'];
 const timeFormatter = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
 function LoadingKpis(): JSX.Element {
@@ -55,7 +57,8 @@ function LoadingKpis(): JSX.Element {
 // BI 2 -- /dashboard passa a ser a Central de Inteligencia. Todos os
 // numeros vem da camada oficial de KPIs (GET /bi/kpis/summary): uma unica
 // chamada por periodo, compartilhada por Visao geral e Operacao. Aba e
-// periodo ficam na URL (?aba=&periodo=&de=&ate=) para links e voltar/avancar.
+// periodo ficam na URL (?aba=&periodo=&de=&ate=&agrupar=) para links e voltar/avancar.
+// BI 3 -- aba Financeiro: mesmo summary + /bi/kpis/series e /bi/kpis/breakdown.
 function IntelligenceCenter(): JSX.Element {
   const router = useRouter();
   const pathname = usePathname();
@@ -69,6 +72,8 @@ function IntelligenceCenter(): JSX.Element {
   const preset: PeriodPreset = isPeriodPreset(periodParam) ? periodParam : DEFAULT_PERIOD_PRESET;
   const customFrom = searchParams.get('de') ?? '';
   const customTo = searchParams.get('ate') ?? '';
+  const granularityParam = searchParams.get('agrupar');
+  const granularity = GRANULARITIES.find((g) => g === granularityParam) ?? null;
 
   const [explained, setExplained] = useState<KpiResultEntity | null>(null);
 
@@ -181,6 +186,15 @@ function IntelligenceCenter(): JSX.Element {
 
         {tab === 'overview' && summary.data && <OverviewTab kpis={kpis} onExplain={setExplained} />}
         {tab === 'operation' && summary.data && <OperationTab kpis={kpis} onExplain={setExplained} />}
+        {tab === 'financial' && summary.data && range && (
+          <FinancialTab
+            kpis={kpis}
+            range={range}
+            granularity={granularity}
+            onGranularityChange={(value) => updateParams({ agrupar: value })}
+            onExplain={setExplained}
+          />
+        )}
         {activeTab?.upcoming && <UpcomingTab tab={activeTab} />}
       </div>
 

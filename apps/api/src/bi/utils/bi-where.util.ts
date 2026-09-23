@@ -10,6 +10,9 @@ import { KpiPeriod } from './kpi-period.util';
 export interface BiScope {
   vehicleId?: string;
   fleetId?: string;
+  /// BI 3 -- so aplicado as fontes com vinculo direto a cliente (receita).
+  /// KPIs sem a dimensao "customer" ficam indisponiveis quando informado.
+  customerId?: string;
 }
 
 function periodRange(period: KpiPeriod): Prisma.DateTimeFilter {

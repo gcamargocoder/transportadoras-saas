@@ -32,18 +32,7 @@ export interface IntelligenceTabConfig {
 export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'overview', label: 'Visão geral' },
   { value: 'operation', label: 'Operação' },
-  {
-    value: 'financial',
-    label: 'Financeiro',
-    upcoming: {
-      phase: 'BI 3',
-      summary: 'Receita, resultado e margem com evolução e composição por cliente e veículo.',
-      screens: [
-        { label: 'Financeiro da frota', href: '/operations/fleet/financial' },
-        { label: 'Fluxo de caixa', href: '/operations/finance/cash-flow' },
-      ],
-    },
-  },
+  { value: 'financial', label: 'Financeiro' },
   {
     value: 'fleet',
     label: 'Frota',
@@ -101,6 +90,7 @@ export const KPI_DRILL_DOWN: Record<string, DetailedScreen> = {
   revenue: { label: 'Ver financeiro', href: '/operations/fleet/financial' },
   operating_result: { label: 'Ver financeiro', href: '/operations/fleet/financial' },
   operating_margin: { label: 'Ver financeiro', href: '/operations/fleet/financial' },
+  revenue_per_km: { label: 'Ver financeiro', href: '/operations/fleet/financial' },
   operating_cost: { label: 'Ver custos', href: '/operations/fleet/costs' },
   cost_per_km: { label: 'Ver custos', href: '/operations/fleet/costs' },
   distance_km: { label: 'Ver custos', href: '/operations/fleet/costs' },
@@ -108,6 +98,8 @@ export const KPI_DRILL_DOWN: Record<string, DetailedScreen> = {
   fuel_liters: { label: 'Ver abastecimento', href: '/operations/fleet/fuel' },
   toll_cost: { label: 'Ver pedágios', href: '/operations/fleet/tolls' },
   maintenance_cost: { label: 'Ver manutenção', href: '/operations/fleet/maintenance' },
+  tire_cost: { label: 'Ver pneus', href: '/operations/fleet/tires' },
+  other_cost: { label: 'Ver custos', href: '/operations/fleet/costs' },
   occurrences_total: { label: 'Ver ocorrências', href: '/operations/fleet/occurrences' },
   occurrences_critical: { label: 'Ver ocorrências', href: '/operations/fleet/occurrences' },
   idle_hours: { label: 'Ver torre de controle', href: '/operations/control-tower' },

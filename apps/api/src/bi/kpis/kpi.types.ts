@@ -75,6 +75,18 @@ export interface KpiComputation {
   evidence: KpiEvidenceCount[];
 }
 
+// BI 3 -- partes do snapshot que um KPI le. A serie temporal coleta, por
+// balde, SO as partes exigidas pelos KPIs pedidos (as demais ficam vazias e
+// nunca sao lidas -- garantido por teste no catalogo).
+export const SNAPSHOT_PARTS = ['revenue', 'costs', 'distance', 'trips', 'deliveries', 'occurrences', 'fleetTime'] as const;
+export type SnapshotPart = (typeof SNAPSHOT_PARTS)[number];
+
+// BI 3 -- dimensoes de recorte. period/vehicle/fleet valem para todo KPI;
+// customer so para KPIs cuja fonte tem vinculo direto e confiavel com
+// cliente (hoje: receita, via TripRevenue.customerId).
+export const KPI_DIMENSIONS = ['period', 'vehicle', 'fleet', 'customer'] as const;
+export type KpiDimension = (typeof KPI_DIMENSIONS)[number];
+
 export interface KpiDefinition {
   id: string;
   name: string;
@@ -84,7 +96,12 @@ export interface KpiDefinition {
   direction: KpiDirection;
   formula: string;
   sources: KpiSource[];
-  dimensions: string[];
+  dimensions: KpiDimension[];
   limitations: string[];
+  /// BI 3 -- true quando a soma dos pontos da serie = valor do periodo
+  /// inteiro (somas/contagens). Razoes, distancia por odometro e
+  /// percentuais nao sao somaveis.
+  additive: boolean;
+  requires: readonly SnapshotPart[];
   compute: (snapshot: BiPeriodSnapshot) => KpiComputation;
 }

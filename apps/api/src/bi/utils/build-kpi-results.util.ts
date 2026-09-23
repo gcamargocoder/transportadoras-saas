@@ -5,7 +5,13 @@ import {
   KpiPeriodEntity,
   KpiResultEntity,
 } from '../entities/bi-kpi.entity';
-import { BiPeriodSnapshot, KpiDefinition, KpiEvidenceSource, LISTABLE_EVIDENCE_SOURCES } from '../kpis/kpi.types';
+import {
+  BiPeriodSnapshot,
+  KpiComputation,
+  KpiDefinition,
+  KpiEvidenceSource,
+  LISTABLE_EVIDENCE_SOURCES,
+} from '../kpis/kpi.types';
 import { computeVariation, KpiPeriod } from './kpi-period.util';
 
 // BI 1 -- montagem PURA dos resultados a partir dos snapshots. O mesmo
@@ -33,6 +39,8 @@ function toPeriodEntity(period: KpiPeriod): KpiPeriodEntity {
   return entity;
 }
 
+export { toPeriodEntity };
+
 export function toKpiDefinitionEntity(definition: KpiDefinition): KpiDefinitionEntity {
   const entity = new KpiDefinitionEntity();
   assignDefinition(entity, definition);
@@ -50,14 +58,53 @@ function assignDefinition(entity: KpiDefinitionEntity, d: KpiDefinition): void {
   entity.sources = d.sources.map((s) => ({ ...s }));
   entity.dimensions = [...d.dimensions];
   entity.limitations = [...d.limitations];
+  entity.additive = d.additive;
+}
+
+// BI 3 -- dimensoes pedidas (alem de period/vehicle/fleet, sempre aceitas).
+export interface RequestedDimensions {
+  customer?: boolean;
+}
+
+// Motivo quando o KPI nao suporta um recorte pedido: melhor indisponivel que
+// misturar escopos (ex: receita do cliente - custo da frota inteira).
+export function unsupportedDimensionReason(definition: KpiDefinition, requested: RequestedDimensions): string | null {
+  if (requested.customer && !definition.dimensions.includes('customer')) {
+    return 'Este indicador nao suporta recorte por cliente: suas fontes nao tem vinculo direto com cliente.';
+  }
+  return null;
+}
+
+// Resultado de um KPI num periodo. Recorte nao suportado => indisponivel,
+// sem executar a formula sobre um snapshot de escopo misto.
+export function computeKpi(
+  definition: KpiDefinition,
+  snapshot: BiPeriodSnapshot,
+  requested: RequestedDimensions = {},
+): KpiComputation {
+  const reason = unsupportedDimensionReason(definition, requested);
+  if (reason) return { value: null, unavailableReason: reason, inputs: [], evidence: [] };
+  return definition.compute(snapshot);
+}
+
+export function toEvidenceEntities(computed: KpiComputation): KpiEvidenceEntity[] {
+  return computed.evidence.map((e) => {
+    const evidence = new KpiEvidenceEntity();
+    evidence.source = e.source;
+    evidence.label = EVIDENCE_LABELS[e.source];
+    evidence.recordCount = e.recordCount;
+    evidence.listable = LISTABLE_EVIDENCE_SOURCES.includes(e.source);
+    return evidence;
+  });
 }
 
 export function buildKpiResult(
   definition: KpiDefinition,
   current: BiPeriodSnapshot,
   comparison: BiPeriodSnapshot | null,
+  requested: RequestedDimensions = {},
 ): KpiResultEntity {
-  const computed = definition.compute(current);
+  const computed = computeKpi(definition, current, requested);
 
   const entity = new KpiResultEntity();
   assignDefinition(entity, definition);
@@ -66,17 +113,10 @@ export function buildKpiResult(
   entity.value = computed.value;
   entity.period = toPeriodEntity(current.period);
   entity.inputs = computed.inputs.map((i) => ({ ...i }));
-  entity.evidence = computed.evidence.map((e) => {
-    const evidence = new KpiEvidenceEntity();
-    evidence.source = e.source;
-    evidence.label = EVIDENCE_LABELS[e.source];
-    evidence.recordCount = e.recordCount;
-    evidence.listable = LISTABLE_EVIDENCE_SOURCES.includes(e.source);
-    return evidence;
-  });
+  entity.evidence = toEvidenceEntities(computed);
 
   if (comparison) {
-    const previous = definition.compute(comparison);
+    const previous = computeKpi(definition, comparison, requested);
     const variation = computeVariation(computed.value, previous.value);
     const comparisonEntity = new KpiComparisonEntity();
     comparisonEntity.period = toPeriodEntity(comparison.period);
@@ -97,6 +137,7 @@ export function buildKpiResults(
   definitions: readonly KpiDefinition[],
   current: BiPeriodSnapshot,
   comparison: BiPeriodSnapshot | null,
+  requested: RequestedDimensions = {},
 ): KpiResultEntity[] {
-  return definitions.map((d) => buildKpiResult(d, current, comparison));
+  return definitions.map((d) => buildKpiResult(d, current, comparison, requested));
 }

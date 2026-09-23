@@ -1,9 +1,12 @@
 import type { QueryableParams } from '../../types/api';
 import type {
+  KpiBreakdownEntity,
   KpiCatalogEntity,
   KpiComparisonMode,
   KpiEvidencePageEntity,
   KpiEvidenceSource,
+  KpiGranularity,
+  KpiSeriesResponseEntity,
   KpiSummaryEntity,
 } from '../../types/entities';
 import { api } from './http';
@@ -16,6 +19,8 @@ export interface BiKpiScopeQuery extends QueryableParams {
   endDate: string;
   vehicleId?: string | undefined;
   fleetId?: string | undefined;
+  /** So a receita suporta o recorte por cliente; os demais KPIs voltam UNAVAILABLE. */
+  customerId?: string | undefined;
 }
 
 export interface BiKpiSummaryQuery extends BiKpiScopeQuery {
@@ -42,4 +47,27 @@ export function getKpiSummary(query: BiKpiSummaryQuery, signal?: AbortSignal) {
 
 export function getKpiEvidence(kpiId: string, query: BiKpiEvidenceQuery, signal?: AbortSignal) {
   return api.get<KpiEvidencePageEntity>(`/bi/kpis/${encodeURIComponent(kpiId)}/evidence`, query, signal);
+}
+
+// BI 3 -- serie temporal: varios KPIs no MESMO request (compartilham os
+// snapshots de cada balde no servidor).
+export interface BiKpiSeriesQuery extends BiKpiScopeQuery {
+  /** Ids separados por virgula. */
+  kpis: string;
+  granularity?: KpiGranularity | undefined;
+  comparison?: 'PREVIOUS_PERIOD' | 'PREVIOUS_YEAR' | 'NONE' | undefined;
+}
+
+export interface BiKpiBreakdownQuery extends BiKpiScopeQuery {
+  kpiId: string;
+  dimension: 'customer';
+  limit?: number | undefined;
+}
+
+export function getKpiSeries(query: BiKpiSeriesQuery, signal?: AbortSignal) {
+  return api.get<KpiSeriesResponseEntity>('/bi/kpis/series', query, signal);
+}
+
+export function getKpiBreakdown(query: BiKpiBreakdownQuery, signal?: AbortSignal) {
+  return api.get<KpiBreakdownEntity>('/bi/kpis/breakdown', query, signal);
 }

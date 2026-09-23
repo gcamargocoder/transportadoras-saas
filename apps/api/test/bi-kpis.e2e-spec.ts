@@ -277,7 +277,7 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
   describe('catalogo', () => {
     it('lista KPIs com formula/fonte/unidade e dependencias pendentes', async () => {
       const res = await request(app.getHttpServer()).get('/api/v1/bi/kpis').set('Authorization', a.auth).expect(200);
-      expect(res.body.data.catalogVersion).toBe('1');
+      expect(res.body.data.catalogVersion).toBe('2');
       const ids = res.body.data.kpis.map((k: { id: string }) => k.id);
       expect(ids).toEqual(expect.arrayContaining(['revenue', 'operating_cost', 'cost_per_km', 'on_time_delivery_rate']));
       for (const k of res.body.data.kpis) {
@@ -489,6 +489,205 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       await getSummary(a.auth, { ...JANUARY, kpis: 'revenue,nao_existe' }).expect(400);
       await getSummary(a.auth, { ...JANUARY, comparison: 'SEMANA' }).expect(400);
       await getSummary(a.auth, { startDate: '2020-01-01', endDate: '2026-01-01' }).expect(400);
+    });
+  });
+
+  // ==========================================================================
+  // BI 3 -- serie temporal e recorte por cliente
+  // ==========================================================================
+  // Periodo em calendario LOCAL de Sao Paulo (fuso padrao do tenant):
+  // 01/11/2025 00:00 -03 ate 31/01/2026 23:59:59.999 -03.
+  const NOV_TO_JAN = { startDate: '2025-11-01T03:00:00.000Z', endDate: '2026-02-01T02:59:59.999Z' };
+
+  interface SeriesPointBody {
+    label: string;
+    value: number | null;
+    status: string;
+    partial: boolean;
+    evidence: { source: string; recordCount: number }[];
+  }
+  interface SeriesBody {
+    id: string;
+    additive: boolean;
+    points: SeriesPointBody[];
+    comparisonPoints: SeriesPointBody[] | null;
+  }
+
+  function getSeries(auth: string, query: Record<string, string>) {
+    return request(app.getHttpServer()).get('/api/v1/bi/kpis/series').query(query).set('Authorization', auth);
+  }
+
+  function seriesOf(body: { data: { series: SeriesBody[] } }, id: string): SeriesBody {
+    const found = body.data.series.find((s) => s.id === id);
+    if (!found) throw new Error(`serie ${id} ausente`);
+    return found;
+  }
+
+  describe('serie temporal (BI 3)', () => {
+    it('baldes mensais no fuso do tenant, mesma formula do summary (soma dos pontos = total)', async () => {
+      const [series, summary] = await Promise.all([
+        getSeries(a.auth, { ...NOV_TO_JAN, kpis: 'revenue,operating_cost,operating_result,operating_margin', granularity: 'month' }).expect(200),
+        getSummary(a.auth, { ...NOV_TO_JAN, comparison: 'NONE', kpis: 'revenue,operating_cost,operating_result' }).expect(200),
+      ]);
+      expect(series.body.data.timezone).toBe('America/Sao_Paulo');
+      expect(series.body.data.granularity).toBe('month');
+
+      const revenue = seriesOf(series.body, 'revenue');
+      expect(revenue.points.map((p) => p.label)).toEqual(['2025-11', '2025-12', '2026-01']);
+      // 01/02 00:00 UTC = 31/01 21:00 em Sao Paulo -> balde de janeiro.
+      expect(revenue.points.map((p) => p.value)).toEqual([0, 1000, 3700]);
+      expect(revenue.additive).toBe(true);
+
+      for (const id of ['revenue', 'operating_cost', 'operating_result']) {
+        const sum = seriesOf(series.body, id).points.reduce((acc, p) => acc + (p.value ?? 0), 0);
+        expect(sum).toBeCloseTo(kpi(summary.body, id).value ?? NaN, 2);
+      }
+    });
+
+    it('mes sem receita: margem indisponivel (null), nunca 0 ou ponto inventado', async () => {
+      const res = await getSeries(a.auth, { ...NOV_TO_JAN, kpis: 'operating_margin,revenue', granularity: 'month' }).expect(200);
+      const margin = seriesOf(res.body, 'operating_margin');
+      expect(margin.additive).toBe(false);
+      expect(margin.points[0]).toMatchObject({ label: '2025-11', value: null, status: 'UNAVAILABLE' });
+      expect(seriesOf(res.body, 'revenue').points[0]!.evidence).toEqual([expect.objectContaining({ source: 'TRIP_REVENUE', recordCount: 0 })]);
+    });
+
+    it('cada ponto traz evidencias proprias (rastreabilidade por ponto)', async () => {
+      const res = await getSeries(a.auth, { ...NOV_TO_JAN, kpis: 'fuel_cost', granularity: 'month' }).expect(200);
+      const january = seriesOf(res.body, 'fuel_cost').points[2]!;
+      expect(january.value).toBeCloseTo(1000, 2);
+      expect(january.evidence).toEqual([expect.objectContaining({ source: 'FUEL_SUPPLY', recordCount: 2 })]);
+    });
+
+    it('granularidade automatica, diaria e limites', async () => {
+      const auto = await getSeries(a.auth, { ...JANUARY, kpis: 'revenue' }).expect(200);
+      expect(auto.body.data.granularity).toBe('day');
+      expect(seriesOf(auto.body, 'revenue').points.length).toBeGreaterThanOrEqual(31);
+      await getSeries(a.auth, { startDate: '2025-01-01', endDate: '2025-12-31', kpis: 'revenue', granularity: 'day' }).expect(400);
+      await getSeries(a.auth, { ...JANUARY, kpis: 'nao_existe' }).expect(400);
+      await getSeries(a.auth, { ...JANUARY }).expect(400);
+      await getSeries(a.auth, { ...JANUARY, kpis: 'revenue', granularity: 'hora' }).expect(400);
+    });
+
+    it('comparacao: pontos do periodo anterior pareados por posicao', async () => {
+      const res = await getSeries(a.auth, {
+        ...NOV_TO_JAN,
+        kpis: 'revenue',
+        granularity: 'month',
+        comparison: 'PREVIOUS_YEAR',
+      }).expect(200);
+      const revenue = seriesOf(res.body, 'revenue');
+      expect(res.body.data.comparisonPeriod.start).toBe('2024-11-01T03:00:00.000Z');
+      expect(revenue.comparisonPoints).toHaveLength(3);
+      expect(revenue.comparisonPoints!.map((p) => p.label)).toEqual(['2024-11', '2024-12', '2025-01']);
+      const none = await getSeries(a.auth, { ...NOV_TO_JAN, kpis: 'revenue', granularity: 'month' }).expect(200);
+      expect(seriesOf(none.body, 'revenue').comparisonPoints).toBeNull();
+    });
+
+    it('isolamento: series de A e B nunca se misturam', async () => {
+      const [resA, resB] = await Promise.all([
+        getSeries(a.auth, { ...JANUARY, kpis: 'revenue', granularity: 'month' }).expect(200),
+        getSeries(b.auth, { ...JANUARY, kpis: 'revenue', granularity: 'month' }).expect(200),
+      ]);
+      const sum = (body: { data: { series: SeriesBody[] } }) =>
+        seriesOf(body, 'revenue').points.reduce((acc, p) => acc + (p.value ?? 0), 0);
+      expect(sum(resA.body)).toBeCloseTo(3000, 2);
+      expect(sum(resB.body)).toBeCloseTo(50000, 2);
+      await getSeries(a.auth, { ...JANUARY, kpis: 'revenue', vehicleId: b.vehicleId }).expect(404);
+    });
+
+    it('perfis sem acesso ao BI recebem 403', async () => {
+      const auth = await createUserWithRole(a.tenantId, a.auth, 'OPERATOR');
+      await getSeries(auth, { ...JANUARY, kpis: 'revenue' }).expect(403);
+      await request(app.getHttpServer())
+        .get('/api/v1/bi/kpis/breakdown')
+        .query({ ...JANUARY, kpiId: 'revenue', dimension: 'customer' })
+        .set('Authorization', auth)
+        .expect(403);
+    });
+  });
+
+  describe('recorte por cliente (BI 3)', () => {
+    const MARCH = { startDate: '2026-03-01', endDate: '2026-03-31' };
+    let customerId: string;
+
+    beforeAll(async () => {
+      customerId = await post(a.auth, '/customers', { name: `Cliente BI ${randomUUID().slice(0, 6)}` });
+      await post(a.auth, '/trip-revenues', {
+        tripId: a.tripId,
+        category: 'FREIGHT',
+        description: 'Frete cliente',
+        amount: 500,
+        receivedAt: '2026-03-10T12:00:00.000Z',
+        customerId,
+      });
+      await createRevenue(a.auth, a.tripId, 300, '2026-03-11T12:00:00.000Z'); // sem cliente
+    });
+
+    function getBreakdown(auth: string, query: Record<string, string>) {
+      return request(app.getHttpServer()).get('/api/v1/bi/kpis/breakdown').query(query).set('Authorization', auth);
+    }
+
+    it('receita por cliente: partes somam o KPI revenue', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...MARCH, kpiId: 'revenue', dimension: 'customer' }).expect(200),
+        getSummary(a.auth, { ...MARCH, comparison: 'NONE', kpis: 'revenue' }).expect(200),
+      ]);
+      const data = breakdown.body.data;
+      expect(data.total).toBeCloseTo(kpi(summary.body, 'revenue').value ?? NaN, 2);
+      expect(data.items).toEqual([
+        expect.objectContaining({ key: customerId, value: 500, recordCount: 1 }),
+        expect.objectContaining({ key: null, label: 'Sem cliente', value: 300 }),
+      ]);
+      expect(data.items[0].share).toBeCloseTo(62.5, 5);
+      expect(data.others).toBeNull();
+    });
+
+    it('limit agrupa o restante em "others" sem perder valor', async () => {
+      const res = await getBreakdown(a.auth, { ...MARCH, kpiId: 'revenue', dimension: 'customer', limit: '1' }).expect(200);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.others).toMatchObject({ value: 300, recordCount: 1 });
+    });
+
+    it('filtro customerId: receita recortada; KPIs sem vinculo com cliente ficam indisponiveis', async () => {
+      const res = await getSummary(a.auth, {
+        ...MARCH,
+        comparison: 'NONE',
+        customerId,
+        kpis: 'revenue,operating_cost,operating_result',
+      }).expect(200);
+      expect(kpi(res.body, 'revenue').value).toBeCloseTo(500, 2);
+      expect(kpi(res.body, 'operating_cost').status).toBe('UNAVAILABLE');
+      expect(kpi(res.body, 'operating_result').value).toBeNull();
+      expect(res.body.data.scope.customerId).toBe(customerId);
+    });
+
+    it('evidencias com cliente: so fontes do KPI que suporta o recorte', async () => {
+      const ok = await request(app.getHttpServer())
+        .get('/api/v1/bi/kpis/revenue/evidence')
+        .query({ ...MARCH, source: 'TRIP_REVENUE', customerId })
+        .set('Authorization', a.auth)
+        .expect(200);
+      expect(ok.body.data.meta.total).toBe(1);
+      await request(app.getHttpServer())
+        .get('/api/v1/bi/kpis/fuel_cost/evidence')
+        .query({ ...MARCH, source: 'FUEL_SUPPLY', customerId })
+        .set('Authorization', a.auth)
+        .expect(400);
+    });
+
+    it('cliente de outro tenant => 404; dimensao/KPI nao suportados => 400', async () => {
+      const foreignCustomer = await post(b.auth, '/customers', { name: `Cliente B ${randomUUID().slice(0, 6)}` });
+      await getSummary(a.auth, { ...MARCH, customerId: foreignCustomer }).expect(404);
+      await getBreakdown(a.auth, { ...MARCH, kpiId: 'revenue', dimension: 'customer', customerId: foreignCustomer }).expect(404);
+      await getBreakdown(a.auth, { ...MARCH, kpiId: 'operating_cost', dimension: 'customer' }).expect(400);
+      await getBreakdown(a.auth, { ...MARCH, kpiId: 'revenue', dimension: 'motorista' }).expect(400);
+    });
+
+    it('recorte de B nunca mostra clientes de A', async () => {
+      const res = await getBreakdown(b.auth, { ...MARCH, kpiId: 'revenue', dimension: 'customer' }).expect(200);
+      expect(res.body.data.items).toEqual([]);
+      expect(res.body.data.total).toBe(0);
     });
   });
 });

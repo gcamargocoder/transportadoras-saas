@@ -223,6 +223,10 @@ export interface FleetMetricsScope {
   endDate?: Date;
   vehicleId?: string;
   fleetId?: string;
+  /// BI 3 -- lido SOMENTE pelo where de receita (TripRevenue.customerId, o
+  /// mesmo filtro de /fleet-operations/financial); ignorado pelas fontes de
+  /// custo, que nao tem vinculo confiavel com cliente.
+  customerId?: string;
 }
 
 // BI 1 -- where de cada fonte de custo REALIZADO, montados uma unica vez
