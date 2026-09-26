@@ -1,12 +1,11 @@
 'use client';
 
-import { AlertOctagon, AlertTriangle, Gauge, Milestone, PackageCheck, Route as RouteIcon, Timer, Wrench } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, PackageCheck, Route as RouteIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Card, CardBody, CardHeader } from '../../components/ui/card';
 import { RadialGauge } from '../../components/ui/radial-gauge';
 import type { KpiResultEntity } from '../../types/entities';
 import { formatNumber } from '../../utils/format';
-import { FleetTimeBand } from './fleet-time-band';
 import { KpiCard, KpiTrend } from './kpi-card';
 import { findInput, formatKpiValue } from './kpi-format';
 import { PeriodComparisonChart } from './period-comparison-chart';
@@ -127,23 +126,6 @@ export function OperationTab({
           </Card>
           <OnTimePanel kpi={kpis.get('on_time_delivery_rate')} onExplain={onExplain} />
         </div>
-      </Block>
-
-      <Block title="Distância e tempo da frota" description="Quilometragem rodada e como as horas dos veículos foram usadas.">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {card('distance_km', Milestone)}
-          {card('fleet_utilization', Gauge)}
-          {card('fleet_availability', Wrench)}
-          {card('idle_hours', Timer)}
-        </div>
-        {kpis.get('fleet_utilization')?.value != null && (
-          <Card>
-            <CardHeader title="Horas da frota no período" description="Distribuição da capacidade dos veículos em operação." />
-            <CardBody>
-              <FleetTimeBand kpi={kpis.get('fleet_utilization')} />
-            </CardBody>
-          </Card>
-        )}
       </Block>
 
       <Block title="Ocorrências" description="Registros de ocorrências nas viagens, exceto as canceladas.">
