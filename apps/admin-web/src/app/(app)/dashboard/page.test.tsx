@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../../lib/api/errors';
@@ -22,11 +23,19 @@ let searchParams = new URLSearchParams();
 
 const getKpiSeriesMock = vi.fn();
 const getKpiBreakdownMock = vi.fn();
+const listVehiclesMock = vi.fn();
+const listFleetsMock = vi.fn();
 
 vi.mock('../../../lib/api/bi.api', () => ({
   getKpiSummary: (...args: unknown[]) => getKpiSummaryMock(...args),
   getKpiSeries: (...args: unknown[]) => getKpiSeriesMock(...args),
   getKpiBreakdown: (...args: unknown[]) => getKpiBreakdownMock(...args),
+}));
+
+// BI 4 -- filtro local da aba Frota (busca de veiculo + lista de frotas).
+vi.mock('../../../lib/api/fleet.api', () => ({
+  listVehicles: (...args: unknown[]) => listVehiclesMock(...args),
+  listFleets: (...args: unknown[]) => listFleetsMock(...args),
 }));
 
 // Endpoint antigo (/dashboard) -- com regras divergentes do BI 1. A Central
@@ -285,15 +294,12 @@ describe('Central de Inteligencia (/dashboard)', () => {
     expect(await screen.findByText(/Nenhuma movimentação registrada no período/)).toBeInTheDocument();
   });
 
-  it('aba Operacao: pontualidade com cobertura baixa e horas da frota', async () => {
+  it('aba Operacao: pontualidade com cobertura baixa', async () => {
     searchParams = new URLSearchParams('aba=operation');
     renderPage();
     expect(await screen.findByText('Pontualidade')).toBeInTheDocument();
     expect(screen.getByText('Cobertura da métrica')).toBeInTheDocument();
     expect(screen.getByText(/Poucas entregas têm previsão de chegada/)).toBeInTheDocument();
-    expect(screen.getByText('Horas da frota no período')).toBeInTheDocument();
-    expect(screen.getByText('4.500 h')).toBeInTheDocument();
-    expect(screen.getByRole('article', { name: 'Distancia percorrida' })).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'Ocorrencias criticas' })).toBeInTheDocument();
   });
 
@@ -305,10 +311,10 @@ describe('Central de Inteligencia (/dashboard)', () => {
   });
 
   it('abas futuras nao exibem dados ficticios nem consultam a API', () => {
-    searchParams = new URLSearchParams('aba=fleet');
+    searchParams = new URLSearchParams('aba=costs');
     renderPage();
-    expect(screen.getByText('Frota chega à Central no BI 4')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Gestão da frota/ })).toHaveAttribute('href', '/operations/fleet');
+    expect(screen.getByText('Custos chega à Central no BI 5')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Custos da frota/ })).toHaveAttribute('href', '/operations/fleet/costs');
     expect(getKpiSummaryMock).not.toHaveBeenCalled();
   });
 
@@ -380,6 +386,10 @@ const SERIES_NAMES: Record<string, string> = {
   operating_cost: 'Despesas operacionais',
   operating_result: 'Resultado operacional',
   operating_margin: 'Margem operacional',
+  fleet_utilization: 'Utilizacao da frota',
+  fleet_availability: 'Disponibilidade da frota',
+  idle_hours: 'Tempo ocioso',
+  trips_completed: 'Viagens concluidas',
 };
 
 function seriesFor(id: string, values: Array<number | null>, unit: KpiSeriesEntity['unit'] = 'BRL'): KpiSeriesEntity {
@@ -584,5 +594,214 @@ describe('Central -- aba Financeiro (BI 3)', () => {
     await screen.findByRole('article', { name: 'Viagens concluidas' });
     expect(getKpiSeriesMock).not.toHaveBeenCalled();
     expect(getKpiBreakdownMock).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// BI 4 -- aba Frota
+// ============================================================================
+function buildFleetSeries(): KpiSeriesResponseEntity {
+  const base = buildSeries();
+  return {
+    ...base,
+    series: [
+      seriesFor('fleet_utilization', [55, 60, 62.5], 'PERCENT'),
+      seriesFor('fleet_availability', [90, 92, 95.8], 'PERCENT'),
+      seriesFor('idle_hours', [1400, 1300, 1200], 'HOURS'),
+      seriesFor('trips_completed', [1100, 1200, 1284], 'COUNT'),
+    ],
+  };
+}
+
+function scopedFleetSummary(): KpiSummaryEntity {
+  const summary = buildSummary();
+  summary.scope = { ...summary.scope, vehicleId: 'v1' };
+  summary.kpis = summary.kpis.map((k) => (k.id === 'fleet_utilization' ? { ...k, value: 40 } : k));
+  return summary;
+}
+
+function vehicleBreakdownItem(
+  key: string | null,
+  label: string,
+  value: number | null,
+  unavailableReason: string | null = null,
+  share: number | null = null,
+  recordCount = 1,
+) {
+  return { key, label, value, unavailableReason, share, recordCount };
+}
+
+const FLEET_VEHICLE_ROWS: Record<string, ReturnType<typeof vehicleBreakdownItem>[]> = {
+  fleet_utilization: [
+    vehicleBreakdownItem('v1', 'AAA1111', 70),
+    vehicleBreakdownItem('v2', 'BBB2222', null, 'Veiculo fora de operacao (status atual) ou fora do periodo de cadastro no intervalo pedido.'),
+  ],
+  fleet_availability: [vehicleBreakdownItem('v1', 'AAA1111', 96), vehicleBreakdownItem('v2', 'BBB2222', null, 'Veiculo fora de operacao.')],
+  idle_hours: [vehicleBreakdownItem('v1', 'AAA1111', 400, null, 33.3, 60), vehicleBreakdownItem('v2', 'BBB2222', 800, null, 66.7, 40)],
+  trips_completed: [vehicleBreakdownItem('v1', 'AAA1111', 6), vehicleBreakdownItem('v2', 'BBB2222', 4)],
+  distance_km: [vehicleBreakdownItem('v1', 'AAA1111', 5000), vehicleBreakdownItem('v2', 'BBB2222', 3000)],
+};
+
+function fleetVehicleBreakdown(kpiId: string, fleetId?: string): KpiBreakdownEntity {
+  return {
+    kpiId,
+    dimension: 'vehicle',
+    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null },
+    period: PERIOD,
+    total: kpiId === 'fleet_utilization' || kpiId === 'fleet_availability' ? 62.5 : null,
+    items: FLEET_VEHICLE_ROWS[kpiId] ?? [],
+    others: null,
+  };
+}
+
+function fleetVehiclesList() {
+  return { items: [{ id: 'v1', plate: 'AAA1111', brand: 'Volvo', model: 'FH' }], meta: { total: 1, page: 1, pageSize: 20 } };
+}
+
+describe('Central -- aba Frota (BI 4)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getKpiSeriesMock.mockReset();
+    getKpiBreakdownMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=fleet');
+    getKpiSummaryMock.mockImplementation(async (query: { vehicleId?: string; fleetId?: string }) =>
+      query.vehicleId || query.fleetId ? scopedFleetSummary() : buildSummary(),
+    );
+    getKpiSeriesMock.mockResolvedValue(buildFleetSeries());
+    getKpiBreakdownMock.mockImplementation(async (query: { kpiId: string; fleetId?: string }) => fleetVehicleBreakdown(query.kpiId, query.fleetId));
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('resumo com os 5 KPIs de frota, do mesmo summary das outras abas quando sem filtro', async () => {
+    renderPage();
+    for (const name of ['Utilizacao da frota', 'Disponibilidade da frota', 'Tempo ocioso', 'Viagens concluidas', 'Distancia percorrida']) {
+      expect(await screen.findByRole('article', { name })).toBeInTheDocument();
+    }
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('selecionar um veiculo dispara um summary escopado; limpar o filtro volta ao summary global', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByRole('article', { name: 'Utilizacao da frota' })).getByText('62,5')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2));
+    const calls = getKpiSummaryMock.mock.calls as [{ vehicleId?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ vehicleId: 'v1' });
+    await waitFor(() => expect(within(screen.getByRole('article', { name: 'Utilizacao da frota' })).getByText('40,0')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Trocar selecao' }));
+    await waitFor(() => expect(within(screen.getByRole('article', { name: 'Utilizacao da frota' })).getByText('62,5')).toBeInTheDocument());
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('composicao do tempo mostra "Não registrado / cobertura insuficiente", nunca rotula como ocioso', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+    expect(await screen.findByText('Não registrado / cobertura insuficiente')).toBeInTheDocument();
+    expect(screen.queryByText('Sem registro de operação')).not.toBeInTheDocument();
+  });
+
+  it('tabela por veiculo: UNAVAILABLE nunca vira 0; busca e ordenacao funcionam', async () => {
+    renderPage();
+    const table = await screen.findByRole('table');
+    await waitFor(() => expect(within(table).getByText('AAA1111')).toBeInTheDocument());
+    expect(within(table).getByText('BBB2222')).toBeInTheDocument();
+    const row = within(table).getByText('BBB2222').closest('tr') as HTMLElement;
+    expect(row).toHaveTextContent('—');
+    expect(row).not.toHaveTextContent(/^0%$/);
+
+    await userEvent.type(screen.getByPlaceholderText('Buscar por placa...'), 'BBB');
+    await waitFor(() => expect(within(table).queryByText('AAA1111')).not.toBeInTheDocument());
+    expect(within(table).getByText('BBB2222')).toBeInTheDocument();
+  });
+
+  it('filtrar por 1 veiculo esconde a tabela por veiculo e explica o motivo', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('table');
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+    await waitFor(() => expect(screen.queryByRole('table')).not.toBeInTheDocument());
+    expect(screen.getByText('Filtro já restrito a 1 veículo')).toBeInTheDocument();
+  });
+
+  it('drill-down dos 5 cards de frota para as telas existentes', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+    expect(within(screen.getByRole('article', { name: 'Utilizacao da frota' })).getByRole('link', { name: /Ver frota/ })).toHaveAttribute(
+      'href',
+      '/operations/fleet',
+    );
+    expect(
+      within(screen.getByRole('article', { name: 'Disponibilidade da frota' })).getByRole('link', { name: /Ver frota/ }),
+    ).toHaveAttribute('href', '/operations/fleet');
+    expect(
+      within(screen.getByRole('article', { name: 'Tempo ocioso' })).getByRole('link', { name: /Ver torre de controle/ }),
+    ).toHaveAttribute('href', '/operations/control-tower');
+    expect(within(screen.getByRole('article', { name: 'Viagens concluidas' })).getByRole('link', { name: /Ver viagens/ })).toHaveAttribute(
+      'href',
+      '/trips',
+    );
+    expect(
+      within(screen.getByRole('article', { name: 'Distancia percorrida' })).getByRole('link', { name: /Ver custos/ }),
+    ).toHaveAttribute('href', '/operations/fleet/costs');
+  });
+
+  it('"Como é calculado" funciona nos 5 KPIs de frota', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+    fireEvent.click(screen.getByRole('button', { name: 'Como é calculado: Utilizacao da frota' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('formula de fleet_utilization')).toBeInTheDocument();
+  });
+
+  it('loading, erro e retry do resumo escopado e da evolucao', async () => {
+    getKpiSeriesMock.mockReturnValue(new Promise(() => undefined));
+    const first = renderPage();
+    expect(await screen.findByLabelText('Carregando evolução da frota')).toBeInTheDocument();
+    first.unmount();
+
+    getKpiSeriesMock.mockReset();
+    getKpiSeriesMock.mockRejectedValue(new ApiError(500, 'INTERNAL', 'falha', '/bi/kpis/series'));
+    const second = renderPage();
+    expect(await screen.findByText('Não foi possível carregar a evolução.')).toBeInTheDocument();
+    second.unmount();
+
+    getKpiSeriesMock.mockReset();
+    getKpiSeriesMock.mockResolvedValue(buildFleetSeries());
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    getKpiSummaryMock.mockImplementation(async (query: { vehicleId?: string }) => {
+      if (query.vehicleId) throw new ApiError(500, 'INTERNAL', 'falha', '/bi/kpis/summary');
+      return buildSummary();
+    });
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+    expect(await screen.findByText('Não foi possível carregar os indicadores do filtro.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Tentar novamente/ })).toBeInTheDocument();
+  });
+
+  it('regressao: aba Operacao nao mostra mais o bloco de frota', async () => {
+    searchParams = new URLSearchParams('aba=operation');
+    getKpiSummaryMock.mockReset();
+    getKpiSummaryMock.mockResolvedValue(buildSummary());
+    renderPage();
+    await screen.findByText('Pontualidade');
+    expect(screen.queryByText('Horas da frota no período')).not.toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Distancia percorrida' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Utilizacao da frota' })).not.toBeInTheDocument();
   });
 });
