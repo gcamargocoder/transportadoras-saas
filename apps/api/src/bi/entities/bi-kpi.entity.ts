@@ -327,16 +327,25 @@ export class KpiSeriesResponseEntity {
 // where do KPI, particionado: a soma dos itens + "outros" = valor do KPI.
 // ============================================================================
 export class KpiBreakdownItemEntity {
-  @ApiProperty({ nullable: true, type: String, description: 'Id do cliente; null = receita sem cliente vinculado.' })
+  @ApiProperty({ nullable: true, type: String, description: 'Id do cliente/veiculo; null = sem vinculo (ex: receita sem cliente) ou registro de veiculo removido.' })
   key!: string | null;
 
   @ApiProperty()
   label!: string;
 
-  @ApiProperty()
-  value!: number;
+  @ApiProperty({ nullable: true, type: Number, description: 'null quando o item e UNAVAILABLE -- ver unavailableReason.' })
+  value!: number | null;
 
-  @ApiProperty({ nullable: true, type: Number, description: 'Participacao no total (%); null quando o total e 0.' })
+  @ApiProperty({ nullable: true, type: String })
+  unavailableReason!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      'Participacao no total (%). null quando o total e 0, o item e UNAVAILABLE, ou o KPI nao e somavel entre itens ' +
+      '(fleet_utilization/fleet_availability, ambos em PERCENT: cada item ja e uma razao propria).',
+  })
   share!: number | null;
 
   @ApiProperty()
@@ -347,8 +356,8 @@ export class KpiBreakdownEntity {
   @ApiProperty()
   kpiId!: string;
 
-  @ApiProperty({ enum: ['customer'] })
-  dimension!: 'customer';
+  @ApiProperty({ enum: ['customer', 'vehicle'] })
+  dimension!: 'customer' | 'vehicle';
 
   @ApiProperty({ type: KpiScopeEntity })
   scope!: KpiScopeEntity;
@@ -356,12 +365,23 @@ export class KpiBreakdownEntity {
   @ApiProperty({ type: KpiPeriodEntity })
   period!: KpiPeriodEntity;
 
-  @ApiProperty({ description: 'Valor do KPI no periodo (= soma de items + others).' })
-  total!: number;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description:
+      'Para KPIs somaveis entre itens (revenue, idle_hours, trips_completed, distance_km) = soma de items + others. ' +
+      'Para razoes (fleet_utilization/fleet_availability) e o valor OFICIAL do KPI no periodo, calculado pela mesma ' +
+      'formula do catalogo -- nunca a soma/media dos itens. null quando o KPI esta UNAVAILABLE no periodo inteiro.',
+  })
+  total!: number | null;
 
   @ApiProperty({ type: [KpiBreakdownItemEntity] })
   items!: KpiBreakdownItemEntity[];
 
-  @ApiProperty({ type: KpiBreakdownItemEntity, nullable: true, description: 'Demais valores fora do limite pedido.' })
+  @ApiProperty({
+    type: KpiBreakdownItemEntity,
+    nullable: true,
+    description: 'Demais valores fora do limite pedido. Sempre null para fleet_utilization/fleet_availability (nao existe soma/media valida de "restante" para uma razao).',
+  })
   others!: KpiBreakdownItemEntity | null;
 }

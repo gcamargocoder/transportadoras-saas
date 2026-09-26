@@ -136,7 +136,10 @@ export class BiKpiSeriesQueryDto extends BiKpiScopeQueryDto {
   comparison?: SeriesComparisonMode;
 }
 
-export const BREAKDOWN_DIMENSIONS = ['customer'] as const;
+// BI 4 -- 'vehicle' cobre os 5 KPIs de frota (fleet_utilization,
+// fleet_availability, idle_hours, trips_completed, distance_km).
+export const BREAKDOWN_DIMENSIONS = ['customer', 'vehicle'] as const;
+export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
 
 export class BiKpiBreakdownQueryDto extends BiKpiScopeQueryDto {
   @ApiProperty({ example: 'revenue' })
@@ -145,13 +148,18 @@ export class BiKpiBreakdownQueryDto extends BiKpiScopeQueryDto {
 
   @ApiProperty({ enum: BREAKDOWN_DIMENSIONS })
   @IsIn(BREAKDOWN_DIMENSIONS, { message: 'dimension invalida.' })
-  dimension!: (typeof BREAKDOWN_DIMENSIONS)[number];
+  dimension!: BreakdownDimension;
 
-  @ApiPropertyOptional({ default: 5, minimum: 1, maximum: 20 })
+  @ApiPropertyOptional({
+    default: 5,
+    minimum: 1,
+    maximum: 500,
+    description: 'Teto maior que o de customer (20) para suportar a tabela investigativa por veiculo (BI 4), que nao trunca em "outros".',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(20)
+  @Max(500)
   limit = 5;
 }
