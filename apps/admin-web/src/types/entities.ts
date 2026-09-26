@@ -4392,17 +4392,18 @@ export interface KpiSeriesResponseEntity {
 export interface KpiBreakdownItemEntity {
   key: string | null;
   label: string;
-  value: number;
+  value: number | null;
+  unavailableReason: string | null;
   share: number | null;
   recordCount: number;
 }
 
 export interface KpiBreakdownEntity {
   kpiId: string;
-  dimension: 'customer';
+  dimension: 'customer' | 'vehicle';
   scope: KpiScopeEntity;
   period: KpiPeriodEntity;
-  total: number;
+  total: number | null;
   items: KpiBreakdownItemEntity[];
   others: KpiBreakdownItemEntity | null;
 }

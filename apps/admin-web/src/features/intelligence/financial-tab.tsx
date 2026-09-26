@@ -249,7 +249,7 @@ function RevenueByCustomer({ range }: { range: PeriodRange }): JSX.Element {
     return <EmptyState title="Sem receita no período" description="Nenhuma receita de viagem registrada no período." />;
   }
   const rows = data.others ? [...data.items, data.others] : data.items;
-  const max = Math.max(...rows.map((r) => r.value));
+  const max = Math.max(...rows.map((r) => r.value ?? 0));
 
   return (
     <ul className="flex flex-col gap-3 text-sm" aria-label="Receita por cliente">
@@ -271,7 +271,7 @@ function RevenueByCustomer({ range }: { range: PeriodRange }): JSX.Element {
             </span>
           </div>
           <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-muted">
-            <div className="h-full rounded-full bg-brand-500" style={{ width: `${max > 0 ? (row.value / max) * 100 : 0}%` }} />
+            <div className="h-full rounded-full bg-brand-500" style={{ width: `${max > 0 ? ((row.value ?? 0) / max) * 100 : 0}%` }} />
           </div>
         </li>
       ))}

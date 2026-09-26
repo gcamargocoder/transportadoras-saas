@@ -60,7 +60,7 @@ export interface BiKpiSeriesQuery extends BiKpiScopeQuery {
 
 export interface BiKpiBreakdownQuery extends BiKpiScopeQuery {
   kpiId: string;
-  dimension: 'customer';
+  dimension: 'customer' | 'vehicle';
   limit?: number | undefined;
 }
 

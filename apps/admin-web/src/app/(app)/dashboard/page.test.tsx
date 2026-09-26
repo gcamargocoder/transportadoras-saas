@@ -423,10 +423,10 @@ function buildBreakdown(): KpiBreakdownEntity {
     period: PERIOD,
     total: 452300,
     items: [
-      { key: 'c1', label: 'Atacadao Sul', value: 300000, share: 66.3, recordCount: 40 },
-      { key: null, label: 'Sem cliente', value: 52300, share: 11.6, recordCount: 9 },
+      { key: 'c1', label: 'Atacadao Sul', value: 300000, unavailableReason: null, share: 66.3, recordCount: 40 },
+      { key: null, label: 'Sem cliente', value: 52300, unavailableReason: null, share: 11.6, recordCount: 9 },
     ],
-    others: { key: null, label: 'Demais (3)', value: 100000, share: 22.1, recordCount: 12 },
+    others: { key: null, label: 'Demais (3)', value: 100000, unavailableReason: null, share: 22.1, recordCount: 12 },
   };
 }
 

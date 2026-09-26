@@ -21,7 +21,7 @@ export function FleetTimeBand({ kpi }: { kpi: KpiResultEntity | undefined }): JS
     { key: 'trip', label: 'Em viagem', hours: trip, className: 'bg-brand-600' },
     { key: 'maintenance', label: 'Em manutenção', hours: maintenance, className: 'bg-warning-500' },
     { key: 'idle', label: 'Ocioso entre viagens', hours: idle, className: 'bg-slate-400' },
-    { key: 'unclassified', label: 'Sem registro de operação', hours: unclassified, className: 'bg-slate-200' },
+    { key: 'unclassified', label: 'Não registrado / cobertura insuficiente', hours: unclassified, className: 'bg-slate-200' },
   ];
 
   return (
