@@ -311,10 +311,10 @@ describe('Central de Inteligencia (/dashboard)', () => {
   });
 
   it('abas futuras nao exibem dados ficticios nem consultam a API', () => {
-    searchParams = new URLSearchParams('aba=deadlines');
+    searchParams = new URLSearchParams('aba=occurrences');
     renderPage();
-    expect(screen.getByText('Prazos chega à Central no BI 6')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Entregas/ })).toHaveAttribute('href', '/operations/deliveries');
+    expect(screen.getByText('Ocorrências chega à Central no BI 8')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Painel de ocorrências/ })).toHaveAttribute('href', '/operations/fleet/occurrences');
     expect(getKpiSummaryMock).not.toHaveBeenCalled();
   });
 
@@ -390,6 +390,9 @@ const SERIES_NAMES: Record<string, string> = {
   fleet_availability: 'Disponibilidade da frota',
   idle_hours: 'Tempo ocioso',
   trips_completed: 'Viagens concluidas',
+  on_time_delivery_rate: 'Entregas no prazo',
+  occurrences_total: 'Ocorrencias',
+  occurrences_critical: 'Ocorrencias criticas',
 };
 
 function seriesFor(id: string, values: Array<number | null>, unit: KpiSeriesEntity['unit'] = 'BRL'): KpiSeriesEntity {
@@ -1018,5 +1021,146 @@ describe('Central -- aba Custos (BI 5)', () => {
     for (const name of ['Receita', 'Despesas operacionais', 'Resultado operacional', 'Margem operacional', 'Custo por km', 'Receita por km']) {
       expect(await screen.findByRole('article', { name })).toBeInTheDocument();
     }
+  });
+});
+
+// ============================================================================
+// BI 6 -- aba Prazos
+// ============================================================================
+const DEADLINE_VEHICLE_ROWS: Record<string, ReturnType<typeof vehicleBreakdownItem>[]> = {
+  deliveries_completed: [vehicleBreakdownItem('v1', 'AAA1111', 3), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  on_time_delivery_rate: [
+    vehicleBreakdownItem('v1', 'AAA1111', 50),
+    vehicleBreakdownItem(
+      'v2',
+      'BBB2222',
+      null,
+      'Nenhuma entrega concluida no periodo com previsao de chegada (plannedArrival) para este veiculo.',
+    ),
+  ],
+  occurrences_total: [vehicleBreakdownItem('v1', 'AAA1111', 1), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  occurrences_critical: [vehicleBreakdownItem('v1', 'AAA1111', 1), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+};
+
+function deadlineVehicleBreakdown(kpiId: string, fleetId?: string): KpiBreakdownEntity {
+  return {
+    kpiId,
+    dimension: 'vehicle',
+    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null },
+    period: PERIOD,
+    total: kpiId === 'on_time_delivery_rate' ? 91.2 : null,
+    items: DEADLINE_VEHICLE_ROWS[kpiId] ?? [],
+    others: null,
+  };
+}
+
+function scopedDeadlinesSummary(): KpiSummaryEntity {
+  const summary = financialSummary();
+  summary.scope = { ...summary.scope, vehicleId: 'v1' };
+  summary.kpis = summary.kpis.map((k) => (k.id === 'on_time_delivery_rate' ? { ...k, value: 50 } : k));
+  return summary;
+}
+
+function deadlinesSeries(): KpiSeriesResponseEntity {
+  const base = buildSeries();
+  return {
+    ...base,
+    series: [
+      seriesFor('on_time_delivery_rate', [88, 90, 91.2], 'PERCENT'),
+      seriesFor('occurrences_total', [40, 45, 47], 'COUNT'),
+      seriesFor('occurrences_critical', [2, 3, 3], 'COUNT'),
+    ],
+  };
+}
+
+describe('Central -- aba Prazos (BI 6)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getKpiSeriesMock.mockReset();
+    getKpiBreakdownMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=deadlines');
+    getKpiSummaryMock.mockImplementation(async (query: { vehicleId?: string; fleetId?: string }) =>
+      query.vehicleId || query.fleetId ? scopedDeadlinesSummary() : financialSummary(),
+    );
+    getKpiSeriesMock.mockResolvedValue(deadlinesSeries());
+    getKpiBreakdownMock.mockImplementation(async (query: { kpiId: string; fleetId?: string }) => deadlineVehicleBreakdown(query.kpiId, query.fleetId));
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('resumo com pontualidade e os 4 KPIs de volume/ocorrencias, do mesmo summary das outras abas quando sem filtro', async () => {
+    renderPage();
+    for (const name of ['Entregas realizadas', 'Viagens concluidas', 'Ocorrencias', 'Ocorrencias criticas']) {
+      expect(await screen.findByRole('article', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByText('Pontualidade')).toBeInTheDocument();
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('onde devo investigar mostra distancia/custo/receita do mesmo summary', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Entregas realizadas' });
+    expect(screen.getByRole('article', { name: 'Distancia percorrida' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Despesas operacionais' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Receita' })).toBeInTheDocument();
+  });
+
+  it('selecionar um veiculo dispara um summary escopado; limpar o filtro volta ao summary global', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByText('Pontualidade');
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('91,2%')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('50,0%')).toBeInTheDocument(), { timeout: 3000 });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Trocar selecao' }));
+    await waitFor(() => expect(screen.getByText('91,2%')).toBeInTheDocument(), { timeout: 3000 });
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('tabela por veiculo: on_time_delivery_rate UNAVAILABLE nunca vira 0%; busca funciona', async () => {
+    renderPage();
+    const table = await screen.findByRole('table');
+    await waitFor(() => expect(within(table).getByText('AAA1111')).toBeInTheDocument());
+    const row = within(table).getByText('BBB2222').closest('tr') as HTMLElement;
+    expect(row).toHaveTextContent('—');
+    expect(row).not.toHaveTextContent(/^0%$/);
+    await userEvent.type(screen.getByPlaceholderText('Buscar por placa...'), 'BBB');
+    await waitFor(() => expect(within(table).queryByText('AAA1111')).not.toBeInTheDocument());
+  });
+
+  it('filtrar por 1 veiculo esconde a tabela por veiculo e explica o motivo', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('table');
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+    await waitFor(() => expect(screen.queryByRole('table')).not.toBeInTheDocument());
+    expect(screen.getByText('Filtro já restrito a 1 veículo')).toBeInTheDocument();
+  });
+
+  it('evolucao mostra grafico de pontualidade e de ocorrencias', async () => {
+    renderPage();
+    await screen.findByText('Pontualidade');
+    expect(await screen.findByText('Ocorrências')).toBeInTheDocument();
+  });
+
+  it('regressao: aba Operacao continua mostrando o painel de pontualidade apos a extracao para on-time-panel', async () => {
+    searchParams = new URLSearchParams('aba=operation');
+    getKpiSummaryMock.mockReset();
+    getKpiSummaryMock.mockResolvedValue(buildSummary());
+    renderPage();
+    expect(await screen.findByText('Pontualidade')).toBeInTheDocument();
+    expect(screen.getByText('Cobertura da métrica')).toBeInTheDocument();
   });
 });

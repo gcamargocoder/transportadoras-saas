@@ -231,6 +231,15 @@ export class BiKpisService {
           return this.breakdown.otherCostByVehicle(tenantId, scope, period, limit);
         case 'cost_per_km':
           return this.breakdown.costPerKmByVehicle(tenantId, scope, period, limit);
+        // BI 6 -- prazos/nivel de servico por veiculo.
+        case 'deliveries_completed':
+          return this.breakdown.deliveriesCompletedByVehicle(tenantId, scope, period, limit);
+        case 'on_time_delivery_rate':
+          return this.breakdown.onTimeDeliveryRateByVehicle(tenantId, scope, period, limit);
+        case 'occurrences_total':
+          return this.breakdown.occurrencesTotalByVehicle(tenantId, scope, period, limit);
+        case 'occurrences_critical':
+          return this.breakdown.occurrencesCriticalByVehicle(tenantId, scope, period, limit);
       }
     }
     throw new BadRequestException(`Recorte por ${dimension} nao disponivel para o KPI ${kpiId}.`);

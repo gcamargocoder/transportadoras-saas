@@ -881,4 +881,70 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       await getBreakdown(a.auth, { ...JAN, kpiId: 'operating_margin', dimension: 'vehicle' }).expect(400);
     });
   });
+
+  describe('recorte por veiculo dos prazos (BI 6)', () => {
+    const JAN = JANUARY;
+    let second: SecondVehicle;
+
+    beforeAll(async () => {
+      second = await seedSecondVehicle(a);
+    }, 60000);
+
+    function getBreakdown(auth: string, query: Record<string, string>) {
+      return request(app.getHttpServer()).get('/api/v1/bi/kpis/breakdown').query(query).set('Authorization', auth);
+    }
+
+    it('deliveries_completed: soma dos itens = valor do summary', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'deliveries_completed', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'deliveries_completed' }).expect(200),
+      ]);
+      const total = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(total).toBe(kpi(summary.body, 'deliveries_completed').value);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId)).toMatchObject({ value: 3 });
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === second.vehicleId)).toMatchObject({ value: 0 });
+    });
+
+    it('on_time_delivery_rate: total = valor oficial do summary, share sempre null', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'on_time_delivery_rate', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'on_time_delivery_rate' }).expect(200),
+      ]);
+      expect(breakdown.body.data.total).toBeCloseTo(kpi(summary.body, 'on_time_delivery_rate').value ?? NaN, 5);
+      expect(breakdown.body.data.others).toBeNull();
+      const row = breakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId);
+      expect(row.value).toBeCloseTo(50, 5);
+      expect(row.share).toBeNull();
+    });
+
+    it('veiculo sem entrega com previsao: UNAVAILABLE, nunca 0% inventado', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'on_time_delivery_rate', dimension: 'vehicle' }).expect(200);
+      const row = res.body.data.items.find((i: { key: string }) => i.key === second.vehicleId);
+      expect(row.value).toBeNull();
+      expect(row.unavailableReason).toMatch(/previsao de chegada/i);
+    });
+
+    it('occurrences_total/occurrences_critical: soma dos itens = valor do summary', async () => {
+      const [totalBreakdown, criticalBreakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'occurrences_total', dimension: 'vehicle' }).expect(200),
+        getBreakdown(a.auth, { ...JAN, kpiId: 'occurrences_critical', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'occurrences_total,occurrences_critical' }).expect(200),
+      ]);
+      const totalSum = totalBreakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      const criticalSum = criticalBreakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(totalSum).toBe(kpi(summary.body, 'occurrences_total').value);
+      expect(criticalSum).toBe(kpi(summary.body, 'occurrences_critical').value);
+      expect(totalBreakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId)).toMatchObject({ value: 1 });
+    });
+
+    it('filtro por veiculo: deliveries_completed recorta para 1 unico item, igual ao summary escopado', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'deliveries_completed', dimension: 'vehicle', vehicleId: a.vehicleId }).expect(200);
+      expect(res.body.data.items).toEqual([expect.objectContaining({ key: a.vehicleId, value: 3 })]);
+    });
+
+    it('isolamento: recorte de B nunca mostra veiculos de A', async () => {
+      const res = await getBreakdown(b.auth, { ...JAN, kpiId: 'deliveries_completed', dimension: 'vehicle' }).expect(200);
+      expect(res.body.data.items.every((i: { key: string | null }) => i.key !== a.vehicleId && i.key !== second.vehicleId)).toBe(true);
+    });
+  });
 });

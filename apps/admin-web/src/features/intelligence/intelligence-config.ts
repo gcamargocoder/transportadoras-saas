@@ -35,15 +35,7 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'financial', label: 'Financeiro' },
   { value: 'fleet', label: 'Frota' },
   { value: 'costs', label: 'Custos' },
-  {
-    value: 'deadlines',
-    label: 'Prazos',
-    upcoming: {
-      phase: 'BI 6',
-      summary: 'Pontualidade por cliente, rota e motorista, com causas de atraso.',
-      screens: [{ label: 'Entregas', href: '/operations/deliveries' }],
-    },
-  },
+  { value: 'deadlines', label: 'Prazos' },
   {
     value: 'occurrences',
     label: 'Ocorrências',

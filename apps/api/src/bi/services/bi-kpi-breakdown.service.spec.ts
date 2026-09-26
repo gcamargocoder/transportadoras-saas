@@ -269,4 +269,119 @@ describe('BiKpiBreakdownService -- recorte por veiculo (BI 4)', () => {
     expect(result.total).toBeNull();
     expect(result.others).toBeNull();
   });
+
+  describe('prazos por veiculo (BI 6)', () => {
+    const vehicles = [
+      { id: 'v1', plate: 'AAA1111' },
+      { id: 'v2', plate: 'BBB2222' },
+    ];
+
+    async function buildDeadlineService(prismaOverrides: Record<string, unknown> = {}) {
+      const prisma = { vehicle: { findMany: jest.fn().mockResolvedValue(vehicles) }, ...prismaOverrides };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BiKpiBreakdownService,
+          { provide: PrismaService, useValue: prisma },
+          { provide: FleetOperationsMetricsService, useValue: {} },
+          { provide: FleetIdleTimeService, useValue: { loadVehicleIdleData: jest.fn() } },
+        ],
+      }).compile();
+      return moduleRef.get(BiKpiBreakdownService);
+    }
+
+    it('deliveries_completed: soma dos itens = numero de entregas retornadas pelo where; sem composicao vira "Sem veiculo"', async () => {
+      const service = await buildDeadlineService({
+        tripDeliveryStop: {
+          findMany: jest.fn().mockResolvedValue([
+            { trip: { composition: { vehicleId: 'v1' } } },
+            { trip: { composition: { vehicleId: 'v1' } } },
+            { trip: { composition: null } },
+          ]),
+        },
+      });
+      const result = await service.deliveriesCompletedByVehicle('t1', {}, period, 10);
+      expect(result.total).toBe(3);
+      expect(result.items.find((i) => i.key === 'v1')?.value).toBe(2);
+      expect(result.items.find((i) => i.key === 'v2')?.value).toBe(0);
+      expect(result.items.find((i) => i.key === null && i.label === 'Sem veiculo')).toMatchObject({ value: 1 });
+    });
+
+    it('deliveries_completed: entrega de veiculo removido do escopo atual nunca some do total', async () => {
+      const service = await buildDeadlineService({
+        tripDeliveryStop: {
+          findMany: jest.fn().mockResolvedValue([
+            { trip: { composition: { vehicleId: 'v1' } } },
+            { trip: { composition: { vehicleId: 'removido' } } },
+          ]),
+        },
+      });
+      const result = await service.deliveriesCompletedByVehicle('t1', {}, period, 10);
+      expect(result.total).toBe(2);
+      expect(result.items.find((i) => i.key === null && i.label === 'Veiculo removido')).toMatchObject({ value: 1 });
+    });
+
+    it('on_time_delivery_rate: percentual por veiculo; total = valor oficial do catalogo, share sempre null', async () => {
+      const service = await buildDeadlineService({
+        tripDeliveryStop: {
+          count: jest.fn().mockResolvedValue(5),
+          findMany: jest.fn().mockResolvedValue([
+            {
+              plannedArrival: new Date('2026-03-02T10:00:00Z'),
+              actualArrival: new Date('2026-03-02T09:00:00Z'),
+              deliveredAt: null,
+              trip: { composition: { vehicleId: 'v1' } },
+            },
+            {
+              plannedArrival: new Date('2026-03-02T10:00:00Z'),
+              actualArrival: new Date('2026-03-02T11:00:00Z'),
+              deliveredAt: null,
+              trip: { composition: { vehicleId: 'v1' } },
+            },
+          ]),
+        },
+      });
+      const result = await service.onTimeDeliveryRateByVehicle('t1', {}, period, 10);
+      const v1 = result.items.find((i) => i.key === 'v1')!;
+      expect(v1.value).toBeCloseTo(50, 5);
+      expect(v1.share).toBeNull();
+      expect(result.total).toBeCloseTo(50, 5);
+      expect(result.others).toBeNull();
+    });
+
+    it('on_time_delivery_rate: veiculo sem entrega com previsao fica UNAVAILABLE, nunca 0%', async () => {
+      const service = await buildDeadlineService({
+        tripDeliveryStop: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const result = await service.onTimeDeliveryRateByVehicle('t1', {}, period, 10);
+      const v1 = result.items.find((i) => i.key === 'v1')!;
+      expect(v1.value).toBeNull();
+      expect(v1.unavailableReason).toMatch(/previsao de chegada/i);
+      expect(result.total).toBeNull();
+    });
+
+    it('occurrences_total: soma por veiculo; sem vehicleId vira "Sem veiculo", de veiculo removido vira "Veiculo removido"', async () => {
+      const service = await buildDeadlineService({
+        tripOccurrence: {
+          groupBy: jest.fn().mockResolvedValue([
+            { vehicleId: 'v1', _count: 3 },
+            { vehicleId: null, _count: 1 },
+            { vehicleId: 'removido', _count: 2 },
+          ]),
+        },
+      });
+      const result = await service.occurrencesTotalByVehicle('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'v1')?.value).toBe(3);
+      expect(result.items.find((i) => i.key === 'v2')?.value).toBe(0);
+      expect(result.items.find((i) => i.key === null && i.label === 'Sem veiculo')).toMatchObject({ value: 1 });
+      expect(result.items.find((i) => i.key === null && i.label === 'Veiculo removido')).toMatchObject({ value: 2 });
+      expect(result.total).toBe(6);
+    });
+
+    it('occurrences_critical: aplica o filtro de severidade CRITICAL no where', async () => {
+      const groupBy = jest.fn().mockResolvedValue([{ vehicleId: 'v1', _count: 1 }]);
+      const service = await buildDeadlineService({ tripOccurrence: { groupBy } });
+      await service.occurrencesCriticalByVehicle('t1', {}, period, 10);
+      expect(groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ severity: 'CRITICAL' }) }));
+    });
+  });
 });

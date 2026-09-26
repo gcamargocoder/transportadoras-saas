@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { TripOccurrenceSeverity } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { FleetIdleTimeService } from '../../fleet-operations/services/fleet-idle-time.service';
@@ -8,7 +9,13 @@ import { KpiBreakdownItemEntity } from '../entities/bi-kpi.entity';
 import { EMPTY_SNAPSHOT } from '../kpis/empty-snapshot';
 import { findKpiDefinition } from '../kpis/kpi-catalog';
 import { BiPeriodSnapshot } from '../kpis/kpi.types';
-import { BiScope, buildCompletedTripWhere } from '../utils/bi-where.util';
+import {
+  BiScope,
+  buildCompletedDeliveryWhere,
+  buildCompletedTripWhere,
+  buildOccurrenceWhere,
+  isDeliveredOnTime,
+} from '../utils/bi-where.util';
 import { computeFleetTimeByVehicle, computeFleetTimeTotals, FleetTimeTotals } from '../utils/fleet-time.util';
 import { KpiPeriod } from '../utils/kpi-period.util';
 
@@ -152,6 +159,8 @@ const VEHICLE_OUT_OF_OPERATION =
 const NO_DISTANCE_VEHICLE =
   'Menos de 2 leituras de odometro (abastecimento ou manutencao) no periodo para este veiculo.';
 const REMOVED_VEHICLE_LABEL = 'Veiculo removido';
+const NO_DEADLINE_VEHICLE =
+  'Nenhuma entrega concluida no periodo com previsao de chegada (plannedArrival) para este veiculo.';
 // Trip.composition e opcional no schema (BI 4): uma viagem pode chegar a
 // COMPLETED sem composicao. Reaproveitado no BI 5 para TripExpense/Tire sem
 // vehicleId (despesa geral da empresa ou pneu em estoque no momento da
@@ -350,6 +359,126 @@ export class BiKpiBreakdownService {
       raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphanKm, recordCount: orphanReadings, unavailableReason: null });
     }
     return summableVehicleBreakdown(raw, limit);
+  }
+
+  // --------------------------------------------------------------------------
+  // BI 6 -- prazos/nivel de servico por veiculo
+  // --------------------------------------------------------------------------
+
+  async deliveriesCompletedByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, stops] = await Promise.all([
+      this.listScopedVehicles(tenantId, scope),
+      this.prisma.tripDeliveryStop.findMany({
+        where: buildCompletedDeliveryWhere(tenantId, scope, period),
+        select: { trip: { select: { composition: { select: { vehicleId: true } } } } },
+      }),
+    ]);
+    const countByVehicle = new Map<string, number>();
+    let noCompositionCount = 0;
+    for (const stop of stops) {
+      const vehicleId = stop.trip.composition?.vehicleId;
+      if (!vehicleId) {
+        noCompositionCount += 1;
+        continue;
+      }
+      countByVehicle.set(vehicleId, (countByVehicle.get(vehicleId) ?? 0) + 1);
+    }
+    const raw: RawVehicleRow[] = vehicles.map((v) => {
+      const count = countByVehicle.get(v.vehicleId) ?? 0;
+      countByVehicle.delete(v.vehicleId);
+      return { vehicleId: v.vehicleId, label: v.plate, value: count, recordCount: count, unavailableReason: null };
+    });
+    const orphan = [...countByVehicle.values()].reduce((sum, c) => sum + c, 0);
+    if (orphan > 0) raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphan, recordCount: orphan, unavailableReason: null });
+    if (noCompositionCount > 0) {
+      raw.push({ vehicleId: null, label: UNASSIGNED_VEHICLE_LABEL, value: noCompositionCount, recordCount: noCompositionCount, unavailableReason: null });
+    }
+    return summableVehicleBreakdown(raw, limit);
+  }
+
+  // Mesmas 2 consultas de BiKpiSnapshotService.collectDeliveries, aqui
+  // tambem projetando o veiculo (via Trip.composition) para agrupar em
+  // memoria por veiculo alem do agregado do periodo.
+  async onTimeDeliveryRateByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const where = buildCompletedDeliveryWhere(tenantId, scope, period);
+    const [vehicles, completed, rows] = await Promise.all([
+      this.listScopedVehicles(tenantId, scope),
+      this.prisma.tripDeliveryStop.count({ where }),
+      this.prisma.tripDeliveryStop.findMany({
+        where: { ...where, plannedArrival: { not: null } },
+        select: {
+          plannedArrival: true,
+          actualArrival: true,
+          deliveredAt: true,
+          trip: { select: { composition: { select: { vehicleId: true } } } },
+        },
+      }),
+    ]);
+
+    const byVehicle = new Map<string, { onTime: number; withDeadline: number }>();
+    let totalOnTime = 0;
+    let totalWithDeadline = 0;
+    for (const row of rows) {
+      if (row.plannedArrival === null) continue;
+      const onTime = isDeliveredOnTime({ plannedArrival: row.plannedArrival, actualArrival: row.actualArrival, deliveredAt: row.deliveredAt });
+      totalWithDeadline += 1;
+      if (onTime) totalOnTime += 1;
+      const vehicleId = row.trip.composition?.vehicleId;
+      if (!vehicleId) continue;
+      const current = byVehicle.get(vehicleId) ?? { onTime: 0, withDeadline: 0 };
+      current.withDeadline += 1;
+      if (onTime) current.onTime += 1;
+      byVehicle.set(vehicleId, current);
+    }
+
+    const items = vehicles
+      .map((v) => {
+        const stats = byVehicle.get(v.vehicleId);
+        const value = stats && stats.withDeadline > 0 ? (stats.onTime / stats.withDeadline) * 100 : null;
+        return item(v.vehicleId, v.plate, value, stats?.withDeadline ?? 0, null, value === null ? NO_DEADLINE_VEHICLE : null);
+      })
+      .sort(byValueDesc);
+    const snapshot: Partial<BiPeriodSnapshot> = { deliveries: { completed, withDeadline: totalWithDeadline, onTime: totalOnTime } };
+    return { total: this.catalogTotal('on_time_delivery_rate', snapshot, period), items: items.slice(0, limit), others: null };
+  }
+
+  private async occurrencesByVehicle(
+    tenantId: string,
+    scope: BiScope,
+    period: KpiPeriod,
+    limit: number,
+    severity?: TripOccurrenceSeverity,
+  ): Promise<BreakdownResult> {
+    const [vehicles, groups] = await Promise.all([
+      this.listScopedVehicles(tenantId, scope),
+      this.prisma.tripOccurrence.groupBy({ by: ['vehicleId'], where: buildOccurrenceWhere(tenantId, scope, period, severity), _count: true }),
+    ]);
+    const countByVehicle = new Map<string, number>();
+    let unassigned = 0;
+    for (const g of groups) {
+      if (g.vehicleId === null) {
+        unassigned += g._count;
+        continue;
+      }
+      countByVehicle.set(g.vehicleId, g._count);
+    }
+    const raw: RawVehicleRow[] = vehicles.map((v) => {
+      const count = countByVehicle.get(v.vehicleId) ?? 0;
+      countByVehicle.delete(v.vehicleId);
+      return { vehicleId: v.vehicleId, label: v.plate, value: count, recordCount: count, unavailableReason: null };
+    });
+    const orphan = [...countByVehicle.values()].reduce((sum, c) => sum + c, 0);
+    if (orphan > 0) raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphan, recordCount: orphan, unavailableReason: null });
+    if (unassigned > 0) raw.push({ vehicleId: null, label: UNASSIGNED_VEHICLE_LABEL, value: unassigned, recordCount: unassigned, unavailableReason: null });
+    return summableVehicleBreakdown(raw, limit);
+  }
+
+  async occurrencesTotalByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    return this.occurrencesByVehicle(tenantId, scope, period, limit);
+  }
+
+  async occurrencesCriticalByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    return this.occurrencesByVehicle(tenantId, scope, period, limit, TripOccurrenceSeverity.CRITICAL);
   }
 
   // --------------------------------------------------------------------------
