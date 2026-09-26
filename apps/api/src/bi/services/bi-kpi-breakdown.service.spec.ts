@@ -100,4 +100,66 @@ describe('BiKpiBreakdownService -- recorte por veiculo (BI 4)', () => {
     expect(result.items.find((i) => i.key === 'v2')?.unavailableReason).toMatch(/leituras de odometro/i);
     expect(result.total).toBe(500);
   });
+
+  // Achados da revisao final: viagem concluida sem composicao (Trip.composition
+  // e opcional no schema) nunca pode sumir do total -- mesmo padrao de
+  // "Veiculo removido", com rotulo proprio.
+  it('trips_completed: viagem concluida SEM composicao nunca some do total (Trip.composition e opcional)', async () => {
+    const service = await buildService({
+      trip: { findMany: jest.fn().mockResolvedValue([{ composition: { vehicleId: 'v1' } }, { composition: null }]) },
+    });
+    const result = await service.tripsCompletedByVehicle('t1', {}, period, 10);
+    expect(result.total).toBe(2);
+    expect(result.items.find((i) => i.key === null && i.label === 'Sem veiculo')).toMatchObject({ value: 1 });
+  });
+
+  // KPIs somaveis (idle_hours/trips_completed/distance_km) nunca truncam
+  // silenciosamente: limit < numero de veiculos agrupa o resto em "others",
+  // como revenueByCustomer -- soma(items)+others sempre = total.
+  it('trips_completed: limit menor que o numero de veiculos agrupa o resto em "others"', async () => {
+    const service = await buildService();
+    const result = await service.tripsCompletedByVehicle('t1', {}, period, 1);
+    expect(result.items).toHaveLength(1);
+    expect(result.others).not.toBeNull();
+    const itemsSum = result.items.reduce((sum, i) => sum + (i.value ?? 0), 0);
+    expect(itemsSum + (result.others?.value ?? 0)).toBe(result.total);
+  });
+
+  it('idle_hours: limit menor que o numero de veiculos agrupa o resto em "others"', async () => {
+    const service = await buildService();
+    const result = await service.idleHoursByVehicle('t1', {}, period, 1);
+    expect(result.others).not.toBeNull();
+    const itemsSum = result.items.reduce((sum, i) => sum + (i.value ?? 0), 0);
+    expect(itemsSum + (result.others?.value ?? 0)).toBeCloseTo(result.total ?? NaN, 5);
+  });
+
+  it('distance_km: limit menor que o numero de veiculos agrupa o resto em "others"', async () => {
+    const service = await buildService();
+    const result = await service.distanceByVehicle('t1', {}, period, 1);
+    expect(result.others).not.toBeNull();
+    const itemsSum = result.items.reduce((sum, i) => sum + (i.value ?? 0), 0);
+    expect(itemsSum + (result.others?.value ?? 0)).toBe(result.total);
+  });
+
+  // Quando NENHUM veiculo tem dado (o KPI agregado ficaria UNAVAILABLE), o
+  // total do breakdown tem que ser null -- nunca 0 (que pareceria um valor
+  // real de "zero horas ociosas"/"zero km").
+  it('idle_hours: nenhum veiculo com capacidade => total null, nunca 0', async () => {
+    const service = await buildService();
+    const idleTimeAllSold = [{ ...idleTimeData[0], status: 'SOLD' }, idleTimeData[1]];
+    (service as unknown as { idleTime: { loadVehicleIdleData: jest.Mock } }).idleTime.loadVehicleIdleData.mockResolvedValue(idleTimeAllSold);
+    const result = await service.idleHoursByVehicle('t1', {}, period, 10);
+    expect(result.total).toBeNull();
+    expect(result.others).toBeNull();
+  });
+
+  it('distance_km: nenhum veiculo com 2+ leituras => total null, nunca 0', async () => {
+    const service = await buildService();
+    (service as unknown as { fleetMetrics: { computeCostTotals: jest.Mock } }).fleetMetrics.computeCostTotals.mockResolvedValue({
+      distance: { vehicleDistances: new Map(), readingCounts: new Map(), totalDistanceKm: null, odometerReadings: 0 },
+    });
+    const result = await service.distanceByVehicle('t1', {}, period, 10);
+    expect(result.total).toBeNull();
+    expect(result.others).toBeNull();
+  });
 });

@@ -713,6 +713,51 @@ describe('Central -- aba Frota (BI 4)', () => {
     expect(screen.queryByText('Sem registro de operação')).not.toBeInTheDocument();
   });
 
+  // Achado da revisao final: com filtro de veiculo selecionado, o bloco de
+  // composicao do tempo usava o MESMO Map vazio de "sem filtro carregado"
+  // tanto durante o loading do summary escopado quanto no erro dele --
+  // mostrando "sem dado" de forma falsa em vez de esqueleto/erro com retry.
+  it('composicao do tempo: com filtro de veiculo, mostra loading (nunca "sem dado" falso)', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    let resolveSummary: (value: KpiSummaryEntity) => void = () => undefined;
+    getKpiSummaryMock.mockImplementation(async (query: { vehicleId?: string }) => {
+      if (!query.vehicleId) return buildSummary();
+      return new Promise((resolve) => {
+        resolveSummary = resolve;
+      });
+    });
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+
+    expect(await screen.findByLabelText('Carregando indicadores da frota')).toBeInTheDocument();
+    expect(screen.queryByText('Sem dado de tempo de frota no período')).not.toBeInTheDocument();
+
+    resolveSummary(scopedFleetSummary());
+    await waitFor(() => expect(within(screen.getByRole('article', { name: 'Utilizacao da frota' })).getByText('40,0')).toBeInTheDocument());
+  });
+
+  it('composicao do tempo: com filtro de veiculo, mostra erro com retry (nunca "sem dado" falso)', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    getKpiSummaryMock.mockImplementation(async (query: { vehicleId?: string }) => {
+      if (!query.vehicleId) return buildSummary();
+      throw new ApiError(500, 'INTERNAL', 'falha', '/bi/kpis/summary');
+    });
+    renderPage();
+    await screen.findByRole('article', { name: 'Utilizacao da frota' });
+
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+
+    // O resumo e a composicao do tempo dependem do MESMO summary escopado --
+    // os dois mostram erro com retry quando ele falha (nunca so um deles).
+    const errors = await screen.findAllByText('Não foi possível carregar os indicadores do filtro.');
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Sem dado de tempo de frota no período')).not.toBeInTheDocument();
+  });
+
   it('tabela por veiculo: UNAVAILABLE nunca vira 0; busca e ordenacao funcionam', async () => {
     renderPage();
     const table = await screen.findByRole('table');
@@ -790,8 +835,11 @@ describe('Central -- aba Frota (BI 4)', () => {
     await screen.findByRole('article', { name: 'Utilizacao da frota' });
     await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
     await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
-    expect(await screen.findByText('Não foi possível carregar os indicadores do filtro.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Tentar novamente/ })).toBeInTheDocument();
+    // O resumo e a composicao do tempo dependem do MESMO summary escopado --
+    // os dois mostram erro com retry quando ele falha (nunca so um deles).
+    const errors = await screen.findAllByText('Não foi possível carregar os indicadores do filtro.');
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /Tentar novamente/ }).length).toBeGreaterThanOrEqual(1);
   });
 
   it('regressao: aba Operacao nao mostra mais o bloco de frota', async () => {

@@ -809,5 +809,17 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       ]);
       expect(breakdown.body.data.total).toBeCloseTo(kpi(summary.body, 'idle_hours').value ?? NaN, 2);
     });
+
+    // Achado da revisao final: KPI somavel (trips_completed/idle_hours/
+    // distance_km) com limit menor que o numero de veiculos nunca pode
+    // truncar silenciosamente -- o resto entra em "others", como ja acontece
+    // em revenue x customer.
+    it('trips_completed: limit menor que o numero de veiculos agrupa o resto em "others" (soma(items)+others = total)', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'vehicle', limit: '1' }).expect(200);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.others).not.toBeNull();
+      const itemsSum = res.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(itemsSum + res.body.data.others.value).toBe(res.body.data.total);
+    });
   });
 });

@@ -233,18 +233,25 @@ export function FleetTab({
         title="Composição do tempo da frota"
         description="Como as horas dos veículos no escopo se distribuíram: viagem, manutenção, ociosidade e o que não tem registro suficiente para ser classificado."
       >
-        {activeKpis.get('fleet_utilization')?.value != null ? (
-          <Card>
-            <CardBody>
-              <FleetTimeBand kpi={activeKpis.get('fleet_utilization')} />
-            </CardBody>
-          </Card>
-        ) : (
-          <EmptyState
-            title="Sem dado de tempo de frota no período"
-            description="Nenhum veículo com capacidade calculável no escopo e período selecionados."
-          />
+        {hasFilter && scopedSummary.isLoading && (
+          <Skeleton className="h-40 w-full" aria-label="Carregando composição do tempo" />
         )}
+        {hasFilter && scopedSummary.isError && (
+          <ErrorState title="Não foi possível carregar os indicadores do filtro." onRetry={() => scopedSummary.refetch()} />
+        )}
+        {(!hasFilter || scopedSummary.data) &&
+          (activeKpis.get('fleet_utilization')?.value != null ? (
+            <Card>
+              <CardBody>
+                <FleetTimeBand kpi={activeKpis.get('fleet_utilization')} />
+              </CardBody>
+            </Card>
+          ) : (
+            <EmptyState
+              title="Sem dado de tempo de frota no período"
+              description="Nenhum veículo com capacidade calculável no escopo e período selecionados."
+            />
+          ))}
       </Block>
 
       <Block

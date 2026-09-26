@@ -46,6 +46,43 @@ function byValueDesc(a: KpiBreakdownItemEntity, b: KpiBreakdownItemEntity): numb
   return b.value - a.value || a.label.localeCompare(b.label);
 }
 
+interface RawVehicleRow {
+  vehicleId: string | null;
+  label: string;
+  value: number | null;
+  recordCount: number;
+  unavailableReason: string | null;
+}
+
+// BI 4 -- monta o breakdown por veiculo de um KPI SOMAVEL (idle_hours,
+// trips_completed, distance_km): total = soma dos itens com valor -- null
+// (nunca 0) quando NENHUM item tem valor, o mesmo caso em que o KPI agregado
+// ficaria UNAVAILABLE. Respeita "limit" agrupando o resto em "others" (mesmo
+// padrao de revenueByCustomer) -- nunca trunca silenciosamente: soma(items)
+// + others sempre = total.
+function summableVehicleBreakdown(raw: RawVehicleRow[], limit: number): BreakdownResult {
+  const withValue = raw.filter((r) => r.value !== null);
+  const total = withValue.length > 0 ? withValue.reduce((sum, r) => sum + (r.value as number), 0) : null;
+  const items = raw
+    .map((r) => item(r.vehicleId, r.label, r.value, r.recordCount, total, r.unavailableReason))
+    .sort(byValueDesc);
+  const top = items.slice(0, limit);
+  const rest = items.slice(limit);
+  const restWithValue = rest.filter((r) => r.value !== null);
+  const others =
+    rest.length > 0
+      ? item(
+          null,
+          `Demais (${rest.length})`,
+          restWithValue.length > 0 ? restWithValue.reduce((sum, r) => sum + (r.value as number), 0) : null,
+          rest.reduce((sum, r) => sum + r.recordCount, 0),
+          total,
+          restWithValue.length === 0 ? 'Nenhum veiculo restante com dado suficiente no periodo.' : null,
+        )
+      : null;
+  return { total, items: top, others };
+}
+
 // BI 4 -- motivos por veiculo, mesma regra dos KPIs agregados equivalentes
 // (NO_FLEET_CAPACITY/NO_DISTANCE no catalogo), so que aplicada por linha.
 const VEHICLE_OUT_OF_OPERATION =
@@ -53,6 +90,11 @@ const VEHICLE_OUT_OF_OPERATION =
 const NO_DISTANCE_VEHICLE =
   'Menos de 2 leituras de odometro (abastecimento ou manutencao) no periodo para este veiculo.';
 const REMOVED_VEHICLE_LABEL = 'Veiculo removido';
+// Trip.composition e opcional no schema: uma viagem pode chegar a COMPLETED
+// sem composicao (assertCanStart so valida o veiculo QUANDO ha composicao).
+// Essas viagens contam no summary (prisma.trip.count) e nunca podem sumir
+// silenciosamente do breakdown por veiculo.
+const NO_COMPOSITION_LABEL = 'Sem veiculo';
 
 // BI 3 -- receita por cliente. O where e EXATAMENTE o do KPI `revenue`
 // (FleetOperationsMetricsService.buildRevenueSourceWhere); o groupBy so
@@ -164,15 +206,18 @@ export class BiKpiBreakdownService {
 
   async idleHoursByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
     const { vehicles, rows } = await this.loadFleetTimeRows(tenantId, scope, period);
-    const raw = vehicles.map((v) => {
+    const raw: RawVehicleRow[] = vehicles.map((v) => {
       const row = rows.get(v.vehicleId);
-      return { vehicleId: v.vehicleId, label: v.plate, value: row?.considered ? row.idleNetMinutes / 60 : null, segments: row?.idleSegmentsConsidered ?? 0 };
+      const value = row?.considered ? row.idleNetMinutes / 60 : null;
+      return {
+        vehicleId: v.vehicleId,
+        label: v.plate,
+        value,
+        recordCount: row?.idleSegmentsConsidered ?? 0,
+        unavailableReason: value === null ? VEHICLE_OUT_OF_OPERATION : null,
+      };
     });
-    const total = raw.reduce((sum, r) => sum + (r.value ?? 0), 0);
-    const items = raw
-      .map((r) => item(r.vehicleId, r.label, r.value, r.segments, total, r.value === null ? VEHICLE_OUT_OF_OPERATION : null))
-      .sort(byValueDesc);
-    return { total, items: items.slice(0, limit), others: null };
+    return summableVehicleBreakdown(raw, limit);
   }
 
   async tripsCompletedByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
@@ -184,23 +229,30 @@ export class BiKpiBreakdownService {
       }),
     ]);
     const countByVehicle = new Map<string, number>();
+    let noCompositionCount = 0;
     for (const trip of trips) {
       const vehicleId = trip.composition?.vehicleId;
-      if (!vehicleId) continue;
+      // Trip.composition e opcional: viagem concluida sem composicao nunca
+      // pode sumir do total (ver NO_COMPOSITION_LABEL acima).
+      if (!vehicleId) {
+        noCompositionCount += 1;
+        continue;
+      }
       countByVehicle.set(vehicleId, (countByVehicle.get(vehicleId) ?? 0) + 1);
     }
-    const raw: { vehicleId: string | null; label: string; value: number }[] = vehicles.map((v) => {
+    const raw: RawVehicleRow[] = vehicles.map((v) => {
       const count = countByVehicle.get(v.vehicleId) ?? 0;
       countByVehicle.delete(v.vehicleId);
-      return { vehicleId: v.vehicleId, label: v.plate, value: count };
+      return { vehicleId: v.vehicleId, label: v.plate, value: count, recordCount: count, unavailableReason: null };
     });
     // Viagens cujo veiculo saiu do escopo atual (removido) desde entao --
     // nunca descartadas silenciosamente: mesmo padrao de "Sem cliente".
     const orphan = [...countByVehicle.values()].reduce((sum, c) => sum + c, 0);
-    if (orphan > 0) raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphan });
-    const total = raw.reduce((sum, r) => sum + r.value, 0);
-    const items = raw.map((r) => item(r.vehicleId, r.label, r.value, r.value, total)).sort(byValueDesc);
-    return { total, items: items.slice(0, limit), others: null };
+    if (orphan > 0) raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphan, recordCount: orphan, unavailableReason: null });
+    if (noCompositionCount > 0) {
+      raw.push({ vehicleId: null, label: NO_COMPOSITION_LABEL, value: noCompositionCount, recordCount: noCompositionCount, unavailableReason: null });
+    }
+    return summableVehicleBreakdown(raw, limit);
   }
 
   async distanceByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
@@ -210,10 +262,16 @@ export class BiKpiBreakdownService {
     ]);
     const distances = new Map(costs.distance?.vehicleDistances ?? []);
     const readingCounts = costs.distance?.readingCounts ?? new Map<string, number>();
-    const raw: { vehicleId: string | null; label: string; value: number | null; readings: number }[] = vehicles.map((v) => {
+    const raw: RawVehicleRow[] = vehicles.map((v) => {
       const value = distances.get(v.vehicleId) ?? null;
       distances.delete(v.vehicleId);
-      return { vehicleId: v.vehicleId, label: v.plate, value, readings: readingCounts.get(v.vehicleId) ?? 0 };
+      return {
+        vehicleId: v.vehicleId,
+        label: v.plate,
+        value,
+        recordCount: readingCounts.get(v.vehicleId) ?? 0,
+        unavailableReason: value === null ? NO_DISTANCE_VEHICLE : null,
+      };
     });
     // Leituras de veiculo removido do escopo atual -- mesmo padrao acima.
     if (distances.size > 0) {
@@ -223,12 +281,8 @@ export class BiKpiBreakdownService {
         orphanKm += value;
         orphanReadings += readingCounts.get(vehicleId) ?? 0;
       }
-      raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphanKm, readings: orphanReadings });
+      raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphanKm, recordCount: orphanReadings, unavailableReason: null });
     }
-    const total = raw.reduce((sum, r) => sum + (r.value ?? 0), 0);
-    const items = raw
-      .map((r) => item(r.vehicleId, r.label, r.value, r.readings, total, r.value === null ? NO_DISTANCE_VEHICLE : null))
-      .sort(byValueDesc);
-    return { total, items: items.slice(0, limit), others: null };
+    return summableVehicleBreakdown(raw, limit);
   }
 }
