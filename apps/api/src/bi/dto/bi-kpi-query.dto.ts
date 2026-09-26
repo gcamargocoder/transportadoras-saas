@@ -138,7 +138,8 @@ export class BiKpiSeriesQueryDto extends BiKpiScopeQueryDto {
 
 // BI 4 -- 'vehicle' cobre os 5 KPIs de frota (fleet_utilization,
 // fleet_availability, idle_hours, trips_completed, distance_km).
-export const BREAKDOWN_DIMENSIONS = ['customer', 'vehicle'] as const;
+// BI 8 -- 'type'/'severity' cobrem occurrences_total/occurrences_critical.
+export const BREAKDOWN_DIMENSIONS = ['customer', 'vehicle', 'type', 'severity'] as const;
 export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
 
 export class BiKpiBreakdownQueryDto extends BiKpiScopeQueryDto {

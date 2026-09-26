@@ -78,8 +78,9 @@ export class BiKpisController {
       'Recorte de um KPI por dimensao: revenue x customer (BI 3); fleet_utilization/' +
       'fleet_availability/idle_hours/trips_completed/distance_km x vehicle (BI 4); ' +
       'operating_cost/fuel_cost/maintenance_cost/toll_cost/tire_cost/other_cost/cost_per_km x ' +
-      'vehicle (BI 5); ou deliveries_completed/on_time_delivery_rate/occurrences_total/' +
-      'occurrences_critical x vehicle (BI 6). Mesmo where do KPI; para KPIs somaveis, soma dos ' +
+      'vehicle (BI 5); deliveries_completed/on_time_delivery_rate/occurrences_total/' +
+      'occurrences_critical x vehicle (BI 6); ou occurrences_total/occurrences_critical x type, ' +
+      'e occurrences_total x severity (BI 8). Mesmo where do KPI; para KPIs somaveis, soma dos ' +
       'itens + others = valor do KPI -- para razoes (PERCENT/BRL_PER_KM), "total" e o valor ' +
       'oficial do KPI, nao a soma dos itens.',
   })

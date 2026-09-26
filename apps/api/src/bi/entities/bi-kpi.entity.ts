@@ -203,6 +203,21 @@ export class KpiEvidenceRecordEntity {
 
   @ApiProperty({ nullable: true, type: String })
   description!: string | null;
+
+  // BI 8 -- so preenchidos pela fonte TRIP_OCCURRENCE (geolocalizacao real
+  // registrada no momento da ocorrencia; null quando o registro nao tem
+  // coordenadas -- nunca inventadas).
+  @ApiProperty({ nullable: true, type: Number })
+  latitude!: number | null;
+
+  @ApiProperty({ nullable: true, type: Number })
+  longitude!: number | null;
+
+  @ApiProperty({ nullable: true, type: String })
+  locationLabel!: string | null;
+
+  @ApiProperty({ nullable: true, type: String })
+  severity!: string | null;
 }
 
 export class KpiEvidencePageEntity {
@@ -356,8 +371,8 @@ export class KpiBreakdownEntity {
   @ApiProperty()
   kpiId!: string;
 
-  @ApiProperty({ enum: ['customer', 'vehicle'] })
-  dimension!: 'customer' | 'vehicle';
+  @ApiProperty({ enum: ['customer', 'vehicle', 'type', 'severity'] })
+  dimension!: 'customer' | 'vehicle' | 'type' | 'severity';
 
   @ApiProperty({ type: KpiScopeEntity })
   scope!: KpiScopeEntity;

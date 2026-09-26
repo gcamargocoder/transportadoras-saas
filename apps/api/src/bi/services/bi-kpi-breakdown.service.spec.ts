@@ -384,4 +384,46 @@ describe('BiKpiBreakdownService -- recorte por veiculo (BI 4)', () => {
       expect(groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ severity: 'CRITICAL' }) }));
     });
   });
+
+  describe('distribuicao de ocorrencias por tipo/severidade (BI 8)', () => {
+    async function buildOccurrenceService(groupByResult: { type?: string; severity?: string; _count: number }[]) {
+      const prisma = { tripOccurrence: { groupBy: jest.fn().mockResolvedValue(groupByResult) } };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BiKpiBreakdownService,
+          { provide: PrismaService, useValue: prisma },
+          { provide: FleetOperationsMetricsService, useValue: {} },
+          { provide: FleetIdleTimeService, useValue: { loadVehicleIdleData: jest.fn() } },
+        ],
+      }).compile();
+      return { service: moduleRef.get(BiKpiBreakdownService), prisma };
+    }
+
+    it('occurrences_total x type: soma dos itens = total, sem bucket "sem categoria" (type nunca e nulo)', async () => {
+      const { service } = await buildOccurrenceService([
+        { type: 'BREAKDOWN', _count: 3 },
+        { type: 'ACCIDENT', _count: 1 },
+      ]);
+      const result = await service.occurrencesTotalByType('t1', {}, period, 10);
+      expect(result.total).toBe(4);
+      expect(result.items.find((i) => i.key === 'BREAKDOWN')?.value).toBe(3);
+      expect(result.items.find((i) => i.key === 'ACCIDENT')?.value).toBe(1);
+    });
+
+    it('occurrences_total x severity: soma dos itens = total', async () => {
+      const { service } = await buildOccurrenceService([
+        { severity: 'INFO', _count: 5 },
+        { severity: 'CRITICAL', _count: 2 },
+      ]);
+      const result = await service.occurrencesTotalBySeverity('t1', {}, period, 10);
+      expect(result.total).toBe(7);
+      expect(result.items.find((i) => i.key === 'CRITICAL')?.value).toBe(2);
+    });
+
+    it('occurrences_critical x type: aplica o filtro de severidade CRITICAL no where', async () => {
+      const { service, prisma } = await buildOccurrenceService([{ type: 'ACCIDENT', _count: 1 }]);
+      await service.occurrencesCriticalByType('t1', {}, period, 10);
+      expect(prisma.tripOccurrence.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ severity: 'CRITICAL' }) }));
+    });
+  });
 });

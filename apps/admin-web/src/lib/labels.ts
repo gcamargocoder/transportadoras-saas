@@ -820,6 +820,18 @@ export const TRIP_OCCURRENCE_SEVERITY_LABELS: Record<TripOccurrenceSeverity, str
   HIGH: 'Alta',
 };
 
+// BI 8 -- as 2 escalas de severidade (INFO/WARNING/CRITICAL e LOW/MEDIUM/
+// HIGH) convivem no mesmo enum (ver TripOccurrenceSeverity); esta tabela as
+// alinha num unico eixo visual de 3 niveis.
+export const TRIP_OCCURRENCE_SEVERITY_TONE: Record<TripOccurrenceSeverity, 'info' | 'warning' | 'danger'> = {
+  INFO: 'info',
+  LOW: 'info',
+  WARNING: 'warning',
+  MEDIUM: 'warning',
+  CRITICAL: 'danger',
+  HIGH: 'danger',
+};
+
 export const TRIP_OCCURRENCE_STATUS_LABELS: Record<TripOccurrenceStatus, string> = {
   OPEN: 'Em aberto',
   IN_PROGRESS: 'Em andamento',

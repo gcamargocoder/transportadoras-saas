@@ -38,18 +38,7 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'costs', label: 'Custos' },
   { value: 'deadlines', label: 'Prazos' },
   { value: 'comparatives', label: 'Comparativos' },
-  {
-    value: 'occurrences',
-    label: 'Ocorrências',
-    upcoming: {
-      phase: 'BI 8',
-      summary: 'Mapa de ocorrências e gargalos da operação.',
-      screens: [
-        { label: 'Painel de ocorrências', href: '/operations/fleet/occurrences' },
-        { label: 'Ocorrências em aberto', href: '/operations/occurrences' },
-      ],
-    },
-  },
+  { value: 'occurrences', label: 'Ocorrências' },
 ];
 
 // Drill-down: KPI -> tela de analise detalhada JA existente. KPIs sem tela

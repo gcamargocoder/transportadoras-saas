@@ -481,6 +481,29 @@ export class BiKpiBreakdownService {
     return this.occurrencesByVehicle(tenantId, scope, period, limit, TripOccurrenceSeverity.CRITICAL);
   }
 
+  // BI 8 -- type/severity sao campos intrinsecos de TripOccurrence (nunca
+  // nulos): reaproveita summableVehicleBreakdown so pela forma generica do
+  // item (chave+label+valor), sem lista de "categorias possiveis" para
+  // reconciliar -- o proprio groupBy ja e a lista completa.
+  async occurrencesTotalByType(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const groups = await this.prisma.tripOccurrence.groupBy({ by: ['type'], where: buildOccurrenceWhere(tenantId, scope, period), _count: true });
+    return summableVehicleBreakdown(groups.map((g) => ({ vehicleId: g.type, label: g.type, value: g._count, recordCount: g._count, unavailableReason: null })), limit);
+  }
+
+  async occurrencesCriticalByType(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const groups = await this.prisma.tripOccurrence.groupBy({
+      by: ['type'],
+      where: buildOccurrenceWhere(tenantId, scope, period, TripOccurrenceSeverity.CRITICAL),
+      _count: true,
+    });
+    return summableVehicleBreakdown(groups.map((g) => ({ vehicleId: g.type, label: g.type, value: g._count, recordCount: g._count, unavailableReason: null })), limit);
+  }
+
+  async occurrencesTotalBySeverity(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const groups = await this.prisma.tripOccurrence.groupBy({ by: ['severity'], where: buildOccurrenceWhere(tenantId, scope, period), _count: true });
+    return summableVehicleBreakdown(groups.map((g) => ({ vehicleId: g.severity, label: g.severity, value: g._count, recordCount: g._count, unavailableReason: null })), limit);
+  }
+
   // --------------------------------------------------------------------------
   // BI 5 -- custo por veiculo
   // --------------------------------------------------------------------------

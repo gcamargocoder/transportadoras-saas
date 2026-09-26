@@ -83,8 +83,10 @@ export type SnapshotPart = (typeof SNAPSHOT_PARTS)[number];
 
 // BI 3 -- dimensoes de recorte. period/vehicle/fleet valem para todo KPI;
 // customer so para KPIs cuja fonte tem vinculo direto e confiavel com
-// cliente (hoje: receita, via TripRevenue.customerId).
-export const KPI_DIMENSIONS = ['period', 'vehicle', 'fleet', 'customer'] as const;
+// cliente (hoje: receita, via TripRevenue.customerId). BI 8 -- type/severity
+// so para occurrences_total/occurrences_critical (categoria/severidade sao
+// campos intrinsecos de TripOccurrence, nunca nulos).
+export const KPI_DIMENSIONS = ['period', 'vehicle', 'fleet', 'customer', 'type', 'severity'] as const;
 export type KpiDimension = (typeof KPI_DIMENSIONS)[number];
 
 export interface KpiDefinition {

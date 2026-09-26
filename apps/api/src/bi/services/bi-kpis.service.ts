@@ -242,6 +242,18 @@ export class BiKpisService {
           return this.breakdown.occurrencesCriticalByVehicle(tenantId, scope, period, limit);
       }
     }
+    // BI 8 -- distribuicao das ocorrencias por tipo/severidade.
+    if (dimension === 'type') {
+      switch (kpiId) {
+        case 'occurrences_total':
+          return this.breakdown.occurrencesTotalByType(tenantId, scope, period, limit);
+        case 'occurrences_critical':
+          return this.breakdown.occurrencesCriticalByType(tenantId, scope, period, limit);
+      }
+    }
+    if (dimension === 'severity' && kpiId === 'occurrences_total') {
+      return this.breakdown.occurrencesTotalBySeverity(tenantId, scope, period, limit);
+    }
     throw new BadRequestException(`Recorte por ${dimension} nao disponivel para o KPI ${kpiId}.`);
   }
 

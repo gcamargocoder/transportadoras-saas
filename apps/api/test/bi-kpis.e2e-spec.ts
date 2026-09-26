@@ -947,4 +947,111 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       expect(res.body.data.items.every((i: { key: string | null }) => i.key !== a.vehicleId && i.key !== second.vehicleId)).toBe(true);
     });
   });
+
+  describe('distribuicao, mapa e evidencias de ocorrencias (BI 8)', () => {
+    const JAN = JANUARY;
+
+    function getBreakdown(auth: string, query: Record<string, string>) {
+      return request(app.getHttpServer()).get('/api/v1/bi/kpis/breakdown').query(query).set('Authorization', auth);
+    }
+    function getEvidence(auth: string, kpiId: string, query: Record<string, string>) {
+      return request(app.getHttpServer()).get(`/api/v1/bi/kpis/${kpiId}/evidence`).query(query).set('Authorization', auth);
+    }
+
+    beforeAll(async () => {
+      const createdBy = (await prisma.userAccount.findFirstOrThrow({ where: { tenantId: a.tenantId } })).id;
+      await prisma.tripOccurrence.create({
+        data: {
+          tenantId: a.tenantId,
+          tripId: a.tripId,
+          vehicleId: a.vehicleId,
+          type: 'ACCIDENT',
+          severity: 'WARNING',
+          description: 'Colisao leve',
+          occurredAt: new Date('2026-01-12T09:00:00Z'),
+          latitude: -23.5505,
+          longitude: -46.6333,
+          locationLabel: 'Marginal Tiete',
+          createdBy,
+        },
+      });
+      await prisma.tripOccurrence.create({
+        data: {
+          tenantId: a.tenantId,
+          tripId: a.tripId,
+          vehicleId: a.vehicleId,
+          type: 'ACCIDENT',
+          severity: 'CRITICAL',
+          description: 'Colisao grave',
+          occurredAt: new Date('2026-01-13T09:00:00Z'),
+          createdBy,
+        },
+      });
+      await prisma.tripOccurrence.create({
+        data: {
+          tenantId: a.tenantId,
+          tripId: a.tripId,
+          vehicleId: a.vehicleId,
+          type: 'BREAKDOWN',
+          severity: 'INFO',
+          description: 'Pane leve',
+          occurredAt: new Date('2026-01-14T09:00:00Z'),
+          createdBy,
+        },
+      });
+    }, 30000);
+
+    it('breakdown por tipo: soma dos itens = valor do summary de occurrences_total', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'occurrences_total', dimension: 'type' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'occurrences_total' }).expect(200),
+      ]);
+      const total = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(total).toBe(kpi(summary.body, 'occurrences_total').value);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === 'ACCIDENT')).toMatchObject({ value: 2 });
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === 'BREAKDOWN')).toMatchObject({ value: 2 });
+    });
+
+    it('breakdown por severidade: soma dos itens = valor do summary', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'occurrences_total', dimension: 'severity' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'occurrences_total' }).expect(200),
+      ]);
+      const total = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(total).toBe(kpi(summary.body, 'occurrences_total').value);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === 'CRITICAL')).toMatchObject({ value: 2 });
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === 'WARNING')).toMatchObject({ value: 1 });
+    });
+
+    it('occurrences_critical x type: aplica o filtro de severidade CRITICAL', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'occurrences_critical', dimension: 'type' }).expect(200);
+      const total = res.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(total).toBe(2);
+    });
+
+    it('dimensao "type"/"severity" indisponivel para o KPI => 400', async () => {
+      await getBreakdown(a.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'type' }).expect(400);
+      await getBreakdown(a.auth, { ...JAN, kpiId: 'occurrences_critical', dimension: 'severity' }).expect(400);
+    });
+
+    it('isolamento: distribuicao de B nunca mistura ocorrencias de A', async () => {
+      const res = await getBreakdown(b.auth, { ...JAN, kpiId: 'occurrences_total', dimension: 'type' }).expect(200);
+      const total = res.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(total).toBe(0);
+    });
+
+    it('evidencia TRIP_OCCURRENCE traz latitude/longitude/locationLabel/severity reais; nunca inventa coordenadas ausentes', async () => {
+      const res = await getEvidence(a.auth, 'occurrences_total', { ...JAN, source: 'TRIP_OCCURRENCE', pageSize: '50' }).expect(200);
+      const withGeo = res.body.data.items.find((i: { locationLabel: string | null }) => i.locationLabel === 'Marginal Tiete');
+      expect(withGeo).toMatchObject({ latitude: -23.5505, longitude: -46.6333, severity: 'WARNING' });
+      const withoutGeo = res.body.data.items.filter((i: { latitude: number | null }) => i.latitude === null);
+      expect(withoutGeo.length).toBeGreaterThan(0);
+      for (const item of withoutGeo) expect(item.longitude).toBeNull();
+    });
+
+    it('isolamento: evidencias de B nunca trazem localizacao de A', async () => {
+      const res = await getEvidence(b.auth, 'occurrences_total', { ...JAN, source: 'TRIP_OCCURRENCE', pageSize: '50' }).expect(200);
+      expect(res.body.data.items.every((i: { locationLabel: string | null }) => i.locationLabel !== 'Marginal Tiete')).toBe(true);
+    });
+  });
 });

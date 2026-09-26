@@ -4344,6 +4344,11 @@ export interface KpiEvidenceRecordEntity {
   vehicleId: string | null;
   tripId: string | null;
   description: string | null;
+  /** So preenchidos pela fonte TRIP_OCCURRENCE (geolocalizacao real, quando registrada). */
+  latitude: number | null;
+  longitude: number | null;
+  locationLabel: string | null;
+  severity: string | null;
 }
 
 export interface KpiEvidencePageEntity {
@@ -4400,7 +4405,7 @@ export interface KpiBreakdownItemEntity {
 
 export interface KpiBreakdownEntity {
   kpiId: string;
-  dimension: 'customer' | 'vehicle';
+  dimension: 'customer' | 'vehicle' | 'type' | 'severity';
   scope: KpiScopeEntity;
   period: KpiPeriodEntity;
   total: number | null;

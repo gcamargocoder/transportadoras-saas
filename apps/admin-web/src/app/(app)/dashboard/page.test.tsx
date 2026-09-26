@@ -23,6 +23,7 @@ let searchParams = new URLSearchParams();
 
 const getKpiSeriesMock = vi.fn();
 const getKpiBreakdownMock = vi.fn();
+const getKpiEvidenceMock = vi.fn();
 const listVehiclesMock = vi.fn();
 const listFleetsMock = vi.fn();
 
@@ -30,12 +31,22 @@ vi.mock('../../../lib/api/bi.api', () => ({
   getKpiSummary: (...args: unknown[]) => getKpiSummaryMock(...args),
   getKpiSeries: (...args: unknown[]) => getKpiSeriesMock(...args),
   getKpiBreakdown: (...args: unknown[]) => getKpiBreakdownMock(...args),
+  getKpiEvidence: (...args: unknown[]) => getKpiEvidenceMock(...args),
 }));
 
 // BI 4 -- filtro local da aba Frota (busca de veiculo + lista de frotas).
 vi.mock('../../../lib/api/fleet.api', () => ({
   listVehicles: (...args: unknown[]) => listVehiclesMock(...args),
   listFleets: (...args: unknown[]) => listFleetsMock(...args),
+}));
+
+// BI 8 -- Leaflet acessa APIs de layout que o jsdom nao implementa; o mapa em
+// si (glue declarativo do react-leaflet) fica fora do escopo deste teste --
+// a logica real (clusterOccurrencePoints) tem suite propria.
+vi.mock('../../../features/intelligence/occurrence-map', () => ({
+  OccurrenceMap: ({ points }: { points: { id: string }[] }) => (
+    <div data-testid="occurrence-map-stub">{points.length} pontos no mapa</div>
+  ),
 }));
 
 // Endpoint antigo (/dashboard) -- com regras divergentes do BI 1. A Central
@@ -311,14 +322,6 @@ describe('Central de Inteligencia (/dashboard)', () => {
     await screen.findByRole('article', { name: 'Viagens concluidas' });
     fireEvent.click(screen.getByRole('tab', { name: 'Operação' }));
     expect(replaceMock).toHaveBeenCalledWith('/dashboard?aba=operation', { scroll: false });
-  });
-
-  it('abas futuras nao exibem dados ficticios nem consultam a API', () => {
-    searchParams = new URLSearchParams('aba=occurrences');
-    renderPage();
-    expect(screen.getByText('Ocorrências chega à Central no BI 8')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Painel de ocorrências/ })).toHaveAttribute('href', '/operations/fleet/occurrences');
-    expect(getKpiSummaryMock).not.toHaveBeenCalled();
   });
 
   it('todas as abas previstas estao na navegacao', () => {
@@ -1293,5 +1296,143 @@ describe('Central -- aba Comparativos (BI 7)', () => {
     await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2));
     const calls = getKpiSummaryMock.mock.calls as [{ vehicleId?: string }][];
     expect(calls[1]?.[0]).toMatchObject({ vehicleId: 'v1' });
+  });
+});
+
+// ============================================================================
+// BI 8 -- aba Ocorrências
+// ============================================================================
+function occurrencesSeries(): KpiSeriesResponseEntity {
+  const base = buildSeries();
+  return {
+    ...base,
+    series: [seriesFor('occurrences_total', [40, 45, 47], 'COUNT'), seriesFor('occurrences_critical', [2, 3, 3], 'COUNT')],
+  };
+}
+
+const OCCURRENCE_TYPE_ROWS = [vehicleBreakdownItem('ACCIDENT', 'ACCIDENT', 2, null, 40), vehicleBreakdownItem('BREAKDOWN', 'BREAKDOWN', 3, null, 60)];
+const OCCURRENCE_SEVERITY_ROWS = [vehicleBreakdownItem('CRITICAL', 'CRITICAL', 2, null, 40), vehicleBreakdownItem('WARNING', 'WARNING', 3, null, 60)];
+const OCCURRENCE_VEHICLE_ROWS: Record<string, ReturnType<typeof vehicleBreakdownItem>[]> = {
+  occurrences_total: [vehicleBreakdownItem('v1', 'AAA1111', 5), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  occurrences_critical: [vehicleBreakdownItem('v1', 'AAA1111', 2), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  trips_completed: [vehicleBreakdownItem('v1', 'AAA1111', 6), vehicleBreakdownItem('v2', 'BBB2222', 40)],
+};
+
+function occurrenceBreakdown(kpiId: string, dimension: string): KpiBreakdownEntity {
+  const items = dimension === 'type' ? OCCURRENCE_TYPE_ROWS : dimension === 'severity' ? OCCURRENCE_SEVERITY_ROWS : (OCCURRENCE_VEHICLE_ROWS[kpiId] ?? []);
+  return {
+    kpiId,
+    dimension: dimension as KpiBreakdownEntity['dimension'],
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    period: PERIOD,
+    total: 5,
+    items,
+    others: null,
+  };
+}
+
+function occurrenceEvidencePage(pageSize: number) {
+  const geoItem = {
+    id: 'occ-1',
+    date: '2026-09-10T12:00:00.000Z',
+    amount: null,
+    vehicleId: 'v1',
+    tripId: 'trip-1',
+    description: 'ACCIDENT (WARNING): Colisão leve',
+    latitude: -23.5505,
+    longitude: -46.6333,
+    locationLabel: 'Marginal Tietê',
+    severity: 'WARNING',
+  };
+  const noGeoItem = {
+    ...geoItem,
+    id: 'occ-2',
+    description: 'BREAKDOWN (CRITICAL): Pane no motor',
+    latitude: null,
+    longitude: null,
+    locationLabel: null,
+    severity: 'CRITICAL',
+  };
+  return {
+    kpiId: 'occurrences_total',
+    source: 'TRIP_OCCURRENCE' as const,
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    period: PERIOD,
+    items: [geoItem, noGeoItem],
+    meta: { page: 1, pageSize, total: 2, totalPages: 1 },
+  };
+}
+
+describe('Central -- aba Ocorrências (BI 8)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getKpiSeriesMock.mockReset();
+    getKpiBreakdownMock.mockReset();
+    getKpiEvidenceMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=occurrences');
+    getKpiSummaryMock.mockResolvedValue(financialSummary());
+    getKpiSeriesMock.mockResolvedValue(occurrencesSeries());
+    getKpiBreakdownMock.mockImplementation(async (query: { kpiId: string; dimension: string }) => occurrenceBreakdown(query.kpiId, query.dimension));
+    getKpiEvidenceMock.mockImplementation(async (_kpiId: string, query: { pageSize: number }) => occurrenceEvidencePage(query.pageSize));
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('resumo mostra os 2 KPIs oficiais e o contexto, do mesmo summary das outras abas quando sem filtro', async () => {
+    renderPage();
+    for (const name of ['Ocorrencias', 'Ocorrencias criticas', 'Viagens concluidas', 'Despesas operacionais']) {
+      expect(await screen.findByRole('article', { name })).toBeInTheDocument();
+    }
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('o que se repete: distribuição por tipo e por severidade vem do breakdown oficial (rotulos em pt-BR)', async () => {
+    renderPage();
+    expect(await screen.findByText('Acidente')).toBeInTheDocument();
+    expect(screen.getByText('Quebra/pane')).toBeInTheDocument();
+    const severityCard = screen.getByText('Por severidade').closest('.rounded-lg') as HTMLElement;
+    expect(within(severityCard).getByText('Crítica')).toBeInTheDocument();
+    expect(within(severityCard).getByText('Atenção')).toBeInTheDocument();
+  });
+
+  it('mapa: so as ocorrências com latitude/longitude entram; ausência de localização vira aviso, nunca posição inventada', async () => {
+    renderPage();
+    expect(await screen.findByTestId('occurrence-map-stub')).toHaveTextContent('1 pontos no mapa');
+    expect(screen.getByText(/1 de 2 ocorrências do período têm localização registrada/)).toBeInTheDocument();
+  });
+
+  it('registros de origem: lista os registros oficiais com severidade e link para a viagem', async () => {
+    renderPage();
+    expect(await screen.findByText('ACCIDENT (WARNING): Colisão leve')).toBeInTheDocument();
+    const links = await screen.findAllByRole('link', { name: 'Ver viagem' });
+    expect(links[0]).toHaveAttribute('href', '/trips/trip-1');
+  });
+
+  it('tabela por veículo: mostra ocorrências/críticas/viagens de contexto (nunca uma taxa calculada)', async () => {
+    renderPage();
+    const table = await screen.findByRole('table');
+    await waitFor(() => expect(within(table).getByText('AAA1111')).toBeInTheDocument());
+    expect(within(table).queryByText(/\/viagem/)).not.toBeInTheDocument();
+  });
+
+  it('filtrar por 1 veículo esconde a tabela por veículo e explica o motivo', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('table');
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+    await waitFor(() => expect(screen.queryByRole('table')).not.toBeInTheDocument());
+    expect(screen.getByText('Filtro já restrito a 1 veículo')).toBeInTheDocument();
+  });
+
+  it('drill-down dos cards principais para a tela de ocorrências existente', async () => {
+    renderPage();
+    const card = await screen.findByRole('article', { name: 'Ocorrencias' });
+    expect(within(card).getByRole('link', { name: /Ver ocorrências/ })).toHaveAttribute('href', '/operations/fleet/occurrences');
   });
 });

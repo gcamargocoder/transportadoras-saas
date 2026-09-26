@@ -26,6 +26,10 @@ function record(fields: Partial<KpiEvidenceRecordEntity> & { id: string }): KpiE
   entity.vehicleId = fields.vehicleId ?? null;
   entity.tripId = fields.tripId ?? null;
   entity.description = fields.description ?? null;
+  entity.latitude = fields.latitude ?? null;
+  entity.longitude = fields.longitude ?? null;
+  entity.locationLabel = fields.locationLabel ?? null;
+  entity.severity = fields.severity ?? null;
   return entity;
 }
 
@@ -277,7 +281,18 @@ export class BiKpiEvidenceService {
             orderBy: [{ occurredAt: 'desc' }, { id: 'asc' }],
             skip,
             take,
-            select: { id: true, occurredAt: true, vehicleId: true, tripId: true, type: true, severity: true, description: true },
+            select: {
+              id: true,
+              occurredAt: true,
+              vehicleId: true,
+              tripId: true,
+              type: true,
+              severity: true,
+              description: true,
+              latitude: true,
+              longitude: true,
+              locationLabel: true,
+            },
           }),
           this.prisma.tripOccurrence.count({ where }),
         ]);
@@ -290,6 +305,10 @@ export class BiKpiEvidenceService {
               vehicleId: r.vehicleId,
               tripId: r.tripId,
               description: `${r.type} (${r.severity}): ${r.description}`,
+              severity: r.severity,
+              latitude: toNumberOrNull(r.latitude),
+              longitude: toNumberOrNull(r.longitude),
+              locationLabel: r.locationLabel,
             }),
           ),
         };
