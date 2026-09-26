@@ -43,3 +43,16 @@ export function sumVehicleDistancesKm(points: OdometerReadingPoint[]): number | 
   for (const distanceKm of distances.values()) total += distanceKm;
   return total;
 }
+
+// BI 4 -- contagem de leituras validas por veiculo, do MESMO pool de pontos
+// usado por computeVehicleDistancesKm (nenhuma query nova). Evidencia do
+// recorte de distancia por veiculo (GET /bi/kpis/breakdown?kpiId=distance_km
+// &dimension=vehicle) -- nunca conta leitura nula.
+export function countOdometerReadingsByVehicle(points: OdometerReadingPoint[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const point of points) {
+    if (point.odometerKm === null) continue;
+    counts.set(point.vehicleId, (counts.get(point.vehicleId) ?? 0) + 1);
+  }
+  return counts;
+}

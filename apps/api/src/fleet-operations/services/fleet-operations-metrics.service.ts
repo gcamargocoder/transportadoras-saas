@@ -29,7 +29,7 @@ import {
   FuelConsumptionTotals,
 } from '../../common/utils/fuel-consumption.util';
 import { aggregateMonthlySeries } from '../../common/utils/monthly-series.util';
-import { computeVehicleDistancesKm, OdometerReadingPoint } from '../../common/utils/vehicle-distance.util';
+import { computeVehicleDistancesKm, countOdometerReadingsByVehicle, OdometerReadingPoint } from '../../common/utils/vehicle-distance.util';
 import { DashboardChartPointEntity } from '../../dashboard/entities/dashboard-charts.entity';
 import { FindFuelSuppliesQueryDto } from '../../fuel-supplies/dto/find-fuel-supplies-query.dto';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
@@ -272,6 +272,9 @@ export interface FleetDistanceTotals {
   /// Soma das distancias; null (nunca 0) sem nenhum veiculo qualificado.
   totalDistanceKm: number | null;
   odometerReadings: number;
+  /// BI 4 -- leituras validas por veiculo (mesmo pool de odometerPoints
+  /// acima). Evidencia do recorte de distancia por veiculo.
+  readingCounts: Map<string, number>;
 }
 
 export interface FleetRevenueTotals {
@@ -554,6 +557,7 @@ export class FleetOperationsMetricsService {
         totalDistanceKm:
           vehicleDistances.size > 0 ? [...vehicleDistances.values()].reduce((sum, d) => sum + d, 0) : null,
         odometerReadings: odometerPoints.filter((p) => p.odometerKm !== null).length,
+        readingCounts: countOdometerReadingsByVehicle(odometerPoints),
       };
     }
 

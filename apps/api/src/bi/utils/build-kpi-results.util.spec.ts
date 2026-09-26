@@ -22,8 +22,13 @@ function snapshot(overrides: Partial<BiPeriodSnapshot> = {}, distanceKm: number 
       recordCounts: { fuelSupplies: 5, maintenances: 1, tires: 1, tireRetreads: 0, tollTransactions: 3, otherExpenses: 2 },
       distance:
         distanceKm === null
-          ? { vehicleDistances: new Map(), totalDistanceKm: null, odometerReadings: 1 }
-          : { vehicleDistances: new Map([['v1', distanceKm]]), totalDistanceKm: distanceKm, odometerReadings: 6 },
+          ? { vehicleDistances: new Map(), totalDistanceKm: null, odometerReadings: 1, readingCounts: new Map() }
+          : {
+              vehicleDistances: new Map([['v1', distanceKm]]),
+              totalDistanceKm: distanceKm,
+              odometerReadings: 6,
+              readingCounts: new Map([['v1', 6]]),
+            },
     },
     trips: { completed: 8 },
     deliveries: { completed: 10, withDeadline: 8, onTime: 6 },

@@ -1,4 +1,4 @@
-import { computeVehicleDistancesKm, sumVehicleDistancesKm } from './vehicle-distance.util';
+import { computeVehicleDistancesKm, countOdometerReadingsByVehicle, sumVehicleDistancesKm } from './vehicle-distance.util';
 
 describe('computeVehicleDistancesKm', () => {
   it('retorna mapa vazio sem pontos', () => {
@@ -61,5 +61,22 @@ describe('sumVehicleDistancesKm', () => {
       { vehicleId: 'v2', odometerKm: 60000 },
     ]);
     expect(result).toBe(15000);
+  });
+});
+
+describe('countOdometerReadingsByVehicle', () => {
+  it('conta so leituras nao nulas, por veiculo', () => {
+    const result = countOdometerReadingsByVehicle([
+      { vehicleId: 'v1', odometerKm: 100000 },
+      { vehicleId: 'v1', odometerKm: null },
+      { vehicleId: 'v1', odometerKm: 105000 },
+      { vehicleId: 'v2', odometerKm: 50000 },
+    ]);
+    expect(result.get('v1')).toBe(2);
+    expect(result.get('v2')).toBe(1);
+  });
+
+  it('mapa vazio sem pontos', () => {
+    expect(countOdometerReadingsByVehicle([]).size).toBe(0);
   });
 });
