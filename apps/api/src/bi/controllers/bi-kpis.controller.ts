@@ -75,8 +75,10 @@ export class BiKpisController {
   @Roles(...DASHBOARD_ROLES)
   @ApiOperation({
     summary:
-      'Recorte de um KPI por dimensao (hoje: kpiId=revenue, dimension=customer). Mesmo where do KPI: ' +
-      'soma dos itens + others = valor do KPI.',
+      'Recorte de um KPI por dimensao: revenue x customer (BI 3), ou fleet_utilization/' +
+      'fleet_availability/idle_hours/trips_completed/distance_km x vehicle (BI 4). Mesmo where do ' +
+      'KPI; para KPIs somaveis, soma dos itens + others = valor do KPI -- para razoes (PERCENT), ' +
+      '"total" e o valor oficial do KPI, nao a soma dos itens.',
   })
   @ApiOkResponse({ type: KpiBreakdownEntity })
   getBreakdown(@Query() query: BiKpiBreakdownQueryDto): Promise<KpiBreakdownEntity> {

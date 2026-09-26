@@ -8,6 +8,7 @@ import {
   BiKpiScopeQueryDto,
   BiKpiSeriesQueryDto,
   BiKpiSummaryQueryDto,
+  BreakdownDimension,
 } from '../dto/bi-kpi-query.dto';
 import {
   KpiBreakdownEntity,
@@ -171,16 +172,15 @@ export class BiKpisService {
     return entity;
   }
 
-  // BI 3 -- recorte de KPI por dimensao. Hoje: receita x cliente (unico par
-  // com vinculo direto e confiavel na fonte).
+  // BI 3/4 -- recorte de KPI por dimensao: receita x cliente (BI 3) e os 5
+  // KPIs de frota x veiculo (BI 4). Cada combinacao (kpiId, dimension) mapeia
+  // para um unico metodo do BiKpiBreakdownService -- nunca uma segunda forma
+  // de calculo.
   async getBreakdown(tenantId: string, query: BiKpiBreakdownQueryDto): Promise<KpiBreakdownEntity> {
     const definition = this.requireDefinition(query.kpiId);
-    if (definition.id !== 'revenue' || query.dimension !== 'customer') {
-      throw new BadRequestException(`Recorte por ${query.dimension} nao disponivel para o KPI ${query.kpiId}.`);
-    }
     const period = this.parsePeriod(query.startDate, query.endDate);
     const scope = await this.resolveScope(tenantId, query);
-    const result = await this.breakdown.revenueByCustomer(tenantId, scope, period, query.limit);
+    const result = await this.computeBreakdown(tenantId, definition.id, query.dimension, scope, period, query.limit);
 
     const entity = new KpiBreakdownEntity();
     entity.kpiId = definition.id;
@@ -191,6 +191,34 @@ export class BiKpisService {
     entity.items = result.items;
     entity.others = result.others;
     return entity;
+  }
+
+  private async computeBreakdown(
+    tenantId: string,
+    kpiId: string,
+    dimension: BreakdownDimension,
+    scope: BiScope,
+    period: KpiPeriod,
+    limit: number,
+  ) {
+    if (kpiId === 'revenue' && dimension === 'customer') {
+      return this.breakdown.revenueByCustomer(tenantId, scope, period, limit);
+    }
+    if (dimension === 'vehicle') {
+      switch (kpiId) {
+        case 'fleet_utilization':
+          return this.breakdown.fleetUtilizationByVehicle(tenantId, scope, period, limit);
+        case 'fleet_availability':
+          return this.breakdown.fleetAvailabilityByVehicle(tenantId, scope, period, limit);
+        case 'idle_hours':
+          return this.breakdown.idleHoursByVehicle(tenantId, scope, period, limit);
+        case 'trips_completed':
+          return this.breakdown.tripsCompletedByVehicle(tenantId, scope, period, limit);
+        case 'distance_km':
+          return this.breakdown.distanceByVehicle(tenantId, scope, period, limit);
+      }
+    }
+    throw new BadRequestException(`Recorte por ${dimension} nao disponivel para o KPI ${kpiId}.`);
   }
 
   // --------------------------------------------------------------------------
