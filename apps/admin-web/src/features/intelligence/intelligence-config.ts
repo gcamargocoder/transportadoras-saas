@@ -33,19 +33,7 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'overview', label: 'Visão geral' },
   { value: 'operation', label: 'Operação' },
   { value: 'financial', label: 'Financeiro' },
-  {
-    value: 'fleet',
-    label: 'Frota',
-    upcoming: {
-      phase: 'BI 4',
-      summary: 'Utilização, disponibilidade, consumo e desempenho por veículo.',
-      screens: [
-        { label: 'Gestão da frota', href: '/operations/fleet' },
-        { label: 'Abastecimento', href: '/operations/fleet/fuel' },
-        { label: 'Manutenção', href: '/operations/fleet/maintenance' },
-      ],
-    },
-  },
+  { value: 'fleet', label: 'Frota' },
   {
     value: 'costs',
     label: 'Custos',
