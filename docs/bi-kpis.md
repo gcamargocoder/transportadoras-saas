@@ -320,3 +320,109 @@ Fase 76) são o mundo contábil e **não** foram misturados aqui — os números
 Recomendação: descontinuar em fase própria — mover `DashboardChartPointEntity` para `common/`, marcar o
 endpoint como deprecated no Swagger por um ciclo, remover `dashboard.api.ts` e só então o módulo.
 Nada foi removido no BI 3.
+
+## 14. BI 4 — Aba Frota
+
+Spec completa: `docs/superpowers/specs/2026-09-25-bi4-fleet-tab-design.md`. Plano de implementação
+(TDD, task a task): `docs/superpowers/plans/2026-09-25-bi4-fleet-tab.md`.
+
+**Auditoria prévia — o que já existia**: os 5 KPIs de frota (`fleet_utilization`,
+`fleet_availability`, `idle_hours`, `trips_completed`, `distance_km`) já estavam completos no
+catálogo desde o BI 1; `FleetIdleTimeService.loadVehicleIdleData` já carregava os dados **por
+veículo**; `FleetCostTotals.distance.vehicleDistances` já era um mapa por veículo; os cards + a
+`FleetTimeBand` (composição do tempo) já existiam, só que dentro da aba Operação; a aba `fleet` já
+estava cadastrada na Central como `upcoming`. O trabalho do BI 4 foi expor por veículo o que já
+era calculado agregado, e montar a tela.
+
+### 14.1 O que foi criado
+
+- **`GET /bi/kpis/breakdown` ganha `dimension=vehicle`** para os 5 KPIs de frota (além de
+  `dimension=customer`, já existente para `revenue`). Mesmo endpoint, mesmo contrato — `dimension`
+  e `limit` (agora até 500, para não truncar a tabela investigativa) são os únicos parâmetros novos.
+- **`fleet-time.util.ts`** ganhou `computeVehicleFleetTime`/`computeFleetTimeByVehicle`: o cálculo
+  por veículo que já existia dentro do loop de `computeFleetTimeTotals`, extraído para uma função
+  pura própria. `computeFleetTimeTotals` passou a somar por cima dela — nenhuma fórmula mudou,
+  testado por igualdade (soma dos veículos == agregado).
+- **`vehicle-distance.util.ts`** ganhou `countOdometerReadingsByVehicle` (evidência do recorte de
+  distância por veículo, do mesmo pool de leituras já carregado — nenhuma query nova).
+- **`BiKpiBreakdownService`** ganhou 5 métodos (`fleetUtilizationByVehicle`,
+  `fleetAvailabilityByVehicle`, `idleHoursByVehicle`, `tripsCompletedByVehicle`,
+  `distanceByVehicle`), todos reaproveitando os coletores oficiais (`loadVehicleIdleData`,
+  `computeCostTotals`, `buildCompletedTripWhere`).
+- **Aba Frota** (`fleet-tab.tsx`): filtro local de veículo/frota, resumo (5 cards), evolução
+  temporal (`fleet_utilization`/`fleet_availability`/`idle_hours`/`trips_completed` via
+  `GET /bi/kpis/series`, `distance_km` fica só como card — não é somável entre baldes),
+  composição do tempo (`FleetTimeBand`, migrada da aba Operação) e tabela "Desempenho por veículo"
+  (`FleetVehicleTable`, com busca e ordenação, 5 chamadas paralelas ao breakdown).
+- Bloco de frota **removido da aba Operação** (migrado, não duplicado).
+
+### 14.2 Decisões de cálculo e agregação
+
+- **Razões nunca são somadas nem entre veículos, nem entre baldes de tempo.** Para
+  `fleet_utilization`/`fleet_availability`, o campo `total` do breakdown é o valor **oficial** do
+  KPI (recalculado pela mesma função pura do catálogo, `findKpiDefinition(id).compute(...)`, sobre
+  o agregado) — nunca a soma dos itens. `share` e `others` são sempre `null` para essas duas: não
+  existe uma soma/média válida de percentuais entre veículos.
+- **`idle_hours`, `trips_completed` e `distance_km` são somáveis entre veículos** (ainda que
+  `distance_km` não seja somável entre baldes de tempo — são eixos diferentes): `total` = soma dos
+  itens, `share` é a participação de cada veículo nesse total.
+- **Veículo fora de operação ou fora da janela do período** (vendido antes, cadastrado depois,
+  status atual SOLD/INACTIVE) → `value: null` + `unavailableReason`, nunca 0% inventado. Veículo
+  com capacidade real e zero atividade (ex.: 0 viagens no período) → `0` de verdade, não
+  `UNAVAILABLE`.
+- **Registro histórico de veículo já removido do escopo atual** (viagem ou leitura de odômetro de
+  um veículo que deixou de existir no filtro) nunca é descartado silenciosamente: entra como uma
+  linha `"Veículo removido"` (`key: null`), preservando a soma = valor do KPI no summary.
+
+### 14.3 Endpoints e contratos alterados
+
+- `GET /bi/kpis/breakdown`: `dimension` aceita `'customer' | 'vehicle'`; `limit` até 500.
+  `KpiBreakdownItemEntity.value`/`KpiBreakdownEntity.total` passam a aceitar `null`;
+  `KpiBreakdownItemEntity` ganha `unavailableReason`. Mudança aditiva — `dimension=customer`
+  (receita) nunca retorna `null` na prática, comportamento inalterado.
+- Nenhum endpoint novo. `GET /bi/kpis/summary` e `GET /bi/kpis/series` não mudaram — a aba Frota só
+  passa `vehicleId`/`fleetId` a mais, parâmetros que os DTOs já aceitavam desde o BI 1.
+- `KPI_CATALOG_VERSION` não incrementou: nenhuma fórmula de KPI mudou.
+
+### 14.4 Regras reutilizadas (nenhuma duplicada)
+
+`loadVehicleIdleData`, `computeCostTotals`, `buildCompletedTripWhere`, `computeFleetTimeTotals`/
+`computeVehicleFleetTime` (agora a mesma função pura por trás do agregado e do recorte),
+`findKpiDefinition(id).compute` (fonte do `total` das razões), `KpiCard`, `TrendLineChart`,
+`FleetTimeBand`, `DataTable`, `SearchCombobox`, `EntitySelect`, `kpi-detail-drawer.tsx`,
+`KPI_DRILL_DOWN`.
+
+### 14.5 Testes e resultados
+
+- Unitário: `fleet-time.util.spec.ts` (equivalência agregado × por veículo),
+  `vehicle-distance.util.spec.ts` (contagem de leituras), `bi-kpi-breakdown.service.spec.ts` (5
+  métodos, mocks).
+- e2e (`bi-kpis.e2e-spec.ts`, novo describe `recorte por veiculo (BI 4)`): soma dos itens = valor
+  do summary (`trips_completed`, `distance_km`), `total`/`share`/`others` corretos para razões
+  (`fleet_utilization`), veículo vendido antes do período (`UNAVAILABLE` com motivo), filtro por
+  veículo, isolamento multi-tenant (404 cross-tenant, nunca vaza veículo de outro tenant),
+  dimensão/KPI não suportados (400), consistência summary × breakdown.
+- Frontend (`page.test.tsx`, novo describe `Central -- aba Frota (BI 4)`): resumo reaproveitando o
+  summary global sem filtro, summary escopado ao selecionar veículo (e retorno ao global ao
+  limpar), rótulo "Não registrado / cobertura insuficiente" na composição do tempo, tabela por
+  veículo (célula `UNAVAILABLE` nunca vira 0, busca), ocultação da tabela com 1 veículo já
+  filtrado, drill-down dos 5 cards, "Como é calculado", loading/erro/retry, e regressão da aba
+  Operação (bloco de frota não aparece mais lá).
+- Resultado: suíte unitária da API 93/93 arquivos, 864/864 testes; e2e da API completo; admin-web
+  412/413 testes (a falha em `parts/page.test.tsx` é pré-existente, não relacionada a este
+  trabalho); `next build`, `tsc --noEmit` (API e admin-web) e `eslint` das áreas alteradas sem
+  erros.
+
+### 14.6 Limitações e pontos para BI 5/BI 7
+
+- Sem breakdown por `fleet` (só por `vehicle`) — extensão possível quando houver demanda.
+- A tabela por veículo dispara 5 chamadas paralelas ao breakdown (uma por KPI) em vez de uma única
+  chamada agregada — decisão deliberada para reaproveitar o contrato existente de
+  `GET /bi/kpis/breakdown` sem criar uma segunda forma de resposta; aceitável dado que cada chamada
+  já é totalmente batelada (sem N+1 por veículo).
+- Filtro de veículo/frota continua **local à aba Frota** — a Central ainda não tem esse filtro em
+  nenhuma outra aba; generalizá-lo (se algum dia fizer sentido para Financeiro/Custos) é trabalho
+  futuro, não estrutural.
+- Custos/rentabilidade por veículo (BI 5), alertas de anomalia na composição do tempo, comparação
+  formal entre veículos com regra de negócio (não implementada de propósito — a tabela é
+  investigativa) ficam para fases seguintes.
