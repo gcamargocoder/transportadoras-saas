@@ -1,5 +1,5 @@
 import { TripStatus, VehicleStatus } from '@prisma/client';
-import { computeFleetTimeTotals, FleetTimeVehicleInput } from './fleet-time.util';
+import { computeFleetTimeByVehicle, computeFleetTimeTotals, computeVehicleFleetTime, FleetTimeVehicleInput } from './fleet-time.util';
 
 const d = (iso: string) => new Date(iso);
 const HOUR = 60;
@@ -131,5 +131,52 @@ describe('computeFleetTimeTotals', () => {
     );
     expect(totals.idleNetMinutes).toBe(48 * HOUR - 12 * HOUR + 1 * HOUR);
     expect(totals.idleSegmentsConsidered).toBe(2);
+  });
+});
+
+describe('computeFleetTimeByVehicle', () => {
+  it('a soma dos campos por veiculo bate exatamente com o agregado', () => {
+    const vehicles: FleetTimeVehicleInput[] = [
+      vehicle({ vehicleId: 'a', trips: [trip('t1', '2026-03-01T00:00:00Z', '2026-03-02T00:00:00Z')] }),
+      vehicle({ vehicleId: 'b', status: VehicleStatus.SOLD }),
+      vehicle({
+        vehicleId: 'c',
+        trips: [trip('t2', '2026-03-04T00:00:00Z', '2026-03-05T00:00:00Z')],
+        maintenanceIntervals: [{ start: d('2026-03-03T00:00:00Z'), end: d('2026-03-03T12:00:00Z') }],
+      }),
+    ];
+    const perVehicle = computeFleetTimeByVehicle(vehicles, period, now);
+    const totals = computeFleetTimeTotals(vehicles, period, now);
+
+    expect(perVehicle.size).toBe(3);
+    expect(perVehicle.get('b')?.considered).toBe(false);
+
+    const consideredRows = [...perVehicle.values()].filter((r) => r.considered);
+    expect(consideredRows.length).toBe(totals.vehiclesConsidered);
+    const sum = (key: keyof typeof totals extends string ? 'capacityMinutes' | 'tripMinutes' | 'maintenanceMinutes' | 'idleNetMinutes' | 'tripsConsidered' | 'idleSegmentsConsidered' : never) =>
+      consideredRows.reduce((acc, r) => acc + r[key], 0);
+    expect(sum('capacityMinutes')).toBeCloseTo(totals.capacityMinutes, 5);
+    expect(sum('tripMinutes')).toBeCloseTo(totals.tripMinutes, 5);
+    expect(sum('maintenanceMinutes')).toBeCloseTo(totals.maintenanceMinutes, 5);
+    expect(sum('idleNetMinutes')).toBeCloseTo(totals.idleNetMinutes, 5);
+    expect(sum('tripsConsidered')).toBe(totals.tripsConsidered);
+    expect(sum('idleSegmentsConsidered')).toBe(totals.idleSegmentsConsidered);
+  });
+
+  it('veiculo fora de operacao ou fora da janela do periodo: considered=false, todos os campos zerados', () => {
+    const perVehicle = computeFleetTimeByVehicle(
+      [vehicle({ vehicleId: 'sold', status: VehicleStatus.SOLD }), vehicle({ vehicleId: 'future', createdAt: d('2026-04-01T00:00:00Z') })],
+      period,
+      now,
+    );
+    expect(perVehicle.get('sold')).toMatchObject({ considered: false, capacityMinutes: 0, tripMinutes: 0 });
+    expect(perVehicle.get('future')).toMatchObject({ considered: false, capacityMinutes: 0 });
+  });
+});
+
+describe('computeVehicleFleetTime', () => {
+  it('e a mesma funcao usada por computeFleetTimeByVehicle (chamada direta produz a mesma linha)', () => {
+    const v = vehicle({ vehicleId: 'x', trips: [trip('t1', '2026-03-01T00:00:00Z', '2026-03-02T00:00:00Z')] });
+    expect(computeVehicleFleetTime(v, period, now)).toEqual(computeFleetTimeByVehicle([v], period, now).get('x'));
   });
 });

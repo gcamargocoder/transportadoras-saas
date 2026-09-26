@@ -61,11 +61,93 @@ function minutesOf(interval: { start: Date; end: Date }): number {
   return (interval.end.getTime() - interval.start.getTime()) / MS_PER_MINUTE;
 }
 
-export function computeFleetTimeTotals(
+export interface VehicleFleetTime {
+  vehicleId: string;
+  /// false = fora de operacao (status atual SOLD/INACTIVE) ou fora da janela
+  /// do periodo (vendido antes / cadastrado depois) -- todos os campos abaixo
+  /// ficam 0 e o chamador NUNCA deve tratar isso como "0% de utilizacao".
+  considered: boolean;
+  capacityMinutes: number;
+  tripMinutes: number;
+  maintenanceMinutes: number;
+  idleNetMinutes: number;
+  tripsConsidered: number;
+  idleSegmentsConsidered: number;
+}
+
+const EMPTY_VEHICLE_ROW = (vehicleId: string): VehicleFleetTime => ({
+  vehicleId,
+  considered: false,
+  capacityMinutes: 0,
+  tripMinutes: 0,
+  maintenanceMinutes: 0,
+  idleNetMinutes: 0,
+  tripsConsidered: 0,
+  idleSegmentsConsidered: 0,
+});
+
+// BI 4 -- calculo POR VEICULO, extraido do loop que antes so agregava (nunca
+// uma segunda formula: computeFleetTimeTotals abaixo soma exatamente esta
+// funcao). Usado tanto pelo agregado (utilizacao/disponibilidade/ociosidade
+// da frota inteira) quanto pelo recorte por veiculo (GET /bi/kpis/breakdown
+// ?dimension=vehicle).
+export function computeVehicleFleetTime(vehicle: FleetTimeVehicleInput, period: KpiPeriod, now: Date): VehicleFleetTime {
+  const effectiveEnd = new Date(Math.min(period.end.getTime(), now.getTime()));
+  if (OUT_OF_OPERATION_STATUSES.includes(vehicle.status)) return EMPTY_VEHICLE_ROW(vehicle.vehicleId);
+
+  // Veiculo cadastrado no meio do periodo so conta a partir do cadastro.
+  const windowStart = new Date(Math.max(period.start.getTime(), vehicle.createdAt.getTime()));
+  if (effectiveEnd.getTime() <= windowStart.getTime()) return EMPTY_VEHICLE_ROW(vehicle.vehicleId);
+
+  const row: VehicleFleetTime = {
+    ...EMPTY_VEHICLE_ROW(vehicle.vehicleId),
+    considered: true,
+    capacityMinutes: (effectiveEnd.getTime() - windowStart.getTime()) / MS_PER_MINUTE,
+  };
+
+  // Em viagem: uniao dos intervalos de execucao (nunca conta 2x o mesmo
+  // minuto caso haja viagens sobrepostas por erro de lancamento).
+  const tripIntervals: { start: Date; end: Date }[] = [];
+  for (const trip of vehicle.trips) {
+    if (!trip.actualDeparture) continue;
+    const end = trip.actualArrival ?? (ACTIVE_TRIP_STATUSES.includes(trip.status) ? now : null);
+    if (!end) continue;
+    const clipped = clip(trip.actualDeparture, end, windowStart, effectiveEnd);
+    if (!clipped) continue;
+    tripIntervals.push(clipped);
+    row.tripsConsidered += 1;
+  }
+  row.tripMinutes = mergeIntervals(tripIntervals).reduce((sum, i) => sum + minutesOf(i), 0);
+
+  // Manutencao dentro do periodo (OS em aberto vai ate o fim efetivo).
+  row.maintenanceMinutes = computeMaintenanceOverlapMinutes(windowStart, effectiveEnd, vehicle.maintenanceIntervals);
+
+  // Ociosidade: mesmos segmentos de GET /fleet-operations/idle-time,
+  // recortados ao periodo e liquidos de manutencao.
+  for (const segment of computeIdleSegments(vehicle.trips, now)) {
+    const clipped = clip(segment.idleStart, segment.idleEnd ?? now, windowStart, effectiveEnd);
+    if (!clipped) continue;
+    row.idleSegmentsConsidered += 1;
+    const maintenance = computeMaintenanceOverlapMinutes(clipped.start, clipped.end, vehicle.maintenanceIntervals);
+    row.idleNetMinutes += Math.max(0, minutesOf(clipped) - maintenance);
+  }
+
+  return row;
+}
+
+// BI 4 -- mapa por veiculo (chave = vehicleId), mesma regra acima aplicada a
+// cada veiculo do escopo. Base do recorte por veiculo.
+export function computeFleetTimeByVehicle(
   vehicles: FleetTimeVehicleInput[],
   period: KpiPeriod,
   now: Date,
-): FleetTimeTotals {
+): Map<string, VehicleFleetTime> {
+  const map = new Map<string, VehicleFleetTime>();
+  for (const vehicle of vehicles) map.set(vehicle.vehicleId, computeVehicleFleetTime(vehicle, period, now));
+  return map;
+}
+
+export function computeFleetTimeTotals(vehicles: FleetTimeVehicleInput[], period: KpiPeriod, now: Date): FleetTimeTotals {
   const effectiveEnd = new Date(Math.min(period.end.getTime(), now.getTime()));
   const totals: FleetTimeTotals = {
     vehiclesConsidered: 0,
@@ -77,47 +159,15 @@ export function computeFleetTimeTotals(
     idleSegmentsConsidered: 0,
     effectiveEnd,
   };
-
-  for (const vehicle of vehicles) {
-    if (OUT_OF_OPERATION_STATUSES.includes(vehicle.status)) continue;
-    // Veiculo cadastrado no meio do periodo so conta a partir do cadastro.
-    const windowStart = new Date(Math.max(period.start.getTime(), vehicle.createdAt.getTime()));
-    if (effectiveEnd.getTime() <= windowStart.getTime()) continue;
-
+  for (const row of computeFleetTimeByVehicle(vehicles, period, now).values()) {
+    if (!row.considered) continue;
     totals.vehiclesConsidered += 1;
-    totals.capacityMinutes += (effectiveEnd.getTime() - windowStart.getTime()) / MS_PER_MINUTE;
-
-    // Em viagem: uniao dos intervalos de execucao (nunca conta 2x o mesmo
-    // minuto caso haja viagens sobrepostas por erro de lancamento).
-    const tripIntervals: { start: Date; end: Date }[] = [];
-    for (const trip of vehicle.trips) {
-      if (!trip.actualDeparture) continue;
-      const end = trip.actualArrival ?? (ACTIVE_TRIP_STATUSES.includes(trip.status) ? now : null);
-      if (!end) continue;
-      const clipped = clip(trip.actualDeparture, end, windowStart, effectiveEnd);
-      if (!clipped) continue;
-      tripIntervals.push(clipped);
-      totals.tripsConsidered += 1;
-    }
-    totals.tripMinutes += mergeIntervals(tripIntervals).reduce((sum, i) => sum + minutesOf(i), 0);
-
-    // Manutencao dentro do periodo (OS em aberto vai ate o fim efetivo).
-    totals.maintenanceMinutes += computeMaintenanceOverlapMinutes(
-      windowStart,
-      effectiveEnd,
-      vehicle.maintenanceIntervals,
-    );
-
-    // Ociosidade: mesmos segmentos de GET /fleet-operations/idle-time,
-    // recortados ao periodo e liquidos de manutencao.
-    for (const segment of computeIdleSegments(vehicle.trips, now)) {
-      const clipped = clip(segment.idleStart, segment.idleEnd ?? now, windowStart, effectiveEnd);
-      if (!clipped) continue;
-      totals.idleSegmentsConsidered += 1;
-      const maintenance = computeMaintenanceOverlapMinutes(clipped.start, clipped.end, vehicle.maintenanceIntervals);
-      totals.idleNetMinutes += Math.max(0, minutesOf(clipped) - maintenance);
-    }
+    totals.capacityMinutes += row.capacityMinutes;
+    totals.tripMinutes += row.tripMinutes;
+    totals.maintenanceMinutes += row.maintenanceMinutes;
+    totals.idleNetMinutes += row.idleNetMinutes;
+    totals.tripsConsidered += row.tripsConsidered;
+    totals.idleSegmentsConsidered += row.idleSegmentsConsidered;
   }
-
   return totals;
 }
