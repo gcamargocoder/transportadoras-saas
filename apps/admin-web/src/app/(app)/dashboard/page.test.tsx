@@ -311,10 +311,10 @@ describe('Central de Inteligencia (/dashboard)', () => {
   });
 
   it('abas futuras nao exibem dados ficticios nem consultam a API', () => {
-    searchParams = new URLSearchParams('aba=costs');
+    searchParams = new URLSearchParams('aba=deadlines');
     renderPage();
-    expect(screen.getByText('Custos chega à Central no BI 5')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Custos da frota/ })).toHaveAttribute('href', '/operations/fleet/costs');
+    expect(screen.getByText('Prazos chega à Central no BI 6')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Entregas/ })).toHaveAttribute('href', '/operations/deliveries');
     expect(getKpiSummaryMock).not.toHaveBeenCalled();
   });
 
@@ -851,5 +851,172 @@ describe('Central -- aba Frota (BI 4)', () => {
     expect(screen.queryByText('Horas da frota no período')).not.toBeInTheDocument();
     expect(screen.queryByRole('article', { name: 'Distancia percorrida' })).not.toBeInTheDocument();
     expect(screen.queryByRole('article', { name: 'Utilizacao da frota' })).not.toBeInTheDocument();
+  });
+});
+
+// ============================================================================
+// BI 5 -- aba Custos
+// ============================================================================
+const COST_VEHICLE_ROWS: Record<string, ReturnType<typeof vehicleBreakdownItem>[]> = {
+  operating_cost: [vehicleBreakdownItem('v1', 'AAA1111', 850, null, null, 6), vehicleBreakdownItem('v2', 'BBB2222', 380, null, null, 3)],
+  fuel_cost: [vehicleBreakdownItem('v1', 'AAA1111', 600), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  maintenance_cost: [vehicleBreakdownItem('v1', 'AAA1111', 0), vehicleBreakdownItem('v2', 'BBB2222', 300)],
+  toll_cost: [vehicleBreakdownItem('v1', 'AAA1111', 50), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  tire_cost: [vehicleBreakdownItem('v1', 'AAA1111', 200), vehicleBreakdownItem('v2', 'BBB2222', 80)],
+  other_cost: [vehicleBreakdownItem('v1', 'AAA1111', 0), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+  cost_per_km: [
+    vehicleBreakdownItem('v1', 'AAA1111', 8.5),
+    vehicleBreakdownItem('v2', 'BBB2222', null, 'Menos de 2 leituras de odometro (abastecimento ou manutencao) no periodo para este veiculo.'),
+  ],
+};
+
+function costVehicleBreakdown(kpiId: string, fleetId?: string): KpiBreakdownEntity {
+  return {
+    kpiId,
+    dimension: 'vehicle',
+    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null },
+    period: PERIOD,
+    total: kpiId === 'cost_per_km' ? 14.2 : null,
+    items: COST_VEHICLE_ROWS[kpiId] ?? [],
+    others: null,
+  };
+}
+
+// BI 5 -- fuel_cost/maintenance_cost/toll_cost/tire_cost/other_cost sao KPIs
+// OFICIAIS proprios no catalogo (nao so inputs de operating_cost); a aba
+// Custos os mostra como cards individuais.
+function costsSummary(): KpiSummaryEntity {
+  const summary = financialSummary();
+  summary.kpis.push(
+    kpi('fuel_cost', { name: 'Combustivel', unit: 'BRL', direction: 'LOWER_IS_BETTER', value: 600000 }),
+    kpi('maintenance_cost', { name: 'Manutencao', unit: 'BRL', direction: 'LOWER_IS_BETTER', value: 80000 }),
+    kpi('toll_cost', { name: 'Pedagio', unit: 'BRL', direction: 'LOWER_IS_BETTER', value: 40000 }),
+    kpi('tire_cost', { name: 'Pneus', unit: 'BRL', direction: 'LOWER_IS_BETTER', value: 30000 }),
+    kpi('other_cost', { name: 'Outras despesas', unit: 'BRL', direction: 'LOWER_IS_BETTER', value: 4200 }),
+  );
+  return summary;
+}
+
+function scopedCostSummary(): KpiSummaryEntity {
+  const summary = costsSummary();
+  summary.scope = { ...summary.scope, vehicleId: 'v1' };
+  summary.kpis = summary.kpis.map((k) => (k.id === 'operating_cost' ? { ...k, value: 850 } : k));
+  return summary;
+}
+
+describe('Central -- aba Custos (BI 5)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getKpiSeriesMock.mockReset();
+    getKpiBreakdownMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=costs');
+    getKpiSummaryMock.mockImplementation(async (query: { vehicleId?: string; fleetId?: string }) =>
+      query.vehicleId || query.fleetId ? scopedCostSummary() : costsSummary(),
+    );
+    getKpiSeriesMock.mockResolvedValue(buildSeries());
+    getKpiBreakdownMock.mockImplementation(async (query: { kpiId: string; fleetId?: string }) => costVehicleBreakdown(query.kpiId, query.fleetId));
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('resumo com os 7 KPIs de custo, do mesmo summary das outras abas quando sem filtro', async () => {
+    renderPage();
+    for (const name of ['Despesas operacionais', 'Custo por km', 'Combustivel', 'Manutencao', 'Pedagio', 'Pneus', 'Outras despesas']) {
+      expect(await screen.findByRole('article', { name })).toBeInTheDocument();
+    }
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('relacao custo x operacao mostra distancia/receita/resultado/margem do mesmo summary', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Despesas operacionais' });
+    expect(screen.getByRole('article', { name: 'Distancia percorrida' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Receita' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Margem operacional' })).toBeInTheDocument();
+  });
+
+  it('selecionar um veiculo dispara um summary escopado; limpar o filtro volta ao summary global', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('article', { name: 'Despesas operacionais' });
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+
+    // Timeout maior: a aba Custos dispara 7 chamadas de breakdown em paralelo
+    // (uma por KPI de custo) alem do summary escopado -- sob carga (suite
+    // inteira), o render leva mais que o timeout padrao de waitFor.
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    await waitFor(
+      () => expect(within(screen.getByRole('article', { name: 'Despesas operacionais' })).getByText(/850,00/)).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Trocar selecao' }));
+    await waitFor(
+      () => expect(within(screen.getByRole('article', { name: 'Despesas operacionais' })).getByText(/354\.200,00/)).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('composicao dos custos mostra as categorias oficiais do operating_cost', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Despesas operacionais' });
+    expect(await screen.findByText('Combustível')).toBeInTheDocument();
+    expect(screen.getByText(/classificação contábil/)).toBeInTheDocument();
+  });
+
+  it('tabela por veiculo: cost_per_km UNAVAILABLE nunca vira 0; busca funciona', async () => {
+    renderPage();
+    const table = await screen.findByRole('table');
+    await waitFor(() => expect(within(table).getByText('AAA1111')).toBeInTheDocument());
+    const row = within(table).getByText('BBB2222').closest('tr') as HTMLElement;
+    expect(row).toHaveTextContent('—');
+    await userEvent.type(screen.getByPlaceholderText('Buscar por placa...'), 'BBB');
+    await waitFor(() => expect(within(table).queryByText('AAA1111')).not.toBeInTheDocument());
+  });
+
+  it('filtrar por 1 veiculo esconde a tabela por veiculo e explica o motivo', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('table');
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+    await waitFor(() => expect(screen.queryByRole('table')).not.toBeInTheDocument());
+    expect(screen.getByText('Filtro já restrito a 1 veículo')).toBeInTheDocument();
+  });
+
+  it('drill-down dos cards de custo para as telas existentes', async () => {
+    renderPage();
+    const opCost = await screen.findByRole('article', { name: 'Despesas operacionais' });
+    expect(within(opCost).getByRole('link', { name: /Ver custos/ })).toHaveAttribute('href', '/operations/fleet/costs');
+    expect(
+      within(screen.getByRole('article', { name: 'Combustivel' })).getByRole('link', { name: /Ver abastecimento/ }),
+    ).toHaveAttribute('href', '/operations/fleet/fuel');
+  });
+
+  it('"Como é calculado" funciona nos cards de custo', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Despesas operacionais' });
+    fireEvent.click(screen.getByRole('button', { name: 'Como é calculado: Despesas operacionais' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Custo operacional total')).toBeInTheDocument();
+  });
+
+  it('regressao: aba Financeiro continua com os 6 KPIs oficiais apos a extracao de CostCompositionList', async () => {
+    searchParams = new URLSearchParams('aba=financial');
+    getKpiSummaryMock.mockReset();
+    getKpiSummaryMock.mockResolvedValue(financialSummary());
+    renderPage();
+    for (const name of ['Receita', 'Despesas operacionais', 'Resultado operacional', 'Margem operacional', 'Custo por km', 'Receita por km']) {
+      expect(await screen.findByRole('article', { name })).toBeInTheDocument();
+    }
   });
 });

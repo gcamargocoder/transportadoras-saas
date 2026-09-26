@@ -34,18 +34,7 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'operation', label: 'Operação' },
   { value: 'financial', label: 'Financeiro' },
   { value: 'fleet', label: 'Frota' },
-  {
-    value: 'costs',
-    label: 'Custos',
-    upcoming: {
-      phase: 'BI 5',
-      summary: 'Custo por km, composição de custos e rentabilidade.',
-      screens: [
-        { label: 'Custos da frota', href: '/operations/fleet/costs' },
-        { label: 'Pedágios', href: '/operations/fleet/tolls' },
-      ],
-    },
-  },
+  { value: 'costs', label: 'Custos' },
   {
     value: 'deadlines',
     label: 'Prazos',

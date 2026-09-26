@@ -22,16 +22,15 @@ import type { KpiGranularity, KpiResultEntity, KpiSeriesEntity } from '../../typ
 import { cn } from '../../utils/cn';
 import { formatNumber } from '../../utils/format';
 import {
-  COST_CATEGORY_COLORS,
+  COST_CATEGORIES,
   CostCompositionChart,
-  CURRENT_COLOR,
-  PREVIOUS_COLOR,
+  CostCompositionList,
   ResultBarChart,
+  TrendLegend,
   TrendLineChart,
-  type CostCategory,
 } from './financial-charts';
 import { KpiCard } from './kpi-card';
-import { findInput, formatKpiValue } from './kpi-format';
+import { formatKpiValue } from './kpi-format';
 import type { PeriodRange } from './period';
 import {
   GRANULARITY_LABELS,
@@ -49,22 +48,6 @@ const SUMMARY: Array<{ id: string; icon: LucideIcon }> = [
   { id: 'cost_per_km', icon: Gauge },
   { id: 'revenue_per_km', icon: TrendingUp },
 ];
-
-// Mesmas categorias (e mesma ordem) dos componentes de operating_cost.
-const COST_CATEGORIES: CostCategory[] = [
-  { id: 'fuel_cost', label: 'Combustível' },
-  { id: 'maintenance_cost', label: 'Manutenção' },
-  { id: 'tire_cost', label: 'Pneus' },
-  { id: 'toll_cost', label: 'Pedágios' },
-  { id: 'other_cost', label: 'Outras despesas' },
-];
-const COST_INPUT_KEYS: Record<string, string> = {
-  fuel_cost: 'fuelCost',
-  maintenance_cost: 'maintenanceCost',
-  tire_cost: 'tireCost',
-  toll_cost: 'tollCost',
-  other_cost: 'otherCost',
-};
 
 const TREND_KPIS = ['revenue', 'operating_cost', 'operating_result', 'operating_margin'];
 // Uma unica chamada de serie para toda a aba: tendencias + composicao.
@@ -140,21 +123,6 @@ function ChartCard({ title, description, children }: { title: string; descriptio
   );
 }
 
-function TrendLegend(): JSX.Element {
-  return (
-    <p className="flex flex-wrap items-center gap-4 text-xs text-ink-muted">
-      <span className="flex items-center gap-1.5">
-        <span className="h-0.5 w-4 rounded" style={{ backgroundColor: CURRENT_COLOR }} aria-hidden />
-        Período atual
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="h-0 w-4 border-t-2 border-dashed" style={{ borderColor: PREVIOUS_COLOR }} aria-hidden />
-        Período anterior
-      </span>
-    </p>
-  );
-}
-
 function SeriesTable({ series, rowsById }: { series: KpiSeriesEntity[]; rowsById: Map<string, SeriesRow[]> }): JSX.Element {
   const first = rowsById.get(series[0]?.id ?? '') ?? [];
   return (
@@ -192,45 +160,6 @@ function SeriesTable({ series, rowsById }: { series: KpiSeriesEntity[]; rowsById
         </table>
       </div>
     </details>
-  );
-}
-
-function CostCompositionList({ kpi }: { kpi: KpiResultEntity | undefined }): JSX.Element | null {
-  const total = findInput(kpi, 'totalCost');
-  if (total === null) return null;
-  return (
-    <ul className="flex flex-col gap-3 text-sm">
-      {COST_CATEGORIES.map((category) => {
-        const value = findInput(kpi, COST_INPUT_KEYS[category.id] ?? '') ?? 0;
-        const share = total > 0 ? (value / total) * 100 : null;
-        return (
-          <li key={category.id}>
-            <div className="flex items-center justify-between gap-3">
-              <span className="flex items-center gap-2 text-ink">
-                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: COST_CATEGORY_COLORS[category.id] }} aria-hidden />
-                {category.label}
-              </span>
-              <span className="tabular-nums text-ink">
-                {formatKpiValue('BRL', value)}
-                <span className="ml-2 inline-block w-12 text-right text-xs text-ink-muted">
-                  {share === null ? '—' : `${formatNumber(share, 1)}%`}
-                </span>
-              </span>
-            </div>
-            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-muted">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${share ?? 0}%`, backgroundColor: COST_CATEGORY_COLORS[category.id] }}
-              />
-            </div>
-          </li>
-        );
-      })}
-      <li className="flex items-center justify-between border-t border-border pt-3 font-semibold text-ink">
-        <span>Total</span>
-        <span className="tabular-nums">{formatKpiValue('BRL', total)}</span>
-      </li>
-    </ul>
   );
 }
 

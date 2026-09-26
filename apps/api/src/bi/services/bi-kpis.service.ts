@@ -216,6 +216,21 @@ export class BiKpisService {
           return this.breakdown.tripsCompletedByVehicle(tenantId, scope, period, limit);
         case 'distance_km':
           return this.breakdown.distanceByVehicle(tenantId, scope, period, limit);
+        // BI 5 -- custo por veiculo.
+        case 'operating_cost':
+          return this.breakdown.operatingCostByVehicle(tenantId, scope, period, limit);
+        case 'fuel_cost':
+          return this.breakdown.fuelCostByVehicle(tenantId, scope, period, limit);
+        case 'maintenance_cost':
+          return this.breakdown.maintenanceCostByVehicle(tenantId, scope, period, limit);
+        case 'toll_cost':
+          return this.breakdown.tollCostByVehicle(tenantId, scope, period, limit);
+        case 'tire_cost':
+          return this.breakdown.tireCostByVehicle(tenantId, scope, period, limit);
+        case 'other_cost':
+          return this.breakdown.otherCostByVehicle(tenantId, scope, period, limit);
+        case 'cost_per_km':
+          return this.breakdown.costPerKmByVehicle(tenantId, scope, period, limit);
       }
     }
     throw new BadRequestException(`Recorte por ${dimension} nao disponivel para o KPI ${kpiId}.`);

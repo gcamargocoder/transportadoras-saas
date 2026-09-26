@@ -822,4 +822,63 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       expect(itemsSum + res.body.data.others.value).toBe(res.body.data.total);
     });
   });
+
+  describe('recorte por veiculo dos custos (BI 5)', () => {
+    const JAN = JANUARY;
+    let second: SecondVehicle;
+
+    beforeAll(async () => {
+      second = await seedSecondVehicle(a);
+    }, 60000);
+
+    function getBreakdown(auth: string, query: Record<string, string>) {
+      return request(app.getHttpServer()).get('/api/v1/bi/kpis/breakdown').query(query).set('Authorization', auth);
+    }
+
+    it('fuel_cost: soma dos itens = valor do summary; os 2 veiculos aparecem', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'fuel_cost', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'fuel_cost' }).expect(200),
+      ]);
+      const itemsSum = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(itemsSum).toBeCloseTo(kpi(summary.body, 'fuel_cost').value, 2);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId)).toBeTruthy();
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === second.vehicleId)).toBeTruthy();
+    });
+
+    it('operating_cost: soma dos itens (+ others/"Sem veiculo") = valor do summary', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'operating_cost', dimension: 'vehicle', limit: '500' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'operating_cost' }).expect(200),
+      ]);
+      const itemsSum = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(itemsSum).toBeCloseTo(kpi(summary.body, 'operating_cost').value, 2);
+      expect(breakdown.body.data.total).toBeCloseTo(kpi(summary.body, 'operating_cost').value, 2);
+    });
+
+    it('cost_per_km por veiculo: razao nunca somada -- total e o valor oficial do summary, share/others sempre null', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'cost_per_km', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'cost_per_km' }).expect(200),
+      ]);
+      expect(breakdown.body.data.total).toBeCloseTo(kpi(summary.body, 'cost_per_km').value ?? NaN, 2);
+      expect(breakdown.body.data.others).toBeNull();
+      for (const row of breakdown.body.data.items) expect(row.share).toBeNull();
+    });
+
+    it('filtro por veiculo: fuel_cost recorta para 1 unico item, igual ao summary escopado', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'fuel_cost', dimension: 'vehicle', vehicleId: a.vehicleId }).expect(200);
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.data.items[0].key).toBe(a.vehicleId);
+    });
+
+    it('isolamento: recorte de custo de B nunca mostra veiculos de A', async () => {
+      const res = await getBreakdown(b.auth, { ...JAN, kpiId: 'fuel_cost', dimension: 'vehicle' }).expect(200);
+      expect(res.body.data.items.every((i: { key: string | null }) => i.key !== a.vehicleId && i.key !== second.vehicleId)).toBe(true);
+    });
+
+    it('KPI financeiro (nao suportado por veiculo) => 400', async () => {
+      await getBreakdown(a.auth, { ...JAN, kpiId: 'operating_margin', dimension: 'vehicle' }).expect(400);
+    });
+  });
 });

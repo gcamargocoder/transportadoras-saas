@@ -83,6 +83,68 @@ function summableVehicleBreakdown(raw: RawVehicleRow[], limit: number): Breakdow
   return { total, items: top, others };
 }
 
+interface CostVehicleRow {
+  vehicleId: string | null;
+  amount: number;
+  count: number;
+}
+
+function toCostRows<T>(
+  groups: T[],
+  vehicleIdOf: (g: T) => string | null,
+  amountOf: (g: T) => number,
+  countOf: (g: T) => number,
+): CostVehicleRow[] {
+  return groups.map((g) => ({ vehicleId: vehicleIdOf(g), amount: amountOf(g), count: countOf(g) }));
+}
+
+// BI 5 -- funde N listas de {vehicleId, amount, count} (uma por fonte de
+// custo) num unico mapa por veiculo -- operating_cost soma as 5 categorias
+// ao mesmo tempo; os KPIs de categoria unica passam uma lista so.
+function mergeCostRows(...lists: CostVehicleRow[][]): Map<string | null, { amount: number; count: number }> {
+  const merged = new Map<string | null, { amount: number; count: number }>();
+  for (const list of lists) {
+    for (const row of list) {
+      const current = merged.get(row.vehicleId) ?? { amount: 0, count: 0 };
+      merged.set(row.vehicleId, { amount: current.amount + row.amount, count: current.count + row.count });
+    }
+  }
+  return merged;
+}
+
+// BI 5 -- projeta {vehicleId|null -> {amount,count}} nas linhas de um KPI de
+// custo (sempre somavel, NUNCA UNAVAILABLE por veiculo -- ausencia de
+// registro e gasto zero real): cada veiculo do escopo entra com o valor
+// conhecido (0 quando nao ha registro); o que sobra da fusao vira "Veiculo
+// removido" (historico de veiculo excluido) ou "Sem veiculo" (despesa/pneu
+// sem vinculo a um veiculo especifico) -- nunca descartado silenciosamente.
+function costRawRows(
+  vehicles: { vehicleId: string; plate: string }[],
+  merged: Map<string | null, { amount: number; count: number }>,
+): RawVehicleRow[] {
+  const remaining = new Map(merged);
+  const raw: RawVehicleRow[] = vehicles.map((v) => {
+    const entry = remaining.get(v.vehicleId);
+    remaining.delete(v.vehicleId);
+    return { vehicleId: v.vehicleId, label: v.plate, value: entry?.amount ?? 0, recordCount: entry?.count ?? 0, unavailableReason: null };
+  });
+  const unassigned = remaining.get(null);
+  remaining.delete(null);
+  if (unassigned) {
+    raw.push({ vehicleId: null, label: UNASSIGNED_VEHICLE_LABEL, value: unassigned.amount, recordCount: unassigned.count, unavailableReason: null });
+  }
+  if (remaining.size > 0) {
+    let amount = 0;
+    let count = 0;
+    for (const entry of remaining.values()) {
+      amount += entry.amount;
+      count += entry.count;
+    }
+    raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: amount, recordCount: count, unavailableReason: null });
+  }
+  return raw;
+}
+
 // BI 4 -- motivos por veiculo, mesma regra dos KPIs agregados equivalentes
 // (NO_FLEET_CAPACITY/NO_DISTANCE no catalogo), so que aplicada por linha.
 const VEHICLE_OUT_OF_OPERATION =
@@ -90,11 +152,11 @@ const VEHICLE_OUT_OF_OPERATION =
 const NO_DISTANCE_VEHICLE =
   'Menos de 2 leituras de odometro (abastecimento ou manutencao) no periodo para este veiculo.';
 const REMOVED_VEHICLE_LABEL = 'Veiculo removido';
-// Trip.composition e opcional no schema: uma viagem pode chegar a COMPLETED
-// sem composicao (assertCanStart so valida o veiculo QUANDO ha composicao).
-// Essas viagens contam no summary (prisma.trip.count) e nunca podem sumir
-// silenciosamente do breakdown por veiculo.
-const NO_COMPOSITION_LABEL = 'Sem veiculo';
+// Trip.composition e opcional no schema (BI 4): uma viagem pode chegar a
+// COMPLETED sem composicao. Reaproveitado no BI 5 para TripExpense/Tire sem
+// vehicleId (despesa geral da empresa ou pneu em estoque no momento da
+// compra) -- em ambos os casos o registro e real e nunca some do total.
+const UNASSIGNED_VEHICLE_LABEL = 'Sem veiculo';
 
 // BI 3 -- receita por cliente. O where e EXATAMENTE o do KPI `revenue`
 // (FleetOperationsMetricsService.buildRevenueSourceWhere); o groupBy so
@@ -170,14 +232,18 @@ export class BiKpiBreakdownService {
     return { vehicles, rows: computeFleetTimeByVehicle(vehicles, period, now), aggregate: computeFleetTimeTotals(vehicles, period, now) };
   }
 
-  // Reusa a MESMA funcao pura do catalogo (findKpiDefinition(id).compute) para
-  // o "total" de uma razao -- nunca uma segunda formula de utilizacao/
-  // disponibilidade da frota.
-  private ratioTotal(kpiId: 'fleet_utilization' | 'fleet_availability', aggregate: FleetTimeTotals, period: KpiPeriod): number | null {
+  // BI 4/5 -- reusa a MESMA funcao pura do catalogo (findKpiDefinition(id)
+  // .compute) para o "total" de uma razao -- nunca uma segunda formula de
+  // utilizacao/disponibilidade da frota ou de custo/km.
+  private catalogTotal(kpiId: string, snapshot: Partial<BiPeriodSnapshot>, period: KpiPeriod): number | null {
     const definition = findKpiDefinition(kpiId);
     if (!definition) return null;
-    const snapshot: BiPeriodSnapshot = { ...EMPTY_SNAPSHOT, period, fleetTime: aggregate };
-    return definition.compute(snapshot).value;
+    const full: BiPeriodSnapshot = { ...EMPTY_SNAPSHOT, period, ...snapshot };
+    return definition.compute(full).value;
+  }
+
+  private ratioTotal(kpiId: 'fleet_utilization' | 'fleet_availability', aggregate: FleetTimeTotals, period: KpiPeriod): number | null {
+    return this.catalogTotal(kpiId, { fleetTime: aggregate }, period);
   }
 
   async fleetUtilizationByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
@@ -233,7 +299,7 @@ export class BiKpiBreakdownService {
     for (const trip of trips) {
       const vehicleId = trip.composition?.vehicleId;
       // Trip.composition e opcional: viagem concluida sem composicao nunca
-      // pode sumir do total (ver NO_COMPOSITION_LABEL acima).
+      // pode sumir do total (ver UNASSIGNED_VEHICLE_LABEL acima).
       if (!vehicleId) {
         noCompositionCount += 1;
         continue;
@@ -250,7 +316,7 @@ export class BiKpiBreakdownService {
     const orphan = [...countByVehicle.values()].reduce((sum, c) => sum + c, 0);
     if (orphan > 0) raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphan, recordCount: orphan, unavailableReason: null });
     if (noCompositionCount > 0) {
-      raw.push({ vehicleId: null, label: NO_COMPOSITION_LABEL, value: noCompositionCount, recordCount: noCompositionCount, unavailableReason: null });
+      raw.push({ vehicleId: null, label: UNASSIGNED_VEHICLE_LABEL, value: noCompositionCount, recordCount: noCompositionCount, unavailableReason: null });
     }
     return summableVehicleBreakdown(raw, limit);
   }
@@ -284,5 +350,116 @@ export class BiKpiBreakdownService {
       raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphanKm, recordCount: orphanReadings, unavailableReason: null });
     }
     return summableVehicleBreakdown(raw, limit);
+  }
+
+  // --------------------------------------------------------------------------
+  // BI 5 -- custo por veiculo
+  // --------------------------------------------------------------------------
+
+  // Veiculos do escopo, sem carregar viagens/manutencoes (o BI 4 usa
+  // loadVehicleIdleData porque precisa delas; custo so precisa de id+placa).
+  private async listScopedVehicles(tenantId: string, scope: BiScope): Promise<{ vehicleId: string; plate: string }[]> {
+    const vehicles = await this.prisma.vehicle.findMany({
+      where: { tenantId, deletedAt: null, ...compact({ id: scope.vehicleId, fleetId: scope.fleetId }) },
+      select: { id: true, plate: true },
+    });
+    return vehicles.map((v) => ({ vehicleId: v.id, plate: v.plate }));
+  }
+
+  // BI 5 -- as 5 fontes de custo REALIZADO agrupadas por veiculo, com o MESMO
+  // where de FleetOperationsMetricsService.buildCostSourceWheres (o mesmo do
+  // summary/evidencias) -- nenhuma query nem formula nova, so groupBy em vez
+  // de aggregate. TireRetread nao tem vehicleId direto: atribuido ao veiculo
+  // ATUAL do pneu, mesma limitacao ja documentada no catalogo para tire_cost.
+  private async loadCostSourceRows(tenantId: string, scope: BiScope, period: KpiPeriod) {
+    const filters = compact({ startDate: period.start, endDate: period.end, ...scope });
+    const wheres = this.fleetMetrics.buildCostSourceWheres(tenantId, filters);
+    const [fuelGroups, maintenanceGroups, tollGroups, tireGroups, retreads, otherGroups] = await Promise.all([
+      this.prisma.fuelSupply.groupBy({ by: ['vehicleId'], where: wheres.fuel, _sum: { totalAmount: true }, _count: true }),
+      this.prisma.vehicleMaintenance.groupBy({ by: ['vehicleId'], where: wheres.maintenance, _sum: { totalCost: true }, _count: true }),
+      this.prisma.tollTransaction.groupBy({ by: ['vehicleId'], where: wheres.toll, _sum: { chargedAmount: true }, _count: true }),
+      this.prisma.tire.groupBy({ by: ['vehicleId'], where: wheres.tire, _sum: { purchasePrice: true }, _count: true }),
+      this.prisma.tireRetread.findMany({ where: wheres.retread, select: { cost: true, tire: { select: { vehicleId: true } } } }),
+      this.prisma.tripExpense.groupBy({ by: ['vehicleId'], where: wheres.otherExpense, _sum: { amount: true }, _count: true }),
+    ]);
+
+    const fuel = toCostRows(fuelGroups, (g) => g.vehicleId, (g) => toNumberOrNull(g._sum.totalAmount) ?? 0, (g) => g._count);
+    const maintenance = toCostRows(maintenanceGroups, (g) => g.vehicleId, (g) => toNumberOrNull(g._sum.totalCost) ?? 0, (g) => g._count);
+    const toll = toCostRows(tollGroups, (g) => g.vehicleId, (g) => toNumberOrNull(g._sum.chargedAmount) ?? 0, (g) => g._count);
+    const tirePurchases = toCostRows(tireGroups, (g) => g.vehicleId, (g) => toNumberOrNull(g._sum.purchasePrice) ?? 0, (g) => g._count);
+    const other = toCostRows(otherGroups, (g) => g.vehicleId, (g) => toNumberOrNull(g._sum.amount) ?? 0, (g) => g._count);
+
+    const retreadByVehicle = new Map<string | null, { amount: number; count: number }>();
+    for (const r of retreads) {
+      const vehicleId = r.tire?.vehicleId ?? null;
+      const current = retreadByVehicle.get(vehicleId) ?? { amount: 0, count: 0 };
+      retreadByVehicle.set(vehicleId, { amount: current.amount + (toNumberOrNull(r.cost) ?? 0), count: current.count + 1 });
+    }
+    const tire: CostVehicleRow[] = [
+      ...tirePurchases,
+      ...[...retreadByVehicle.entries()].map(([vehicleId, v]) => ({ vehicleId, amount: v.amount, count: v.count })),
+    ];
+
+    return { fuel, maintenance, toll, tire, other };
+  }
+
+  async fuelCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
+    return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.fuel)), limit);
+  }
+
+  async maintenanceCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
+    return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.maintenance)), limit);
+  }
+
+  async tollCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
+    return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.toll)), limit);
+  }
+
+  async tireCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
+    return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.tire)), limit);
+  }
+
+  async otherCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
+    return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.other)), limit);
+  }
+
+  // operating_cost por veiculo = soma das 5 categorias por veiculo (MESMAS
+  // linhas ja carregadas por loadCostSourceRows) -- nunca uma segunda soma
+  // paralela do total.
+  async operatingCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
+    const merged = mergeCostRows(sources.fuel, sources.maintenance, sources.toll, sources.tire, sources.other);
+    return summableVehicleBreakdown(costRawRows(vehicles, merged), limit);
+  }
+
+  // cost_per_km e uma razao (como fleet_utilization/fleet_availability):
+  // nunca somada entre veiculos. "total" e o valor OFICIAL do KPI (mesma
+  // funcao pura do catalogo); share/others ficam sempre null. So entram
+  // veiculos com distancia qualificada (>= 2 leituras), mesma regra do
+  // ranking de custo/km ja existente em FleetOperationsMetricsService.
+  async costPerKmByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const filters = compact({ startDate: period.start, endDate: period.end, ...scope });
+    const [vehicles, sources, costs] = await Promise.all([
+      this.listScopedVehicles(tenantId, scope),
+      this.loadCostSourceRows(tenantId, scope, period),
+      this.fleetMetrics.computeCostTotals(tenantId, filters, { includeDistance: true }),
+    ]);
+    const merged = mergeCostRows(sources.fuel, sources.maintenance, sources.toll, sources.tire, sources.other);
+    const distances = costs.distance?.vehicleDistances ?? new Map<string, number>();
+    const items = vehicles
+      .map((v) => {
+        const cost = merged.get(v.vehicleId)?.amount ?? 0;
+        const distanceKm = distances.get(v.vehicleId) ?? null;
+        const value = distanceKm !== null && distanceKm > 0 ? cost / distanceKm : null;
+        return item(v.vehicleId, v.plate, value, merged.get(v.vehicleId)?.count ?? 0, null, value === null ? NO_DISTANCE_VEHICLE : null);
+      })
+      .sort(byValueDesc);
+    const snapshot: Partial<BiPeriodSnapshot> = { costs };
+    return { total: this.catalogTotal('cost_per_km', snapshot, period), items: items.slice(0, limit), others: null };
   }
 }
