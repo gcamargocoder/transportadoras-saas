@@ -15,7 +15,7 @@ import {
   type KpiTrendTone,
 } from './kpi-format';
 
-const TREND_STYLES: Record<KpiTrendTone, string> = {
+export const TREND_STYLES: Record<KpiTrendTone, string> = {
   positive: 'bg-success-50 text-success-700',
   negative: 'bg-danger-50 text-danger-700',
   neutral: 'bg-info-50 text-info-700',

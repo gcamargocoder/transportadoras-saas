@@ -1,4 +1,4 @@
-import type { KpiResultEntity, KpiUnit } from '../../types/entities';
+import type { KpiDirection, KpiResultEntity, KpiUnit } from '../../types/entities';
 
 // BI 2 -- apresentacao dos KPIs oficiais do BI 1. Nada aqui CALCULA um KPI:
 // so formata o que a API devolveu (value, comparison) e traduz a direcao
@@ -72,6 +72,32 @@ export function resolveTrendTone(kpi: Pick<KpiResultEntity, 'direction' | 'compa
   const improved = kpi.direction === 'HIGHER_IS_BETTER' ? change > 0 : change < 0;
   return improved ? 'positive' : 'negative';
 }
+
+// BI 7 -- tendencia ao longo de uma serie (primeiro x ultimo ponto com
+// valor): o rotulo (Alta/Baixa/Estavel) reflete a direcao BRUTA do valor;
+// a cor reutiliza a MESMA semantica de direction de resolveTrendTone (nunca
+// assume que subir e sempre positivo).
+export type RawTrend = 'up' | 'down' | 'flat' | 'unavailable';
+
+export function classifyRawTrend(first: number | null, last: number | null): RawTrend {
+  if (first === null || last === null) return 'unavailable';
+  if (last === first) return 'flat';
+  return last > first ? 'up' : 'down';
+}
+
+export function resolveSeriesTrendTone(direction: KpiDirection, trend: RawTrend): KpiTrendTone {
+  if (trend === 'unavailable') return 'unavailable';
+  if (trend === 'flat' || direction === 'NEUTRAL') return 'neutral';
+  const improved = direction === 'HIGHER_IS_BETTER' ? trend === 'up' : trend === 'down';
+  return improved ? 'positive' : 'negative';
+}
+
+export const RAW_TREND_LABEL: Record<RawTrend, string> = {
+  up: 'Alta',
+  down: 'Baixa',
+  flat: 'Estável',
+  unavailable: 'Sem dado suficiente',
+};
 
 export function indexKpis(kpis: KpiResultEntity[] | undefined): Map<string, KpiResultEntity> {
   return new Map((kpis ?? []).map((kpi) => [kpi.id, kpi]));

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { KpiResultEntity } from '../../types/entities';
-import { formatKpiAbsoluteChange, formatKpiValue, formatPercentChange, resolveTrendTone } from './kpi-format';
+import {
+  classifyRawTrend,
+  formatKpiAbsoluteChange,
+  formatKpiValue,
+  formatPercentChange,
+  resolveSeriesTrendTone,
+  resolveTrendTone,
+} from './kpi-format';
 
 function trend(direction: KpiResultEntity['direction'], absoluteChange: number | null, value: number | null = 10) {
   return resolveTrendTone({
@@ -53,5 +60,33 @@ describe('resolveTrendTone (cor = melhora/piora, nao subida/descida)', () => {
     expect(trend('HIGHER_IS_BETTER', 0)).toBe('neutral');
     expect(trend('HIGHER_IS_BETTER', null)).toBe('unavailable');
     expect(trend('HIGHER_IS_BETTER', 5, null)).toBe('unavailable');
+  });
+});
+
+describe('classifyRawTrend (BI 7 -- primeiro x ultimo ponto da serie)', () => {
+  it('sobe, desce, estavel e sem dado suficiente', () => {
+    expect(classifyRawTrend(10, 15)).toBe('up');
+    expect(classifyRawTrend(15, 10)).toBe('down');
+    expect(classifyRawTrend(10, 10)).toBe('flat');
+    expect(classifyRawTrend(null, 10)).toBe('unavailable');
+    expect(classifyRawTrend(10, null)).toBe('unavailable');
+  });
+});
+
+describe('resolveSeriesTrendTone (cor reaproveita direction, nao so subida/descida)', () => {
+  it('maior e melhor: alta = positivo, baixa = negativo', () => {
+    expect(resolveSeriesTrendTone('HIGHER_IS_BETTER', 'up')).toBe('positive');
+    expect(resolveSeriesTrendTone('HIGHER_IS_BETTER', 'down')).toBe('negative');
+  });
+
+  it('menor e melhor (ex: custo/km caindo e bom): baixa = positivo, alta = negativo', () => {
+    expect(resolveSeriesTrendTone('LOWER_IS_BETTER', 'down')).toBe('positive');
+    expect(resolveSeriesTrendTone('LOWER_IS_BETTER', 'up')).toBe('negative');
+  });
+
+  it('neutro, estavel e sem dado suficiente', () => {
+    expect(resolveSeriesTrendTone('NEUTRAL', 'up')).toBe('neutral');
+    expect(resolveSeriesTrendTone('HIGHER_IS_BETTER', 'flat')).toBe('neutral');
+    expect(resolveSeriesTrendTone('HIGHER_IS_BETTER', 'unavailable')).toBe('unavailable');
   });
 });

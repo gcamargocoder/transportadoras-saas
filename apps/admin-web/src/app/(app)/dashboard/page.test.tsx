@@ -94,8 +94,8 @@ function buildSummary(): KpiSummaryEntity {
     kpis: [
       kpi('trips_completed', { name: 'Viagens concluidas', value: 1284, comparison: comparison(1146, 138, 12.04) }),
       kpi('deliveries_completed', { name: 'Entregas realizadas', value: 3417, comparison: comparison(3500, -83, -2.37) }),
-      kpi('revenue', { name: 'Receita', unit: 'BRL', value: 452300, comparison: comparison(400000, 52300, 13.08) }),
-      kpi('operating_result', { name: 'Resultado operacional', unit: 'BRL', value: 98100, comparison: comparison(90000, 8100, 9) }),
+      kpi('revenue', { name: 'Receita', category: 'FINANCIAL', unit: 'BRL', value: 452300, comparison: comparison(400000, 52300, 13.08) }),
+      kpi('operating_result', { name: 'Resultado operacional', category: 'FINANCIAL', unit: 'BRL', value: 98100, comparison: comparison(90000, 8100, 9) }),
       kpi('cost_per_km', {
         name: 'Custo por km',
         unit: 'BRL_PER_KM',
@@ -111,6 +111,7 @@ function buildSummary(): KpiSummaryEntity {
       }),
       kpi('on_time_delivery_rate', {
         name: 'Entregas no prazo',
+        category: 'SERVICE_LEVEL',
         unit: 'PERCENT',
         value: 91.2,
         comparison: comparison(88, 3.2, 3.64),
@@ -125,6 +126,7 @@ function buildSummary(): KpiSummaryEntity {
       kpi('occurrences_critical', { name: 'Ocorrencias criticas', direction: 'LOWER_IS_BETTER', value: 3 }),
       kpi('idle_hours', {
         name: 'Tempo ocioso',
+        category: 'FLEET',
         unit: 'HOURS',
         direction: 'LOWER_IS_BETTER',
         status: 'UNAVAILABLE',
@@ -135,6 +137,7 @@ function buildSummary(): KpiSummaryEntity {
       kpi('distance_km', { name: 'Distancia percorrida', unit: 'KM', direction: 'NEUTRAL', value: 84133 }),
       kpi('fleet_utilization', {
         name: 'Utilizacao da frota',
+        category: 'FLEET',
         unit: 'PERCENT',
         value: 62.5,
         inputs: [
@@ -145,7 +148,7 @@ function buildSummary(): KpiSummaryEntity {
           { key: 'idleHours', label: 'Ocioso', value: 1200, unit: 'HOURS' },
         ],
       }),
-      kpi('fleet_availability', { name: 'Disponibilidade da frota', unit: 'PERCENT', value: 95.8 }),
+      kpi('fleet_availability', { name: 'Disponibilidade da frota', category: 'FLEET', unit: 'PERCENT', value: 95.8 }),
     ],
   };
 }
@@ -321,7 +324,7 @@ describe('Central de Inteligencia (/dashboard)', () => {
   it('todas as abas previstas estao na navegacao', () => {
     renderPage();
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Ocorrências']);
+    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Comparativos', 'Ocorrências']);
   });
 });
 
@@ -393,6 +396,7 @@ const SERIES_NAMES: Record<string, string> = {
   on_time_delivery_rate: 'Entregas no prazo',
   occurrences_total: 'Ocorrencias',
   occurrences_critical: 'Ocorrencias criticas',
+  cost_per_km: 'Custo por km',
 };
 
 function seriesFor(id: string, values: Array<number | null>, unit: KpiSeriesEntity['unit'] = 'BRL'): KpiSeriesEntity {
@@ -1162,5 +1166,132 @@ describe('Central -- aba Prazos (BI 6)', () => {
     renderPage();
     expect(await screen.findByText('Pontualidade')).toBeInTheDocument();
     expect(screen.getByText('Cobertura da métrica')).toBeInTheDocument();
+  });
+});
+
+// ============================================================================
+// BI 7 -- aba Comparativos
+// ============================================================================
+const COMPARATIVE_VEHICLE_ROWS: Record<string, ReturnType<typeof vehicleBreakdownItem>[]> = {
+  cost_per_km: [
+    vehicleBreakdownItem('v1', 'AAA1111', 8.5),
+    vehicleBreakdownItem('v2', 'BBB2222', null, 'Menos de 2 leituras de odometro.'),
+  ],
+  on_time_delivery_rate: [vehicleBreakdownItem('v1', 'AAA1111', 91.2), vehicleBreakdownItem('v2', 'BBB2222', 50)],
+  trips_completed: [vehicleBreakdownItem('v1', 'AAA1111', 6), vehicleBreakdownItem('v2', 'BBB2222', 4)],
+  occurrences_total: [vehicleBreakdownItem('v1', 'AAA1111', 1), vehicleBreakdownItem('v2', 'BBB2222', 0)],
+};
+
+function comparativeBreakdown(kpiId: string): KpiBreakdownEntity {
+  return {
+    kpiId,
+    dimension: 'vehicle',
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    period: PERIOD,
+    total: null,
+    items: COMPARATIVE_VEHICLE_ROWS[kpiId] ?? [],
+    others: null,
+  };
+}
+
+function comparativesSeries(): KpiSeriesResponseEntity {
+  const base = buildSeries();
+  return {
+    ...base,
+    series: [
+      seriesFor('revenue', [140000, 150000, 162300]),
+      seriesFor('operating_result', [30000, -5000, 38100]),
+      seriesFor('cost_per_km', [4.5, 4.3, 4.21], 'BRL_PER_KM'),
+      seriesFor('on_time_delivery_rate', [88, 90, 91.2], 'PERCENT'),
+    ],
+  };
+}
+
+describe('Central -- aba Comparativos (BI 7)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getKpiSeriesMock.mockReset();
+    getKpiBreakdownMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=comparatives');
+    getKpiSummaryMock.mockResolvedValue(buildSummary());
+    getKpiSeriesMock.mockResolvedValue(comparativesSeries());
+    getKpiBreakdownMock.mockImplementation(async (query: { kpiId: string }) => comparativeBreakdown(query.kpiId));
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('resumo agrupa os KPIs oficiais por categoria e usa "Período anterior" sem chamada extra', async () => {
+    renderPage();
+    const card = await screen.findByRole('article', { name: 'Receita' });
+    const section = card.closest('section') as HTMLElement;
+    for (const label of ['Financeiro', 'Operacional', 'Frota', 'Nível de serviço']) {
+      expect(within(section).getByText(label)).toBeInTheDocument();
+    }
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('trocar para "ano anterior" dispara um summary proprio com comparison=PREVIOUS_YEAR', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Receita' });
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Mesmo período do ano passado' }));
+
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2));
+    const calls = getKpiSummaryMock.mock.calls as [{ comparison?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ comparison: 'PREVIOUS_YEAR' });
+  });
+
+  it('personalizado exige as duas datas antes de consultar a API', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Receita' });
+
+    const comparisonGroup = screen.getByRole('radiogroup', { name: 'Comparar com' });
+    await userEvent.click(within(comparisonGroup).getByRole('radio', { name: 'Personalizado' }));
+    expect(screen.getByText('Escolha o período de referência')).toBeInTheDocument();
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByLabelText('Data inicial de referência'), { target: { value: '2025-12-01' } });
+    fireEvent.change(screen.getByLabelText('Data final de referência'), { target: { value: '2025-12-31' } });
+
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2));
+    const calls = getKpiSummaryMock.mock.calls as [{ comparison?: string; compareStartDate?: string; compareEndDate?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ comparison: 'CUSTOM' });
+    expect(calls[1]?.[0]?.compareStartDate).toMatch(/2025-12-01/);
+  });
+
+  it('evolucao mostra badge de tendencia coerente com a direcao de cada KPI (alta nao e sempre positivo)', async () => {
+    renderPage();
+    const section = (await screen.findByText('Evolução e tendência')).closest('section') as HTMLElement;
+    await waitFor(() => expect(within(section).getAllByText(/Tendência: Alta/).length).toBeGreaterThan(0));
+    expect(within(section).getByText(/Tendência: Baixa/)).toBeInTheDocument();
+  });
+
+  it('por dimensao: trocar o indicador refaz a consulta de breakdown por veiculo', async () => {
+    renderPage();
+    await screen.findByText('AAA1111');
+    expect(getKpiBreakdownMock).toHaveBeenCalledWith(expect.objectContaining({ kpiId: 'cost_per_km' }), expect.anything());
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Entregas no prazo' }));
+    await waitFor(() => expect(getKpiBreakdownMock).toHaveBeenCalledWith(expect.objectContaining({ kpiId: 'on_time_delivery_rate' }), expect.anything()));
+  });
+
+  it('filtro de veiculo dispara summary e breakdown escopados (mesmo padrao das outras abas)', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByRole('article', { name: 'Receita' });
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2));
+    const calls = getKpiSummaryMock.mock.calls as [{ vehicleId?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ vehicleId: 'v1' });
   });
 });

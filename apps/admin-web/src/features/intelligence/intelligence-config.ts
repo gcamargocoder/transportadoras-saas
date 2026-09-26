@@ -7,6 +7,7 @@ export const INTELLIGENCE_TABS = [
   'fleet',
   'costs',
   'deadlines',
+  'comparatives',
   'occurrences',
 ] as const;
 export type IntelligenceTab = (typeof INTELLIGENCE_TABS)[number];
@@ -36,6 +37,7 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'fleet', label: 'Frota' },
   { value: 'costs', label: 'Custos' },
   { value: 'deadlines', label: 'Prazos' },
+  { value: 'comparatives', label: 'Comparativos' },
   {
     value: 'occurrences',
     label: 'Ocorrências',
