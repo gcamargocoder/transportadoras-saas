@@ -240,6 +240,42 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
     }
   }
 
+  interface SecondVehicle {
+    vehicleId: string;
+    tripId: string;
+  }
+
+  // Segundo veiculo da mesma frota de A, com sua propria viagem concluida em
+  // janeiro -- necessario para os testes de recorte por veiculo (BI 4): um
+  // unico veiculo nao prova que a soma das partes bate com o total.
+  async function seedSecondVehicle(s: Seed): Promise<SecondVehicle> {
+    const vehicleId = await post(s.auth, '/vehicles', {
+      plate: randomPlate(),
+      brand: 'Scania',
+      model: 'R450',
+      type: 'TRACTOR_UNIT',
+      fleetId: s.fleetId,
+      odometerKm: 50000,
+    });
+    await prisma.vehicle.update({ where: { id: vehicleId }, data: { createdAt: new Date('2025-01-01T00:00:00Z') } });
+    const compositionId = await post(s.auth, '/trip-compositions', { vehicleId, trailers: [] });
+    const tripId = await post(s.auth, '/trips', {
+      driverId: s.driverId,
+      compositionId,
+      originLocationId: await createLocation(s.auth),
+      destinationLocationId: await createLocation(s.auth),
+      plannedDeparture: '2026-01-15T00:00:00.000Z',
+      plannedArrival: '2026-01-16T00:00:00.000Z',
+    });
+    await prisma.trip.update({
+      where: { id: tripId },
+      data: { status: 'COMPLETED', actualDeparture: new Date('2026-01-15T00:00:00.000Z'), actualArrival: new Date('2026-01-16T00:00:00.000Z') },
+    });
+    await createFuelSupply(s.auth, { ...s, vehicleId }, 50000, 400, '2026-01-14T10:00:00.000Z');
+    await createFuelSupply(s.auth, { ...s, vehicleId }, 50600, 400, '2026-01-20T10:00:00.000Z');
+    return { vehicleId, tripId };
+  }
+
   function getSummary(auth: string, query: Record<string, string>) {
     return request(app.getHttpServer()).get('/api/v1/bi/kpis/summary').query(query).set('Authorization', auth);
   }
@@ -688,6 +724,90 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       const res = await getBreakdown(b.auth, { ...MARCH, kpiId: 'revenue', dimension: 'customer' }).expect(200);
       expect(res.body.data.items).toEqual([]);
       expect(res.body.data.total).toBe(0);
+    });
+  });
+
+  describe('recorte por veiculo (BI 4)', () => {
+    const JAN = JANUARY;
+    let second: SecondVehicle;
+
+    beforeAll(async () => {
+      second = await seedSecondVehicle(a);
+    }, 60000);
+
+    function getBreakdown(auth: string, query: Record<string, string>) {
+      return request(app.getHttpServer()).get('/api/v1/bi/kpis/breakdown').query(query).set('Authorization', auth);
+    }
+
+    it('trips_completed: soma dos itens = valor do summary', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'trips_completed' }).expect(200),
+      ]);
+      const total = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(total).toBe(kpi(summary.body, 'trips_completed').value);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId)).toMatchObject({ value: 1 });
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === second.vehicleId)).toMatchObject({ value: 1 });
+    });
+
+    it('distance_km: soma dos itens = valor do summary', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'distance_km', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'distance_km' }).expect(200),
+      ]);
+      const total = breakdown.body.data.items.reduce((sum: number, i: { value: number | null }) => sum + (i.value ?? 0), 0);
+      expect(total).toBeCloseTo(kpi(summary.body, 'distance_km').value ?? NaN, 2);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId)).toMatchObject({ value: 1000 });
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === second.vehicleId)).toMatchObject({ value: 600 });
+    });
+
+    it('fleet_utilization/fleet_availability: item por veiculo nunca tem "share", "total" e o valor oficial do summary', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'fleet_utilization', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'fleet_utilization' }).expect(200),
+      ]);
+      expect(breakdown.body.data.total).toBeCloseTo(kpi(summary.body, 'fleet_utilization').value ?? NaN, 5);
+      expect(breakdown.body.data.others).toBeNull();
+      for (const row of breakdown.body.data.items) expect(row.share).toBeNull();
+    });
+
+    it('idle_hours: e somavel -- share preenchido e total = soma dos itens (nunca o valor de fleet_utilization)', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'idle_hours', dimension: 'vehicle' }).expect(200);
+      const total = res.body.data.items.reduce((sum: number, i: { value: number | null }) => sum + (i.value ?? 0), 0);
+      expect(res.body.data.total).toBeCloseTo(total, 5);
+    });
+
+    it('veiculo vendido antes do periodo: UNAVAILABLE com motivo, nunca 0% inventado', async () => {
+      const soldVehicleId = await post(a.auth, '/vehicles', { plate: randomPlate(), brand: 'Volvo', model: 'FH', type: 'TRACTOR_UNIT', fleetId: a.fleetId, odometerKm: 10000 });
+      await prisma.vehicle.update({ where: { id: soldVehicleId }, data: { status: 'SOLD', createdAt: new Date('2025-01-01T00:00:00Z') } });
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'fleet_utilization', dimension: 'vehicle' }).expect(200);
+      const row = res.body.data.items.find((i: { key: string }) => i.key === soldVehicleId);
+      expect(row.value).toBeNull();
+      expect(row.unavailableReason).toMatch(/fora de operacao/i);
+    });
+
+    it('filtro por veiculo: recorta para 1 unico item, igual ao summary escopado', async () => {
+      const res = await getBreakdown(a.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'vehicle', vehicleId: a.vehicleId }).expect(200);
+      expect(res.body.data.items).toEqual([expect.objectContaining({ key: a.vehicleId, value: 1 })]);
+    });
+
+    it('veiculo/frota de outro tenant => 404; dimensao "fleet" nao suportada => 400', async () => {
+      await getBreakdown(a.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'vehicle', vehicleId: b.vehicleId }).expect(404);
+      await getBreakdown(a.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'fleet' }).expect(400);
+      await getBreakdown(a.auth, { ...JAN, kpiId: 'revenue', dimension: 'vehicle' }).expect(400);
+    });
+
+    it('isolamento: recorte de B nunca mostra veiculos de A', async () => {
+      const res = await getBreakdown(b.auth, { ...JAN, kpiId: 'trips_completed', dimension: 'vehicle' }).expect(200);
+      expect(res.body.data.items.every((i: { key: string | null }) => i.key !== a.vehicleId && i.key !== second.vehicleId)).toBe(true);
+    });
+
+    it('consistencia summary x breakdown: mesmo escopo, mesmo total (idle_hours)', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'idle_hours', dimension: 'vehicle', vehicleId: a.vehicleId }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'idle_hours', vehicleId: a.vehicleId }).expect(200),
+      ]);
+      expect(breakdown.body.data.total).toBeCloseTo(kpi(summary.body, 'idle_hours').value ?? NaN, 2);
     });
   });
 });
