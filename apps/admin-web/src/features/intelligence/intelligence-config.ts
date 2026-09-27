@@ -9,6 +9,7 @@ export const INTELLIGENCE_TABS = [
   'deadlines',
   'comparatives',
   'occurrences',
+  'reports',
 ] as const;
 export type IntelligenceTab = (typeof INTELLIGENCE_TABS)[number];
 
@@ -39,6 +40,7 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'deadlines', label: 'Prazos' },
   { value: 'comparatives', label: 'Comparativos' },
   { value: 'occurrences', label: 'Ocorrências' },
+  { value: 'reports', label: 'Relatórios' },
 ];
 
 // Drill-down: KPI -> tela de analise detalhada JA existente. KPIs sem tela

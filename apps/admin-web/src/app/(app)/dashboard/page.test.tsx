@@ -327,7 +327,7 @@ describe('Central de Inteligencia (/dashboard)', () => {
   it('todas as abas previstas estao na navegacao', () => {
     renderPage();
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Comparativos', 'Ocorrências']);
+    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios']);
   });
 });
 
@@ -1434,5 +1434,102 @@ describe('Central -- aba Ocorrências (BI 8)', () => {
     renderPage();
     const card = await screen.findByRole('article', { name: 'Ocorrencias' });
     expect(within(card).getByRole('link', { name: /Ver ocorrências/ })).toHaveAttribute('href', '/operations/fleet/occurrences');
+  });
+});
+
+// ============================================================================
+// BI 9 -- aba Relatórios
+// ============================================================================
+function reportSeries(): KpiSeriesResponseEntity {
+  const base = buildSeries();
+  return { ...base, series: [seriesFor('operating_cost', [110000, 120000, 124200]), seriesFor('occurrences_total', [40, 45, 47], 'COUNT')] };
+}
+
+const REPORT_COST_VEHICLE_ROWS = [vehicleBreakdownItem('v1', 'AAA1111', 8.5), vehicleBreakdownItem('v2', 'BBB2222', 6.2)];
+const REPORT_OCCURRENCE_TYPE_ROWS = [vehicleBreakdownItem('BREAKDOWN', 'BREAKDOWN', 3), vehicleBreakdownItem('ACCIDENT', 'ACCIDENT', 2)];
+
+function reportBreakdown(kpiId: string, dimension: string): KpiBreakdownEntity {
+  const items = kpiId === 'cost_per_km' ? REPORT_COST_VEHICLE_ROWS : REPORT_OCCURRENCE_TYPE_ROWS;
+  return {
+    kpiId,
+    dimension: dimension as KpiBreakdownEntity['dimension'],
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    period: PERIOD,
+    total: null,
+    items,
+    others: null,
+  };
+}
+
+describe('Central -- aba Relatórios (BI 9)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getKpiSeriesMock.mockReset();
+    getKpiBreakdownMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=reports');
+    getKpiSummaryMock.mockResolvedValue(financialSummary());
+    getKpiSeriesMock.mockResolvedValue(reportSeries());
+    getKpiBreakdownMock.mockImplementation(async (query: { kpiId: string; dimension: string }) => reportBreakdown(query.kpiId, query.dimension));
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('resumo executivo mostra os 9 KPIs oficiais do mesmo summary das outras abas, sem chamada extra', async () => {
+    renderPage();
+    for (const name of ['Receita', 'Despesas operacionais', 'Resultado operacional', 'Margem operacional', 'Viagens concluidas', 'Entregas realizadas', 'Entregas no prazo', 'Ocorrencias', 'Utilizacao da frota']) {
+      expect(await screen.findByRole('article', { name })).toBeInTheDocument();
+    }
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('o que mudou mostra interpretacoes clicaveis que abrem "como e calculado" do KPI', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Receita' });
+    const insight = await screen.findByText(/Despesas operacionais/, { selector: 'button span' });
+    await userEvent.click(insight);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('formula de operating_cost')).toBeInTheDocument();
+  });
+
+  it('operação, financeiro, frota e prazos/ocorrências mostram os indicadores oficiais das respectivas seções', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Receita' });
+    expect(screen.getByRole('heading', { level: 2, name: 'Operação' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Financeiro e custos' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Frota' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Prazos e ocorrências' })).toBeInTheDocument();
+    expect(screen.getByText('Composição do custo operacional')).toBeInTheDocument();
+    expect(screen.getByText('Pontualidade')).toBeInTheDocument();
+  });
+
+  it('trocar para "ano anterior" dispara um summary proprio com comparison=PREVIOUS_YEAR', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Receita' });
+    expect(getKpiSummaryMock).toHaveBeenCalledTimes(1);
+    const comparisonGroup = screen.getByRole('radiogroup', { name: 'Comparar com' });
+    await userEvent.click(within(comparisonGroup).getByRole('radio', { name: 'Mesmo período do ano passado' }));
+    await waitFor(() => expect(getKpiSummaryMock).toHaveBeenCalledTimes(2));
+    const calls = getKpiSummaryMock.mock.calls as [{ comparison?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ comparison: 'PREVIOUS_YEAR' });
+  });
+
+  it('evidências lista os KPIs com "como é calculado" e o drill-down oficial', async () => {
+    renderPage();
+    const evidenceSection = (await screen.findByText('Evidências')).closest('section') as HTMLElement;
+    expect(within(evidenceSection).getAllByRole('button', { name: 'Como é calculado' }).length).toBeGreaterThan(0);
+    expect(within(evidenceSection).getByRole('link', { name: 'Ver custos' })).toHaveAttribute('href', '/operations/fleet/costs');
+  });
+
+  it('imprimir aciona window.print (unica exportacao desta fase, sem infraestrutura nova)', async () => {
+    const printSpy = vi.fn();
+    window.print = printSpy;
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Imprimir' }));
+    expect(printSpy).toHaveBeenCalledTimes(1);
   });
 });

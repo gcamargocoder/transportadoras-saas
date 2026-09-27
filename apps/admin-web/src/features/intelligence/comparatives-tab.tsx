@@ -3,7 +3,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Card, CardBody, CardHeader } from '../../components/ui/card';
-import { DatePicker } from '../../components/ui/date-picker';
 import { EmptyState } from '../../components/ui/empty-state';
 import { EntitySelect } from '../../components/ui/entity-select';
 import { ErrorState } from '../../components/ui/error-state';
@@ -12,19 +11,15 @@ import { getKpiBreakdown, getKpiSeries, getKpiSummary } from '../../lib/api/bi.a
 import { listFleets } from '../../lib/api/fleet.api';
 import type { FleetEntity, KpiCategory, KpiComparisonMode, KpiGranularity, KpiResultEntity, KpiUnit, VehicleEntity } from '../../types/entities';
 import { cn } from '../../utils/cn';
+import { ComparisonModePicker, resolveCompareRange } from './comparison-mode-picker';
 import { ResultBarChart, TrendLegend, TrendLineChart } from './financial-charts';
 import { FleetVehiclePicker } from './fleet-vehicle-picker';
 import { KpiCard, TREND_STYLES } from './kpi-card';
-import { classifyRawTrend, formatKpiValue, indexKpis, RAW_TREND_LABEL, resolveSeriesTrendTone } from './kpi-format';
+import { classifyRawTrend, indexKpis, RAW_TREND_LABEL, resolveSeriesTrendTone } from './kpi-format';
 import { OVERVIEW_KPI_IDS } from './overview-tab';
-import { resolvePeriodRange, type PeriodRange } from './period';
+import type { PeriodRange } from './period';
+import { RankedValueList, sortRankedItems } from './ranked-value-list';
 import { GRANULARITY_LABELS, isGranularityAllowed, toSeriesRows, type SeriesRow } from './series-format';
-
-const COMPARISON_MODES: { value: KpiComparisonMode; label: string }[] = [
-  { value: 'PREVIOUS_PERIOD', label: 'Período anterior' },
-  { value: 'PREVIOUS_YEAR', label: 'Mesmo período do ano passado' },
-  { value: 'CUSTOM', label: 'Personalizado' },
-];
 
 const CATEGORY_LABELS: Record<KpiCategory, string> = {
   FINANCIAL: 'Financeiro',
@@ -123,32 +118,6 @@ function TrendBadge({ direction, rows }: { direction: KpiResultEntity['direction
   );
 }
 
-// BI 7 -- ranking compacto de 1 KPI por veiculo (nao substitui as tabelas
-// investigativas de Frota/Custos/Prazos, que trazem varias metricas por
-// linha). Ordena por valor -- aceitavel (mesmo padrao ja usado nas tabelas
-// por veiculo): o que NAO se faz e rotular "melhor"/"pior" veiculo.
-function DimensionRankingList({ unit, items }: { unit: KpiUnit; items: { key: string | null; label: string; value: number | null; unavailableReason: string | null }[] }): JSX.Element {
-  if (items.length === 0) return <EmptyState title="Nenhum veículo no escopo selecionado" />;
-  const max = Math.max(0, ...items.map((i) => Math.abs(i.value ?? 0)));
-  return (
-    <ul className="flex flex-col gap-3">
-      {items.map((it) => (
-        <li key={it.key ?? it.label}>
-          <div className="flex items-center justify-between gap-3 text-sm">
-            <span className="text-ink">{it.label}</span>
-            <span className={cn('tabular-nums', it.value === null ? 'text-ink-subtle' : 'text-ink')} title={it.unavailableReason ?? undefined}>
-              {it.value === null ? '—' : formatKpiValue(unit, it.value)}
-            </span>
-          </div>
-          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-muted">
-            <div className="h-full rounded-full bg-brand-500" style={{ width: `${max > 0 ? (Math.abs(it.value ?? 0) / max) * 100 : 0}%` }} />
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 // BI 7 -- Comparativos e Tendencias. Nenhum KPI/formula novo: generaliza a
 // comparacao ja oficial (summary.comparison, series.comparisonPoints,
 // breakdown por veiculo) para varios modos (periodo anterior/ano
@@ -175,8 +144,7 @@ export function ComparativesTab({
   const [dimensionKpiId, setDimensionKpiId] = useState(DIMENSION_OPTIONS[0]!.id);
   const requestedGranularity = granularity && isGranularityAllowed(granularity, range.startDate, range.endDate) ? granularity : undefined;
 
-  const compareRange = comparisonMode === 'CUSTOM' ? resolvePeriodRange('custom', new Date(), { from: compareFrom, to: compareTo }) : null;
-  const invalidCompareRange = comparisonMode === 'CUSTOM' && compareFrom !== '' && compareTo !== '' && compareFrom > compareTo;
+  const compareRange = resolveCompareRange(comparisonMode, compareFrom, compareTo);
   const customIncomplete = comparisonMode === 'CUSTOM' && compareRange === null;
   const hasVehicleFilter = Boolean(vehicle || fleetId);
   const hasCustomScope = comparisonMode !== 'PREVIOUS_PERIOD' || hasVehicleFilter;
@@ -234,12 +202,7 @@ export function ComparativesTab({
       getKpiBreakdown({ ...range, kpiId: dimensionKpiId, dimension: 'vehicle', limit: 8, vehicleId: vehicle?.id, fleetId: fleetId || undefined }, signal),
     staleTime: 60_000,
   });
-  const rankedItems = [...(dimensionBreakdown.data?.items ?? [])].sort((a, b) => {
-    if (a.value === null && b.value === null) return 0;
-    if (a.value === null) return 1;
-    if (b.value === null) return -1;
-    return b.value - a.value;
-  });
+  const rankedItems = sortRankedItems(dimensionBreakdown.data?.items ?? []);
 
   const categories = new Map<KpiCategory, KpiResultEntity[]>();
   for (const id of HEADLINE_KPI_IDS) {
@@ -257,42 +220,14 @@ export function ComparativesTab({
         description="Escolha com o que comparar o período atual e, opcionalmente, restrinja a um veículo ou frota."
       >
         <div className="flex flex-col gap-3">
-          <div role="radiogroup" aria-label="Comparar com" className="flex flex-wrap gap-1 rounded-lg border border-border bg-surface-muted p-0.5">
-            {COMPARISON_MODES.map((mode) => (
-              <button
-                key={mode.value}
-                type="button"
-                role="radio"
-                aria-checked={comparisonMode === mode.value}
-                onClick={() => setComparisonMode(mode.value)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500',
-                  comparisonMode === mode.value ? 'bg-white text-ink shadow-xs' : 'text-ink-muted hover:text-ink',
-                )}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
-
-          {comparisonMode === 'CUSTOM' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="sr-only" htmlFor="comparatives-compare-from">
-                Data inicial de referência
-              </label>
-              <DatePicker id="comparatives-compare-from" value={compareFrom} max={compareTo || undefined} onChange={(e) => setCompareFrom(e.target.value)} />
-              <span className="text-xs text-ink-muted">até</span>
-              <label className="sr-only" htmlFor="comparatives-compare-to">
-                Data final de referência
-              </label>
-              <DatePicker id="comparatives-compare-to" value={compareTo} min={compareFrom || undefined} onChange={(e) => setCompareTo(e.target.value)} />
-              {invalidCompareRange && (
-                <p role="alert" className="w-full text-xs text-danger-700">
-                  A data inicial precisa ser anterior à final.
-                </p>
-              )}
-            </div>
-          )}
+          <ComparisonModePicker
+            mode={comparisonMode}
+            onModeChange={setComparisonMode}
+            compareFrom={compareFrom}
+            compareTo={compareTo}
+            onCompareFromChange={setCompareFrom}
+            onCompareToChange={setCompareTo}
+          />
 
           <div className="flex flex-wrap items-center gap-3">
             <FleetVehiclePicker
@@ -419,7 +354,7 @@ export function ComparativesTab({
           <CardBody>
             {dimensionBreakdown.isLoading && <Skeleton className="h-40 w-full" />}
             {dimensionBreakdown.isError && <ErrorState title="Não foi possível carregar o recorte por veículo." onRetry={() => dimensionBreakdown.refetch()} />}
-            {dimensionBreakdown.data && <DimensionRankingList unit={dimensionOption.unit} items={rankedItems} />}
+            {dimensionBreakdown.data && <RankedValueList unit={dimensionOption.unit} items={rankedItems} />}
           </CardBody>
         </Card>
       </Block>

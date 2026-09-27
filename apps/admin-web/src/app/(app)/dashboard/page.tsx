@@ -26,6 +26,7 @@ import { indexKpis } from '../../../features/intelligence/kpi-format';
 import { OccurrencesTab } from '../../../features/intelligence/occurrences-tab';
 import { OperationTab } from '../../../features/intelligence/operation-tab';
 import { OverviewTab } from '../../../features/intelligence/overview-tab';
+import { ReportsTab } from '../../../features/intelligence/reports-tab';
 import {
   DEFAULT_PERIOD_PRESET,
   formatPeriodLabel,
@@ -41,7 +42,7 @@ import { ApiError } from '../../../lib/api/errors';
 import { DASHBOARD_ROLES, hasRole } from '../../../lib/auth/roles';
 import type { KpiGranularity, KpiResultEntity } from '../../../types/entities';
 
-const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial', 'fleet', 'costs', 'deadlines', 'comparatives', 'occurrences'];
+const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial', 'fleet', 'costs', 'deadlines', 'comparatives', 'occurrences', 'reports'];
 const GRANULARITIES: KpiGranularity[] = ['day', 'week', 'month'];
 const timeFormatter = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
@@ -238,6 +239,15 @@ function IntelligenceCenter(): JSX.Element {
         )}
         {tab === 'occurrences' && summary.data && range && (
           <OccurrencesTab
+            kpis={kpis}
+            range={range}
+            granularity={granularity}
+            onGranularityChange={(value) => updateParams({ agrupar: value })}
+            onExplain={setExplained}
+          />
+        )}
+        {tab === 'reports' && summary.data && range && (
+          <ReportsTab
             kpis={kpis}
             range={range}
             granularity={granularity}
