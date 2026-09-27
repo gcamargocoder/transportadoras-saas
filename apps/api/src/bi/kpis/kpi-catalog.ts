@@ -15,9 +15,21 @@ import { BiPeriodSnapshot, KpiDefinition, KpiDimension, KpiEvidenceCount, KpiInp
 // ============================================================================
 // v2 (BI 3): + tire_cost/other_cost, metadados additive/requires e dimensao
 // customer (receita). Nenhuma formula existente mudou.
-export const KPI_CATALOG_VERSION = '2';
+// v3 (Fase 6, Gestao de Combustivel): + 8 KPIs do ledger de tanque
+// (fuel_tank_stock, fuel_received_liters, fuel_internal_liters,
+// fuel_adjustment_liters, fuel_received_cost, fuel_average_purchase_price,
+// fuel_movements_count, fuel_reconciliation_divergence_liters). Fonte
+// SEPARADA de fuel_cost/fuel_liters (FuelSupply, consumo do veiculo);
+// nenhuma formula existente mudou.
+export const KPI_CATALOG_VERSION = '3';
 
 const PERIOD_VEHICLE_FLEET: KpiDimension[] = ['period', 'vehicle', 'fleet'];
+// Fase 6 -- KPIs do tanque proprio: "vehicle"/"fleet" nao se aplicam a
+// RECEIPT/ADJUSTMENT/INITIAL_BALANCE (nunca tem veiculo) nem a
+// fuel_tank_stock (saldo do tanque, nao do veiculo). So fuel_internal_liters
+// aceita "vehicle" (abastecimento interno sempre vinculado a um veiculo).
+const TANK_DIM: KpiDimension[] = ['period', 'tank'];
+const TANK_VEHICLE_DIM: KpiDimension[] = ['period', 'tank', 'vehicle'];
 
 // ---------------------------------------------------------------------------
 // Fontes (reaproveitadas por varios KPIs -- uma unica descricao por fonte).
@@ -107,6 +119,32 @@ const SRC = {
     field: 'status, createdAt',
     dateField: '-',
     rule: 'Capacidade = veiculos nao excluidos e com status atual != SOLD/INACTIVE, desde o cadastro.',
+  },
+  // Fase 6 -- ledger do tanque proprio. Distinto de `fuel`/`fuelLiters`
+  // acima (FuelSupply = consumo do veiculo, abastecido interno OU externo).
+  fuelTankReceipt: {
+    entity: 'FuelTankMovement',
+    field: 'quantityLiters, totalAmount',
+    dateField: 'effectiveDate',
+    rule: 'type=RECEIPT -- compra de diesel para o tanque proprio (Fase 2 da Gestao de Combustivel).',
+  },
+  fuelTankInternal: {
+    entity: 'FuelTankMovement',
+    field: 'quantityLiters',
+    dateField: 'effectiveDate',
+    rule: 'type=INTERNAL_FUELING -- baixa do tanque por abastecimento interno de veiculo (Fase 3); sempre vinculado a uma FuelSupply, nunca tem preco/custo proprio.',
+  },
+  fuelTankAdjustment: {
+    entity: 'FuelTankMovement',
+    field: 'quantityLiters (com sinal)',
+    dateField: 'effectiveDate',
+    rule: 'type=ADJUSTMENT -- gerado por conferencia de estoque (Fase 4) ou por cancelamento de abastecimento interno.',
+  },
+  fuelTankInventory: {
+    entity: 'FuelTankInventoryCheck',
+    field: 'divergenceLiters',
+    dateField: 'checkedAt',
+    rule: 'Divergencia (medido - teorico) congelada no momento da conferencia fisica.',
   },
 } satisfies Record<string, KpiSource>;
 
@@ -676,6 +714,204 @@ export const KPI_CATALOG: readonly KpiDefinition[] = [
       ...(s.fleetTime.vehiclesConsidered > 0 ? {} : { unavailableReason: NO_FLEET_CAPACITY }),
       inputs: fleetTimeInputs(s),
       evidence: fleetTimeEvidence(s),
+    }),
+  },
+
+  // ------------------- GESTAO DE COMBUSTIVEL (Fase 6, BI) -----------------
+  // Ledger do tanque proprio (FuelTankMovement/FuelTankInventoryCheck).
+  // Distinto de fuel_cost/fuel_liters acima (FuelSupply = consumo do
+  // veiculo): aqui e o estoque que a empresa possui, nunca reconciliado com
+  // o consumo nesta fase (sem valorizacao de estoque -- ver limitations).
+  {
+    id: 'fuel_tank_stock',
+    name: 'Estoque de diesel no tanque',
+    description: 'Saldo do(s) tanque(s) proprios no fim do periodo, reconstruido a partir do ledger de movimentacoes.',
+    category: 'OPERATIONAL',
+    unit: 'LITERS',
+    direction: 'NEUTRAL',
+    formula: 'SOMA, por tanque do escopo, da ultima FuelTankMovement.newBalanceLiters com effectiveDate <= fim do periodo',
+    sources: [SRC.fuelTankReceipt],
+    dimensions: TANK_DIM,
+    limitations: [
+      'Ponto no tempo (saldo no fim do periodo) -- NUNCA somado entre periodos. Comparacao usa saldo x saldo, nunca soma de fluxo.',
+      'Tanques sem nenhuma movimentacao ate o fim do periodo (criados depois) ficam de fora da soma.',
+    ],
+    additive: false,
+    requires: ['fuelTank'],
+    compute: (s) => {
+      const t = s.fuelTank;
+      return {
+        value: t.stockAtEnd,
+        ...(t.stockAtEnd === null
+          ? { unavailableReason: 'Nenhum tanque do escopo possui movimentacao registrada ate o fim do periodo.' }
+          : {}),
+        inputs: [
+          { key: 'stockAtEnd', label: 'Estoque no fim do periodo', value: t.stockAtEnd, unit: 'LITERS' },
+          { key: 'tanksConsidered', label: 'Tanques no escopo', value: t.tanksConsidered, unit: 'COUNT' },
+        ],
+        evidence: [{ source: 'FUEL_TANK_STOCK_SNAPSHOT', recordCount: t.tanksConsidered }],
+      };
+    },
+  },
+  {
+    id: 'fuel_received_liters',
+    name: 'Diesel recebido no tanque',
+    description: 'Litros recebidos por compra (RECEIPT) no tanque proprio, no periodo.',
+    category: 'OPERATIONAL',
+    unit: 'LITERS',
+    direction: 'NEUTRAL',
+    formula: 'SUM(FuelTankMovement.quantityLiters) com type=RECEIPT e effectiveDate no periodo',
+    sources: [SRC.fuelTankReceipt],
+    dimensions: TANK_DIM,
+    limitations: [],
+    additive: true,
+    requires: ['fuelTank'],
+    compute: (s) => ({
+      value: s.fuelTank.receivedLiters,
+      inputs: [{ key: 'receivedLiters', label: 'Litros recebidos', value: s.fuelTank.receivedLiters, unit: 'LITERS' }],
+      evidence: [{ source: 'FUEL_TANK_RECEIPT', recordCount: s.fuelTank.receiptCount }],
+    }),
+  },
+  {
+    id: 'fuel_internal_liters',
+    name: 'Diesel abastecido internamente',
+    description: 'Litros dispensados do tanque proprio para abastecimento interno de veiculos, no periodo.',
+    category: 'OPERATIONAL',
+    unit: 'LITERS',
+    direction: 'NEUTRAL',
+    formula: 'SUM(FuelTankMovement.quantityLiters) com type=INTERNAL_FUELING e effectiveDate no periodo',
+    sources: [SRC.fuelTankInternal],
+    dimensions: TANK_VEHICLE_DIM,
+    limitations: [
+      'Abastecimento interno nunca tem preco/custo proprio -- diferente de fuel_cost (FuelSupply), que cobre tambem o abastecimento externo.',
+    ],
+    additive: true,
+    requires: ['fuelTank'],
+    compute: (s) => ({
+      value: s.fuelTank.internalLiters,
+      inputs: [{ key: 'internalLiters', label: 'Litros abastecidos internamente', value: s.fuelTank.internalLiters, unit: 'LITERS' }],
+      evidence: [{ source: 'FUEL_TANK_INTERNAL_FUELING', recordCount: s.fuelTank.internalFuelingCount }],
+    }),
+  },
+  {
+    id: 'fuel_adjustment_liters',
+    name: 'Ajustes de estoque do tanque',
+    description: 'Soma liquida (com sinal) dos ajustes de conferencia de estoque no periodo.',
+    category: 'OPERATIONAL',
+    unit: 'LITERS',
+    direction: 'NEUTRAL',
+    formula: 'SUM(FuelTankMovement.quantityLiters) com type=ADJUSTMENT e effectiveDate no periodo',
+    sources: [SRC.fuelTankAdjustment],
+    dimensions: TANK_DIM,
+    limitations: ['Positivo = sobra (estoque medido > teorico); negativo = falta.'],
+    additive: true,
+    requires: ['fuelTank'],
+    compute: (s) => ({
+      value: s.fuelTank.adjustmentLitersNet,
+      inputs: [{ key: 'adjustmentLitersNet', label: 'Ajuste liquido', value: s.fuelTank.adjustmentLitersNet, unit: 'LITERS' }],
+      evidence: [{ source: 'FUEL_TANK_ADJUSTMENT', recordCount: s.fuelTank.adjustmentCount }],
+    }),
+  },
+  {
+    id: 'fuel_received_cost',
+    name: 'Custo de diesel recebido',
+    description: 'Valor total pago nas compras de diesel (RECEIPT) para o tanque proprio, no periodo.',
+    category: 'FINANCIAL',
+    unit: 'BRL',
+    direction: 'LOWER_IS_BETTER',
+    formula: 'SUM(FuelTankMovement.totalAmount) com type=RECEIPT e effectiveDate no periodo',
+    sources: [SRC.fuelTankReceipt],
+    dimensions: TANK_DIM,
+    limitations: ['Custo da COMPRA no periodo -- nao e o valor do estoque em maos (sem valorizacao/custo medio ponderado nesta fase).'],
+    additive: true,
+    requires: ['fuelTank'],
+    compute: (s) => ({
+      value: s.fuelTank.receivedCost,
+      inputs: [{ key: 'receivedCost', label: 'Custo de diesel recebido', value: s.fuelTank.receivedCost, unit: 'BRL' }],
+      evidence: [{ source: 'FUEL_TANK_RECEIPT', recordCount: s.fuelTank.receiptCount }],
+    }),
+  },
+  {
+    id: 'fuel_average_purchase_price',
+    name: 'Preco medio de compra do diesel',
+    description:
+      'Preco medio, ponderado pelo volume, pago por litro nas compras (RECEIPT) do periodo. ' +
+      'NAO e o custo medio ponderado do estoque em maos.',
+    category: 'FINANCIAL',
+    unit: 'BRL_PER_LITER',
+    direction: 'LOWER_IS_BETTER',
+    formula: 'SUM(RECEIPT.totalAmount) / SUM(RECEIPT.quantityLiters), apenas recebimentos com pricePerLiter informado',
+    sources: [SRC.fuelTankReceipt],
+    dimensions: TANK_DIM,
+    limitations: [
+      'Preco medio de COMPRA no periodo -- nunca o custo medio ponderado do estoque em maos (valorizacao de estoque prevista para uma fase futura, nao implementada aqui).',
+      'Recebimentos sem preco por litro informado nao entram no calculo.',
+    ],
+    additive: false,
+    requires: ['fuelTank'],
+    compute: (s) => {
+      const t = s.fuelTank;
+      return {
+        value: t.averagePurchasePrice,
+        ...(t.averagePurchasePrice === null
+          ? { unavailableReason: 'Nenhum recebimento com preco por litro informado no periodo.' }
+          : {}),
+        inputs: [
+          { key: 'averagePurchasePrice', label: 'Preco medio de compra', value: t.averagePurchasePrice, unit: 'BRL_PER_LITER' },
+          { key: 'pricedReceiptLiters', label: 'Litros com preco informado', value: t.pricedReceiptLiters, unit: 'LITERS' },
+        ],
+        evidence: [{ source: 'FUEL_TANK_RECEIPT', recordCount: t.receiptCount }],
+      };
+    },
+  },
+  {
+    id: 'fuel_movements_count',
+    name: 'Movimentacoes de tanque',
+    description: 'Quantidade de recebimentos, abastecimentos internos e ajustes registrados no periodo.',
+    category: 'OPERATIONAL',
+    unit: 'COUNT',
+    direction: 'NEUTRAL',
+    formula: 'COUNT(FuelTankMovement) com type IN (RECEIPT, INTERNAL_FUELING, ADJUSTMENT) e effectiveDate no periodo',
+    sources: [SRC.fuelTankReceipt, SRC.fuelTankInternal, SRC.fuelTankAdjustment],
+    dimensions: TANK_DIM,
+    limitations: ['Exclui INITIAL_BALANCE (evento unico de criacao do tanque, nao uma movimentacao operacional recorrente).'],
+    additive: true,
+    requires: ['fuelTank'],
+    compute: (s) => ({
+      value: s.fuelTank.movementsCount,
+      inputs: [
+        { key: 'receiptCount', label: 'Recebimentos', value: s.fuelTank.receiptCount, unit: 'COUNT' },
+        { key: 'internalFuelingCount', label: 'Abastecimentos internos', value: s.fuelTank.internalFuelingCount, unit: 'COUNT' },
+        { key: 'adjustmentCount', label: 'Ajustes', value: s.fuelTank.adjustmentCount, unit: 'COUNT' },
+      ],
+      evidence: [
+        { source: 'FUEL_TANK_RECEIPT', recordCount: s.fuelTank.receiptCount },
+        { source: 'FUEL_TANK_INTERNAL_FUELING', recordCount: s.fuelTank.internalFuelingCount },
+        { source: 'FUEL_TANK_ADJUSTMENT', recordCount: s.fuelTank.adjustmentCount },
+      ],
+    }),
+  },
+  {
+    id: 'fuel_reconciliation_divergence_liters',
+    name: 'Divergencia de conferencia de estoque',
+    description: 'Soma, com sinal, das divergencias registradas nas conferencias fisicas do tanque no periodo.',
+    category: 'OPERATIONAL',
+    unit: 'LITERS',
+    direction: 'NEUTRAL',
+    formula: 'SUM(FuelTankInventoryCheck.divergenceLiters) com checkedAt no periodo',
+    sources: [SRC.fuelTankInventory],
+    dimensions: TANK_DIM,
+    limitations: [
+      'Divergencia congelada no momento da conferencia -- reflete a conferencia, nao o ajuste efetivamente aplicado (nem toda conferencia gera ADJUSTMENT).',
+    ],
+    additive: true,
+    requires: ['fuelTank'],
+    compute: (s) => ({
+      value: s.fuelTank.reconciliationDivergenceLiters,
+      inputs: [
+        { key: 'reconciliationDivergenceLiters', label: 'Divergencia', value: s.fuelTank.reconciliationDivergenceLiters, unit: 'LITERS' },
+      ],
+      evidence: [{ source: 'FUEL_TANK_INVENTORY_CHECK', recordCount: s.fuelTank.reconciliationChecksCount }],
     }),
   },
 ];

@@ -313,7 +313,7 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
   describe('catalogo', () => {
     it('lista KPIs com formula/fonte/unidade e dependencias pendentes', async () => {
       const res = await request(app.getHttpServer()).get('/api/v1/bi/kpis').set('Authorization', a.auth).expect(200);
-      expect(res.body.data.catalogVersion).toBe('2');
+      expect(res.body.data.catalogVersion).toBe('3');
       const ids = res.body.data.kpis.map((k: { id: string }) => k.id);
       expect(ids).toEqual(expect.arrayContaining(['revenue', 'operating_cost', 'cost_per_km', 'on_time_delivery_rate']));
       for (const k of res.body.data.kpis) {

@@ -6,6 +6,7 @@ export const INTELLIGENCE_TABS = [
   'financial',
   'fleet',
   'costs',
+  'fuel',
   'deadlines',
   'comparatives',
   'occurrences',
@@ -38,6 +39,10 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'financial', label: 'Financeiro' },
   { value: 'fleet', label: 'Frota' },
   { value: 'costs', label: 'Custos' },
+  // "Tanques" (nao "Combustível") de proposito: evita colidir com o rotulo
+  // "Combustível" ja usado na aba Custos (categoria de fuel_cost/FuelSupply,
+  // consumo do veiculo) -- esta aba e o ledger do tanque proprio.
+  { value: 'fuel', label: 'Tanques' },
   { value: 'deadlines', label: 'Prazos' },
   { value: 'comparatives', label: 'Comparativos' },
   { value: 'occurrences', label: 'Ocorrências' },
@@ -69,4 +74,14 @@ export const KPI_DRILL_DOWN: Record<string, DetailedScreen> = {
   idle_hours: { label: 'Ver torre de controle', href: '/operations/control-tower' },
   fleet_utilization: { label: 'Ver frota', href: '/operations/fleet' },
   fleet_availability: { label: 'Ver frota', href: '/operations/fleet' },
+  // Fase 6 -- ledger do tanque proprio, distinto de fuel_cost/fuel_liters
+  // (FuelSupply, consumo do veiculo) acima.
+  fuel_tank_stock: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_received_liters: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_internal_liters: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_adjustment_liters: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_received_cost: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_average_purchase_price: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_movements_count: { label: 'Ver tanques', href: '/fuel-tanks' },
+  fuel_reconciliation_divergence_liters: { label: 'Ver tanques', href: '/fuel-tanks' },
 };

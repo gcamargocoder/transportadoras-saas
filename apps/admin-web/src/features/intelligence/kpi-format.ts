@@ -27,6 +27,8 @@ export function formatKpiValueParts(unit: KpiUnit, value: number): { value: stri
       return { value: Math.abs(value) >= 1_000_000 ? currencyCompact.format(value) : currency.format(value), suffix: null };
     case 'BRL_PER_KM':
       return { value: currency.format(value), suffix: '/km' };
+    case 'BRL_PER_LITER':
+      return { value: currency.format(value), suffix: '/L' };
     case 'PERCENT':
       return { value: decimal1.format(value), suffix: '%' };
     case 'HOURS':
@@ -42,7 +44,9 @@ export function formatKpiValue(unit: KpiUnit, value: number | null): string {
   if (value === null) return '—';
   const parts = formatKpiValueParts(unit, value);
   if (!parts.suffix) return parts.value;
-  return parts.suffix === '%' || parts.suffix === '/km' ? `${parts.value}${parts.suffix}` : `${parts.value} ${parts.suffix}`;
+  return parts.suffix === '%' || parts.suffix === '/km' || parts.suffix === '/L'
+    ? `${parts.value}${parts.suffix}`
+    : `${parts.value} ${parts.suffix}`;
 }
 
 function signed(text: string, value: number): string {

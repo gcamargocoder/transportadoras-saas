@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { FuelTankMovementType } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { FleetOperationsMetricsService } from '../../fleet-operations/services/fleet-operations-metrics.service';
@@ -9,6 +10,8 @@ import {
   BiScope,
   buildCompletedDeliveryWhere,
   buildCompletedTripWhere,
+  buildFuelTankInventoryCheckWhere,
+  buildFuelTankMovementWhere,
   buildOccurrenceWhere,
 } from '../utils/bi-where.util';
 import { KpiPeriod } from '../utils/kpi-period.util';
@@ -312,6 +315,153 @@ export class BiKpiEvidenceService {
             }),
           ),
         };
+      }
+      // Fase 6 -- ledger do tanque proprio. tripId sempre null aqui: os
+      // registros do tanque nao tem vinculo com viagem (so INTERNAL_FUELING
+      // tem, indiretamente, via FuelSupply -- fora do escopo desta listagem).
+      case 'FUEL_TANK_RECEIPT': {
+        const where = buildFuelTankMovementWhere(tenantId, scope, period, FuelTankMovementType.RECEIPT);
+        const [rows, total] = await Promise.all([
+          this.prisma.fuelTankMovement.findMany({
+            where,
+            orderBy: [{ effectiveDate: 'desc' }, { id: 'asc' }],
+            skip,
+            take,
+            select: {
+              id: true,
+              effectiveDate: true,
+              totalAmount: true,
+              quantityLiters: true,
+              pricePerLiter: true,
+              invoiceNumber: true,
+              tank: { select: { name: true } },
+            },
+          }),
+          this.prisma.fuelTankMovement.count({ where }),
+        ]);
+        return {
+          total,
+          items: rows.map((r) =>
+            record({
+              id: r.id,
+              date: r.effectiveDate,
+              amount: toNumberOrNull(r.totalAmount),
+              description:
+                `${r.tank.name}: ${toNumberOrNull(r.quantityLiters) ?? 0} L` +
+                (r.pricePerLiter !== null ? ` a R$ ${toNumberOrNull(r.pricePerLiter)}/L` : '') +
+                (r.invoiceNumber ? ` (NF ${r.invoiceNumber})` : ''),
+            }),
+          ),
+        };
+      }
+      case 'FUEL_TANK_INTERNAL_FUELING': {
+        const where = buildFuelTankMovementWhere(tenantId, scope, period, FuelTankMovementType.INTERNAL_FUELING);
+        const [rows, total] = await Promise.all([
+          this.prisma.fuelTankMovement.findMany({
+            where,
+            orderBy: [{ effectiveDate: 'desc' }, { id: 'asc' }],
+            skip,
+            take,
+            select: { id: true, effectiveDate: true, quantityLiters: true, vehicleId: true, tripId: true, tank: { select: { name: true } } },
+          }),
+          this.prisma.fuelTankMovement.count({ where }),
+        ]);
+        return {
+          total,
+          items: rows.map((r) =>
+            record({
+              id: r.id,
+              date: r.effectiveDate,
+              vehicleId: r.vehicleId,
+              tripId: r.tripId,
+              description: `${r.tank.name}: ${toNumberOrNull(r.quantityLiters) ?? 0} L`,
+            }),
+          ),
+        };
+      }
+      case 'FUEL_TANK_ADJUSTMENT': {
+        const where = buildFuelTankMovementWhere(tenantId, scope, period, FuelTankMovementType.ADJUSTMENT);
+        const [rows, total] = await Promise.all([
+          this.prisma.fuelTankMovement.findMany({
+            where,
+            orderBy: [{ effectiveDate: 'desc' }, { id: 'asc' }],
+            skip,
+            take,
+            select: { id: true, effectiveDate: true, quantityLiters: true, notes: true, tank: { select: { name: true } } },
+          }),
+          this.prisma.fuelTankMovement.count({ where }),
+        ]);
+        return {
+          total,
+          items: rows.map((r) =>
+            record({
+              id: r.id,
+              date: r.effectiveDate,
+              description: `${r.tank.name}: ${toNumberOrNull(r.quantityLiters) ?? 0} L${r.notes ? ` -- ${r.notes}` : ''}`,
+            }),
+          ),
+        };
+      }
+      case 'FUEL_TANK_INVENTORY_CHECK': {
+        const where = buildFuelTankInventoryCheckWhere(tenantId, scope, period);
+        const [rows, total] = await Promise.all([
+          this.prisma.fuelTankInventoryCheck.findMany({
+            where,
+            orderBy: [{ checkedAt: 'desc' }, { id: 'asc' }],
+            skip,
+            take,
+            select: {
+              id: true,
+              checkedAt: true,
+              theoreticalStockLiters: true,
+              measuredStockLiters: true,
+              divergenceLiters: true,
+              adjusted: true,
+              tank: { select: { name: true } },
+            },
+          }),
+          this.prisma.fuelTankInventoryCheck.count({ where }),
+        ]);
+        return {
+          total,
+          items: rows.map((r) =>
+            record({
+              id: r.id,
+              date: r.checkedAt,
+              description:
+                `${r.tank.name}: teorico ${toNumberOrNull(r.theoreticalStockLiters)} L, medido ${toNumberOrNull(r.measuredStockLiters)} L, ` +
+                `divergencia ${toNumberOrNull(r.divergenceLiters)} L (${r.adjusted ? 'ajustado' : 'nao ajustado'})`,
+            }),
+          ),
+        };
+      }
+      // Nao e uma lista de movimentacoes do periodo: 1 registro por tanque
+      // do escopo, mostrando qual foi a ultima movimentacao considerada no
+      // saldo (fuel_tank_stock nunca soma movimentacoes -- ver kpi-catalog).
+      case 'FUEL_TANK_STOCK_SNAPSHOT': {
+        const tankWhere = { tenantId, ...compact({ id: scope.tankId }) };
+        const [tanks, total] = await Promise.all([
+          this.prisma.fuelTank.findMany({ where: tankWhere, orderBy: { name: 'asc' }, skip, take, select: { id: true, name: true } }),
+          this.prisma.fuelTank.count({ where: tankWhere }),
+        ]);
+        const items = await Promise.all(
+          tanks.map(async (t) => {
+            const movement = await this.prisma.fuelTankMovement.findFirst({
+              where: { tenantId, tankId: t.id, effectiveDate: { lte: period.end } },
+              orderBy: [{ effectiveDate: 'desc' }, { createdAt: 'desc' }],
+              select: { id: true, effectiveDate: true, newBalanceLiters: true, type: true },
+            });
+            return record({
+              id: movement?.id ?? t.id,
+              date: movement?.effectiveDate ?? null,
+              amount: movement ? toNumberOrNull(movement.newBalanceLiters) : null,
+              description: movement
+                ? `${t.name}: saldo ${toNumberOrNull(movement.newBalanceLiters)} L (ultima movimentacao: ${movement.type})`
+                : `${t.name}: sem movimentacao ate o fim do periodo`,
+            });
+          }),
+        );
+        return { total, items };
       }
     }
   }

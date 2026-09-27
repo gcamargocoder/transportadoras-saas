@@ -100,7 +100,7 @@ function buildSummary(): KpiSummaryEntity {
   return {
     catalogVersion: '1',
     calculatedAt: '2026-09-22T18:00:00.000Z',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     comparisonMode: 'PREVIOUS_PERIOD',
     comparisonPeriod: PREVIOUS,
@@ -184,7 +184,7 @@ describe('Central de Inteligencia (/dashboard)', () => {
     getAlertsMock.mockReset();
     getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiBreakdownMock.mockReset();
-    getKpiBreakdownMock.mockResolvedValue({ kpiId: 'x', dimension: 'vehicle', scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null }, period: PERIOD, total: null, items: [], others: null });
+    getKpiBreakdownMock.mockResolvedValue({ kpiId: 'x', dimension: 'vehicle', scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null }, period: PERIOD, total: null, items: [], others: null });
     getDashboardMock.mockReset();
     replaceMock.mockReset();
     searchParams = new URLSearchParams();
@@ -369,7 +369,7 @@ describe('Central de Inteligencia (/dashboard)', () => {
   it('todas as abas previstas estao na navegacao', () => {
     renderPage();
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios', 'Alertas']);
+    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Tanques', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios', 'Alertas']);
   });
 });
 
@@ -459,7 +459,7 @@ function buildSeries(): KpiSeriesResponseEntity {
   return {
     catalogVersion: '2',
     calculatedAt: '2026-09-22T18:00:00.000Z',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     granularity: 'month',
     timezone: 'America/Sao_Paulo',
@@ -483,7 +483,7 @@ function buildBreakdown(): KpiBreakdownEntity {
   return {
     kpiId: 'revenue',
     dimension: 'customer',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     total: 452300,
     items: [
@@ -702,7 +702,7 @@ function fleetVehicleBreakdown(kpiId: string, fleetId?: string): KpiBreakdownEnt
   return {
     kpiId,
     dimension: 'vehicle',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null, tankId: null },
     period: PERIOD,
     total: kpiId === 'fleet_utilization' || kpiId === 'fleet_availability' ? 62.5 : null,
     items: FLEET_VEHICLE_ROWS[kpiId] ?? [],
@@ -934,7 +934,7 @@ function costVehicleBreakdown(kpiId: string, fleetId?: string): KpiBreakdownEnti
   return {
     kpiId,
     dimension: 'vehicle',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null, tankId: null },
     period: PERIOD,
     total: kpiId === 'cost_per_km' ? 14.2 : null,
     items: COST_VEHICLE_ROWS[kpiId] ?? [],
@@ -1107,7 +1107,7 @@ function deadlineVehicleBreakdown(kpiId: string, fleetId?: string): KpiBreakdown
   return {
     kpiId,
     dimension: 'vehicle',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: fleetId ?? null, customerId: null, tankId: null },
     period: PERIOD,
     total: kpiId === 'on_time_delivery_rate' ? 91.2 : null,
     items: DEADLINE_VEHICLE_ROWS[kpiId] ?? [],
@@ -1247,7 +1247,7 @@ function comparativeBreakdown(kpiId: string): KpiBreakdownEntity {
   return {
     kpiId,
     dimension: 'vehicle',
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     total: null,
     items: COMPARATIVE_VEHICLE_ROWS[kpiId] ?? [],
@@ -1383,7 +1383,7 @@ function occurrenceBreakdown(kpiId: string, dimension: string): KpiBreakdownEnti
   return {
     kpiId,
     dimension: dimension as KpiBreakdownEntity['dimension'],
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     total: 5,
     items,
@@ -1416,7 +1416,7 @@ function occurrenceEvidencePage(pageSize: number) {
   return {
     kpiId: 'occurrences_total',
     source: 'TRIP_OCCURRENCE' as const,
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     items: [geoItem, noGeoItem],
     meta: { page: 1, pageSize, total: 2, totalPages: 1 },
@@ -1515,7 +1515,7 @@ function reportBreakdown(kpiId: string, dimension: string): KpiBreakdownEntity {
   return {
     kpiId,
     dimension: dimension as KpiBreakdownEntity['dimension'],
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     total: null,
     items,
@@ -1642,7 +1642,7 @@ function biAlert(overrides: Partial<{ id: string; ruleId: string; ruleVersion: n
 }
 
 function alertsResponse(items: ReturnType<typeof biAlert>[]) {
-  return { catalogVersion: '2', calculatedAt: '2026-09-22T18:00:00.000Z', scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null }, period: PERIOD, items };
+  return { catalogVersion: '2', calculatedAt: '2026-09-22T18:00:00.000Z', scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null }, period: PERIOD, items };
 }
 
 describe('Central -- aba Alertas (BI 10)', () => {

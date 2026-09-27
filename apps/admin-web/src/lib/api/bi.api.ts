@@ -22,6 +22,8 @@ export interface BiKpiScopeQuery extends QueryableParams {
   fleetId?: string | undefined;
   /** So a receita suporta o recorte por cliente; os demais KPIs voltam UNAVAILABLE. */
   customerId?: string | undefined;
+  /** Fase 6 -- so os KPIs do ledger de tanque (fuel_*) suportam; os demais voltam UNAVAILABLE. */
+  tankId?: string | undefined;
 }
 
 export interface BiKpiSummaryQuery extends BiKpiScopeQuery {
@@ -61,7 +63,7 @@ export interface BiKpiSeriesQuery extends BiKpiScopeQuery {
 
 export interface BiKpiBreakdownQuery extends BiKpiScopeQuery {
   kpiId: string;
-  dimension: 'customer' | 'vehicle' | 'type' | 'severity';
+  dimension: 'customer' | 'vehicle' | 'type' | 'severity' | 'tank';
   limit?: number | undefined;
 }
 

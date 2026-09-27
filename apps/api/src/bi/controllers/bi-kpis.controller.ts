@@ -80,9 +80,11 @@ export class BiKpisController {
       'operating_cost/fuel_cost/maintenance_cost/toll_cost/tire_cost/other_cost/cost_per_km x ' +
       'vehicle (BI 5); deliveries_completed/on_time_delivery_rate/occurrences_total/' +
       'occurrences_critical x vehicle (BI 6); ou occurrences_total/occurrences_critical x type, ' +
-      'e occurrences_total x severity (BI 8). Mesmo where do KPI; para KPIs somaveis, soma dos ' +
-      'itens + others = valor do KPI -- para razoes (PERCENT/BRL_PER_KM), "total" e o valor ' +
-      'oficial do KPI, nao a soma dos itens.',
+      'e occurrences_total x severity (BI 8); fuel_internal_liters x vehicle, ou fuel_tank_stock/' +
+      'fuel_received_liters/fuel_internal_liters/fuel_adjustment_liters/fuel_received_cost x tank ' +
+      '(Fase 6). Mesmo where do KPI; para KPIs somaveis (inclusive fuel_tank_stock, ponto no tempo ' +
+      'mas somavel ENTRE tanques), soma dos itens + others = valor do KPI -- para razoes ' +
+      '(PERCENT/BRL_PER_KM), "total" e o valor oficial do KPI, nao a soma dos itens.',
   })
   @ApiOkResponse({ type: KpiBreakdownEntity })
   getBreakdown(@Query() query: BiKpiBreakdownQueryDto): Promise<KpiBreakdownEntity> {

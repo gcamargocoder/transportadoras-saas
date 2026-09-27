@@ -34,7 +34,7 @@ function buildSummary(kpis: KpiResultEntity[]): KpiSummaryEntity {
   return {
     catalogVersion: '2',
     calculatedAt: new Date(),
-    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: PERIOD,
     comparisonMode: 'PREVIOUS_PERIOD',
     comparisonPeriod: null,

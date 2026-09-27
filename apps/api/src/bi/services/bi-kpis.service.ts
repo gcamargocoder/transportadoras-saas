@@ -89,7 +89,7 @@ export class BiKpisService {
     entity.period = this.toPeriodEntity(period);
     entity.comparisonMode = comparisonMode;
     entity.comparisonPeriod = comparisonPeriod ? this.toPeriodEntity(comparisonPeriod) : null;
-    entity.kpis = buildKpiResults(definitions, current, comparison ?? null, { customer: scope.customerId !== undefined });
+    entity.kpis = buildKpiResults(definitions, current, comparison ?? null, this.toRequestedDimensions(scope));
     return entity;
   }
 
@@ -105,6 +105,9 @@ export class BiKpisService {
 
     if (query.customerId && !definition.dimensions.includes('customer')) {
       throw new BadRequestException(`O KPI ${kpiId} nao suporta recorte por cliente.`);
+    }
+    if (query.tankId && !definition.dimensions.includes('tank')) {
+      throw new BadRequestException(`O KPI ${kpiId} nao suporta recorte por tanque.`);
     }
 
     const period = this.parsePeriod(query.startDate, query.endDate);
@@ -166,7 +169,7 @@ export class BiKpisService {
       definitions,
       buckets,
       comparisonBuckets,
-      { customer: scope.customerId !== undefined },
+      this.toRequestedDimensions(scope),
       now,
     );
     return entity;
@@ -240,6 +243,9 @@ export class BiKpisService {
           return this.breakdown.occurrencesTotalByVehicle(tenantId, scope, period, limit);
         case 'occurrences_critical':
           return this.breakdown.occurrencesCriticalByVehicle(tenantId, scope, period, limit);
+        // Fase 6 -- abastecimento interno por veiculo.
+        case 'fuel_internal_liters':
+          return this.breakdown.fuelInternalLitersByVehicle(tenantId, scope, period, limit);
       }
     }
     // BI 8 -- distribuicao das ocorrencias por tipo/severidade.
@@ -253,6 +259,22 @@ export class BiKpisService {
     }
     if (dimension === 'severity' && kpiId === 'occurrences_total') {
       return this.breakdown.occurrencesTotalBySeverity(tenantId, scope, period, limit);
+    }
+    // Fase 6 -- recorte do ledger de tanque por tanque (secao 6 do pedido:
+    // estoque, litros recebidos, abastecidos, ajustes e custo por tanque).
+    if (dimension === 'tank') {
+      switch (kpiId) {
+        case 'fuel_tank_stock':
+          return this.breakdown.fuelTankStockByTank(tenantId, scope, period, limit);
+        case 'fuel_received_liters':
+          return this.breakdown.fuelReceivedLitersByTank(tenantId, scope, period, limit);
+        case 'fuel_internal_liters':
+          return this.breakdown.fuelInternalLitersByTank(tenantId, scope, period, limit);
+        case 'fuel_adjustment_liters':
+          return this.breakdown.fuelAdjustmentLitersByTank(tenantId, scope, period, limit);
+        case 'fuel_received_cost':
+          return this.breakdown.fuelReceivedCostByTank(tenantId, scope, period, limit);
+      }
     }
     throw new BadRequestException(`Recorte por ${dimension} nao disponivel para o KPI ${kpiId}.`);
   }
@@ -284,7 +306,7 @@ export class BiKpisService {
   // tenant do token (404 caso contrario -- nunca revela se o id existe em
   // outro tenant). Todas as consultas seguintes tambem filtram por tenantId.
   private async resolveScope(tenantId: string, query: BiKpiScopeQueryDto): Promise<BiScope> {
-    const [vehicle, fleet, customer] = await Promise.all([
+    const [vehicle, fleet, customer, tank] = await Promise.all([
       query.vehicleId
         ? this.prisma.vehicle.findFirst({ where: { id: query.vehicleId, tenantId, deletedAt: null }, select: { id: true } })
         : Promise.resolve(undefined),
@@ -294,11 +316,27 @@ export class BiKpisService {
       query.customerId
         ? this.prisma.customer.findFirst({ where: { id: query.customerId, tenantId }, select: { id: true } })
         : Promise.resolve(undefined),
+      query.tankId
+        ? this.prisma.fuelTank.findFirst({ where: { id: query.tankId, tenantId }, select: { id: true } })
+        : Promise.resolve(undefined),
     ]);
     if (vehicle === null) throw new NotFoundException('Veiculo nao encontrado.');
     if (fleet === null) throw new NotFoundException('Frota nao encontrada.');
     if (customer === null) throw new NotFoundException('Cliente nao encontrado.');
-    return compact({ vehicleId: query.vehicleId, fleetId: query.fleetId, customerId: query.customerId });
+    if (tank === null) throw new NotFoundException('Tanque nao encontrado.');
+    return compact({ vehicleId: query.vehicleId, fleetId: query.fleetId, customerId: query.customerId, tankId: query.tankId });
+  }
+
+  // Fase 6 -- vehicle/fleet/tank passaram a ser verificados como customer ja
+  // era (ver unsupportedDimensionReason): os KPIs de tanque nao tem vinculo
+  // com veiculo/frota (exceto fuel_internal_liters).
+  private toRequestedDimensions(scope: BiScope): { customer: boolean; vehicle: boolean; fleet: boolean; tank: boolean } {
+    return {
+      customer: scope.customerId !== undefined,
+      vehicle: scope.vehicleId !== undefined,
+      fleet: scope.fleetId !== undefined,
+      tank: scope.tankId !== undefined,
+    };
   }
 
   private selectDefinitions(ids: string[] | undefined): readonly KpiDefinition[] {
@@ -322,6 +360,7 @@ export class BiKpisService {
     entity.vehicleId = scope.vehicleId ?? null;
     entity.fleetId = scope.fleetId ?? null;
     entity.customerId = scope.customerId ?? null;
+    entity.tankId = scope.tankId ?? null;
     return entity;
   }
 

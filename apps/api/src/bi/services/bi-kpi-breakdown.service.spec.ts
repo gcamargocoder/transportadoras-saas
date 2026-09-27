@@ -426,4 +426,115 @@ describe('BiKpiBreakdownService -- recorte por veiculo (BI 4)', () => {
       expect(prisma.tripOccurrence.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ severity: 'CRITICAL' }) }));
     });
   });
+
+  describe('gestao de combustivel -- ledger do tanque (Fase 6)', () => {
+    const d = (n: number) => new Prisma.Decimal(n);
+    const tanks = [
+      { id: 'tank1', name: 'Tanque 1' },
+      { id: 'tank2', name: 'Tanque 2' },
+    ];
+
+    async function buildTankService(prismaOverrides: Record<string, unknown> = {}) {
+      const prisma = { fuelTank: { findMany: jest.fn().mockResolvedValue(tanks) }, ...prismaOverrides };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BiKpiBreakdownService,
+          { provide: PrismaService, useValue: prisma },
+          { provide: FleetOperationsMetricsService, useValue: {} },
+          { provide: FleetIdleTimeService, useValue: { loadVehicleIdleData: jest.fn() } },
+        ],
+      }).compile();
+      return { service: moduleRef.get(BiKpiBreakdownService), prisma };
+    }
+
+    it('fuel_received_liters x tank: soma por tanque bate com o total; tanque sem recebimento = 0 real', async () => {
+      const { service } = await buildTankService({
+        fuelTankMovement: {
+          groupBy: jest.fn().mockResolvedValue([{ tankId: 'tank1', _sum: { quantityLiters: d(500), totalAmount: d(2500) }, _count: 2 }]),
+        },
+      });
+      const result = await service.fuelReceivedLitersByTank('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'tank1')?.value).toBe(500);
+      expect(result.items.find((i) => i.key === 'tank2')?.value).toBe(0);
+      expect(result.items.find((i) => i.key === 'tank2')?.unavailableReason).toBeNull();
+      expect(result.total).toBe(500);
+    });
+
+    it('fuel_received_cost x tank: usa totalAmount, nao quantityLiters', async () => {
+      const { service } = await buildTankService({
+        fuelTankMovement: {
+          groupBy: jest.fn().mockResolvedValue([{ tankId: 'tank1', _sum: { quantityLiters: d(500), totalAmount: d(2750) }, _count: 2 }]),
+        },
+      });
+      const result = await service.fuelReceivedCostByTank('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'tank1')?.value).toBe(2750);
+    });
+
+    it('fuel_adjustment_liters x tank: preserva o sinal (falta = negativo)', async () => {
+      const { service } = await buildTankService({
+        fuelTankMovement: {
+          groupBy: jest.fn().mockResolvedValue([{ tankId: 'tank2', _sum: { quantityLiters: d(-30), totalAmount: null }, _count: 1 }]),
+        },
+      });
+      const result = await service.fuelAdjustmentLitersByTank('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'tank2')?.value).toBe(-30);
+      expect(result.total).toBe(-30);
+    });
+
+    it('fuel_tank_stock x tank: ponto no tempo (ultima movimentacao por tanque); soma entre tanques = total', async () => {
+      const { service } = await buildTankService({
+        fuelTankMovement: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValueOnce({ newBalanceLiters: d(1200) })
+            .mockResolvedValueOnce(null),
+        },
+      });
+      const result = await service.fuelTankStockByTank('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'tank1')).toMatchObject({ value: 1200 });
+      expect(result.items.find((i) => i.key === 'tank2')).toMatchObject({ value: null });
+      expect(result.items.find((i) => i.key === 'tank2')?.unavailableReason).toMatch(/sem movimentacao/i);
+      expect(result.total).toBe(1200); // so tank1 tem valor -- soma ignora o null, nunca vira 0
+    });
+
+    it('isolamento: recorte por tanque so consulta o tenant informado', async () => {
+      const findMany = jest.fn().mockResolvedValue(tanks);
+      const { service } = await buildTankService({
+        fuelTank: { findMany },
+        fuelTankMovement: { groupBy: jest.fn().mockResolvedValue([]) },
+      });
+      await service.fuelReceivedLitersByTank('tenant-a', {}, period, 10);
+      expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ tenantId: 'tenant-a' }) }));
+    });
+
+    it('fuel_internal_liters x vehicle: abastecimento sem vehicleId vira "Sem veiculo", de veiculo removido vira "Veiculo removido"', async () => {
+      const vehicles = [{ id: 'v1', plate: 'AAA1111' }];
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BiKpiBreakdownService,
+          {
+            provide: PrismaService,
+            useValue: {
+              vehicle: { findMany: jest.fn().mockResolvedValue(vehicles) },
+              fuelTankMovement: {
+                groupBy: jest.fn().mockResolvedValue([
+                  { vehicleId: 'v1', _sum: { quantityLiters: d(150) }, _count: 1 },
+                  { vehicleId: null, _sum: { quantityLiters: d(90) }, _count: 1 },
+                  { vehicleId: 'removido', _sum: { quantityLiters: d(20) }, _count: 1 },
+                ]),
+              },
+            },
+          },
+          { provide: FleetOperationsMetricsService, useValue: {} },
+          { provide: FleetIdleTimeService, useValue: { loadVehicleIdleData: jest.fn() } },
+        ],
+      }).compile();
+      const service = moduleRef.get(BiKpiBreakdownService);
+      const result = await service.fuelInternalLitersByVehicle('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'v1')?.value).toBe(150);
+      expect(result.items.find((i) => i.key === null && i.label === 'Sem veiculo')).toMatchObject({ value: 90 });
+      expect(result.items.find((i) => i.key === null && i.label === 'Veiculo removido')).toMatchObject({ value: 20 });
+      expect(result.total).toBe(260);
+    });
+  });
 });

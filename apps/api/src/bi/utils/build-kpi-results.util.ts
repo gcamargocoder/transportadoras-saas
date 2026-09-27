@@ -30,6 +30,11 @@ const EVIDENCE_LABELS: Record<KpiEvidenceSource, string> = {
   DELIVERY_COMPLETED: 'Entregas concluidas',
   TRIP_OCCURRENCE: 'Ocorrencias de viagem',
   FLEET_TIME: 'Intervalos de viagem/ociosidade considerados',
+  FUEL_TANK_RECEIPT: 'Recebimentos de diesel no tanque',
+  FUEL_TANK_INTERNAL_FUELING: 'Abastecimentos internos do tanque',
+  FUEL_TANK_ADJUSTMENT: 'Ajustes de estoque do tanque',
+  FUEL_TANK_INVENTORY_CHECK: 'Conferencias fisicas de estoque',
+  FUEL_TANK_STOCK_SNAPSHOT: 'Ultima movimentacao considerada no saldo de cada tanque',
 };
 
 function toPeriodEntity(period: KpiPeriod): KpiPeriodEntity {
@@ -61,9 +66,18 @@ function assignDefinition(entity: KpiDefinitionEntity, d: KpiDefinition): void {
   entity.additive = d.additive;
 }
 
-// BI 3 -- dimensoes pedidas (alem de period/vehicle/fleet, sempre aceitas).
+// BI 3 -- dimensoes pedidas alem de period (sempre aceito). vehicle/fleet
+// eram aceitos incondicionalmente ate a Fase 6: todo KPI ate entao tinha
+// vinculo direto com veiculo/frota. Os KPIs de tanque (fuel_tank_stock,
+// fuel_received_liters etc.) nao tem esse vinculo (RECEIPT/ADJUSTMENT/
+// INITIAL_BALANCE nunca gravam veiculo) -- por isso passaram a declarar
+// `dimensions` explicitamente, e vehicle/fleet/tank agora sao verificados
+// como customer ja era.
 export interface RequestedDimensions {
   customer?: boolean;
+  vehicle?: boolean;
+  fleet?: boolean;
+  tank?: boolean;
 }
 
 // Motivo quando o KPI nao suporta um recorte pedido: melhor indisponivel que
@@ -71,6 +85,12 @@ export interface RequestedDimensions {
 export function unsupportedDimensionReason(definition: KpiDefinition, requested: RequestedDimensions): string | null {
   if (requested.customer && !definition.dimensions.includes('customer')) {
     return 'Este indicador nao suporta recorte por cliente: suas fontes nao tem vinculo direto com cliente.';
+  }
+  if ((requested.vehicle || requested.fleet) && !definition.dimensions.includes('vehicle') && !definition.dimensions.includes('fleet')) {
+    return 'Este indicador nao suporta recorte por veiculo/frota: seus dados nao tem vinculo direto com veiculo.';
+  }
+  if (requested.tank && !definition.dimensions.includes('tank')) {
+    return 'Este indicador nao suporta recorte por tanque.';
   }
   return null;
 }

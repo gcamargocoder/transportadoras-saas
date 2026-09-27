@@ -19,7 +19,7 @@ function breakdown(
   return {
     kpiId: 'x',
     dimension: 'vehicle',
-    scope: { tenantId: 't', vehicleId: null, fleetId: null, customerId: null },
+    scope: { tenantId: 't', vehicleId: null, fleetId: null, customerId: null, tankId: null },
     period: { start: range.startDate, end: range.endDate },
     total: null,
     others: null,

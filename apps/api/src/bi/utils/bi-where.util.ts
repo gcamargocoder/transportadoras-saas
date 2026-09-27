@@ -1,4 +1,4 @@
-import { Prisma, TripDeliveryStopStatus, TripOccurrenceSeverity, TripStatus } from '@prisma/client';
+import { FuelTankMovementType, Prisma, TripDeliveryStopStatus, TripOccurrenceSeverity, TripStatus } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { KpiPeriod } from './kpi-period.util';
 
@@ -13,6 +13,10 @@ export interface BiScope {
   /// BI 3 -- so aplicado as fontes com vinculo direto a cliente (receita).
   /// KPIs sem a dimensao "customer" ficam indisponiveis quando informado.
   customerId?: string;
+  /// BI 6 -- so aplicado ao ledger de tanque (FuelTankMovement/
+  /// FuelTankInventoryCheck). KPIs sem a dimensao "tank" ficam
+  /// indisponiveis quando informado.
+  tankId?: string;
 }
 
 function periodRange(period: KpiPeriod): Prisma.DateTimeFilter {
@@ -79,4 +83,28 @@ export function isDeliveredOnTime(row: {
 }): boolean {
   const arrival = row.actualArrival ?? row.deliveredAt;
   return arrival !== null && arrival.getTime() <= row.plannedArrival.getTime();
+}
+
+// BI 6 -- where do LEDGER do tanque. vehicleId/fleetId de `scope` NAO
+// entram aqui de proposito: so INTERNAL_FUELING grava vehicleId (RECEIPT/
+// ADJUSTMENT/INITIAL_BALANCE nunca tem veiculo) -- aplicar o filtro de
+// veiculo a um where generico faria fuel_received_liters/fuel_tank_stock
+// voltarem 0/vazio ao inves de ficarem indisponiveis. O recorte por
+// veiculo de fuel_internal_liters e montado à parte (ver
+// BiKpiSnapshotService.collectFuelTank).
+export function buildFuelTankMovementWhere(
+  tenantId: string,
+  scope: BiScope,
+  period: KpiPeriod,
+  type?: FuelTankMovementType,
+): Prisma.FuelTankMovementWhereInput {
+  return { tenantId, effectiveDate: periodRange(period), ...compact({ tankId: scope.tankId, type }) };
+}
+
+export function buildFuelTankInventoryCheckWhere(
+  tenantId: string,
+  scope: BiScope,
+  period: KpiPeriod,
+): Prisma.FuelTankInventoryCheckWhereInput {
+  return { tenantId, checkedAt: periodRange(period), ...compact({ tankId: scope.tankId }) };
 }

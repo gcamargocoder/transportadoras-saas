@@ -4324,7 +4324,7 @@ export interface TollDataSyncRunEntity {
 // bi-kpi.entity.ts). Valores sempre calculados pela API: o front nunca
 // recalcula um KPI, so exibe value/comparison/inputs/evidence.
 // ============================================================================
-export type KpiUnit = 'BRL' | 'BRL_PER_KM' | 'KM' | 'LITERS' | 'COUNT' | 'PERCENT' | 'HOURS';
+export type KpiUnit = 'BRL' | 'BRL_PER_KM' | 'BRL_PER_LITER' | 'KM' | 'LITERS' | 'COUNT' | 'PERCENT' | 'HOURS';
 export type KpiCategory = 'FINANCIAL' | 'OPERATIONAL' | 'FLEET' | 'SERVICE_LEVEL';
 export type KpiDirection = 'HIGHER_IS_BETTER' | 'LOWER_IS_BETTER' | 'NEUTRAL';
 export type KpiComparisonMode = 'PREVIOUS_PERIOD' | 'PREVIOUS_YEAR' | 'CUSTOM' | 'NONE';
@@ -4339,7 +4339,12 @@ export type KpiEvidenceSource =
   | 'TRIP_COMPLETED'
   | 'DELIVERY_COMPLETED'
   | 'TRIP_OCCURRENCE'
-  | 'FLEET_TIME';
+  | 'FLEET_TIME'
+  | 'FUEL_TANK_RECEIPT'
+  | 'FUEL_TANK_INTERNAL_FUELING'
+  | 'FUEL_TANK_ADJUSTMENT'
+  | 'FUEL_TANK_INVENTORY_CHECK'
+  | 'FUEL_TANK_STOCK_SNAPSHOT';
 
 export interface KpiPeriodEntity {
   start: string;
@@ -4406,6 +4411,7 @@ export interface KpiScopeEntity {
   vehicleId: string | null;
   fleetId: string | null;
   customerId: string | null;
+  tankId: string | null;
 }
 
 export interface KpiSummaryEntity {
@@ -4492,7 +4498,7 @@ export interface KpiBreakdownItemEntity {
 
 export interface KpiBreakdownEntity {
   kpiId: string;
-  dimension: 'customer' | 'vehicle' | 'type' | 'severity';
+  dimension: 'customer' | 'vehicle' | 'type' | 'severity' | 'tank';
   scope: KpiScopeEntity;
   period: KpiPeriodEntity;
   total: number | null;

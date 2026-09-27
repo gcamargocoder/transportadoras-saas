@@ -47,6 +47,14 @@ export class BiKpiScopeQueryDto {
   @IsOptional()
   @IsUUID('4')
   customerId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Recorte por tanque proprio -- so KPIs com a dimensao "tank" (fuel_*); os demais voltam UNAVAILABLE.',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  tankId?: string;
 }
 
 export class BiKpiSummaryQueryDto extends BiKpiScopeQueryDto {
@@ -103,6 +111,11 @@ export class BiKpiEvidenceQueryDto extends PaginationQueryDto {
   @IsUUID('4')
   customerId?: string;
 
+  @ApiPropertyOptional({ format: 'uuid', description: 'Recorte por tanque proprio (fontes FUEL_TANK_*).' })
+  @IsOptional()
+  @IsUUID('4')
+  tankId?: string;
+
   @ApiProperty({ enum: KPI_EVIDENCE_SOURCES })
   @IsIn(KPI_EVIDENCE_SOURCES, { message: 'source invalido.' })
   source!: KpiEvidenceSource;
@@ -139,7 +152,10 @@ export class BiKpiSeriesQueryDto extends BiKpiScopeQueryDto {
 // BI 4 -- 'vehicle' cobre os 5 KPIs de frota (fleet_utilization,
 // fleet_availability, idle_hours, trips_completed, distance_km).
 // BI 8 -- 'type'/'severity' cobrem occurrences_total/occurrences_critical.
-export const BREAKDOWN_DIMENSIONS = ['customer', 'vehicle', 'type', 'severity'] as const;
+// Fase 6 -- 'tank' cobre os KPIs do ledger de tanque proprio (fuel_tank_stock,
+// fuel_received_liters, fuel_internal_liters, fuel_adjustment_liters,
+// fuel_received_cost); 'vehicle' tambem passou a cobrir fuel_internal_liters.
+export const BREAKDOWN_DIMENSIONS = ['customer', 'vehicle', 'type', 'severity', 'tank'] as const;
 export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
 
 export class BiKpiBreakdownQueryDto extends BiKpiScopeQueryDto {

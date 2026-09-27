@@ -160,6 +160,9 @@ export class KpiScopeEntity {
 
   @ApiPropertyOptional({ format: 'uuid', nullable: true, type: String })
   customerId!: string | null;
+
+  @ApiPropertyOptional({ format: 'uuid', nullable: true, type: String })
+  tankId!: string | null;
 }
 
 export class KpiSummaryEntity {
@@ -371,8 +374,8 @@ export class KpiBreakdownEntity {
   @ApiProperty()
   kpiId!: string;
 
-  @ApiProperty({ enum: ['customer', 'vehicle', 'type', 'severity'] })
-  dimension!: 'customer' | 'vehicle' | 'type' | 'severity';
+  @ApiProperty({ enum: ['customer', 'vehicle', 'type', 'severity', 'tank'] })
+  dimension!: 'customer' | 'vehicle' | 'type' | 'severity' | 'tank';
 
   @ApiProperty({ type: KpiScopeEntity })
   scope!: KpiScopeEntity;

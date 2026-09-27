@@ -44,6 +44,9 @@ function snapshotFor(parts: readonly SnapshotPart[]): BiPeriodSnapshot {
     deliveries: has('deliveries') ? { completed: 4, withDeadline: 2, onTime: 1 } : poisoned('deliveries'),
     occurrences: has('occurrences') ? { total: 5, critical: 1 } : poisoned('occurrences'),
     fleetTime: has('fleetTime') ? { ...EMPTY_SNAPSHOT.fleetTime, vehiclesConsidered: 1, capacityMinutes: 600, tripMinutes: 60 } : poisoned('fleetTime'),
+    fuelTank: has('fuelTank')
+      ? { ...EMPTY_SNAPSHOT.fuelTank, stockAtEnd: 900, receivedLiters: 500, internalLiters: 300, receivedCost: 2500 }
+      : poisoned('fuelTank'),
   } as BiPeriodSnapshot;
 }
 

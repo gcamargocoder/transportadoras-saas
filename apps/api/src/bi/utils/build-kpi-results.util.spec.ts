@@ -43,6 +43,22 @@ function snapshot(overrides: Partial<BiPeriodSnapshot> = {}, distanceKm: number 
       idleSegmentsConsidered: 6,
       effectiveEnd: new Date('2026-02-28T23:59:59.999Z'),
     },
+    fuelTank: {
+      stockAtEnd: 7000,
+      tanksConsidered: 1,
+      receivedLiters: 2000,
+      receiptCount: 2,
+      receivedCost: 11000,
+      averagePurchasePrice: 5.5,
+      pricedReceiptLiters: 2000,
+      internalLiters: 1200,
+      internalFuelingCount: 4,
+      adjustmentLitersNet: -30,
+      adjustmentCount: 1,
+      movementsCount: 7,
+      reconciliationDivergenceLiters: -30,
+      reconciliationChecksCount: 1,
+    },
     ...overrides,
   };
 }
@@ -158,6 +174,81 @@ describe('formulas', () => {
     expect(evidence.find((e) => e.source === 'FUEL_SUPPLY')).toMatchObject({ recordCount: 5, listable: true });
     const fleet = valueOf('fleet_utilization', s).evidence;
     expect(fleet).toEqual([expect.objectContaining({ source: 'FLEET_TIME', listable: false })]);
+  });
+
+  // Fase 6 -- ledger do tanque proprio (fuel_tank_*), fonte SEPARADA de
+  // fuel_cost/fuel_liters (FuelSupply, consumo do veiculo) ja testados acima.
+  describe('gestao de combustivel -- ledger do tanque (Fase 6)', () => {
+    it('estoque, entradas, saidas, ajustes, custo e contagem de movimentacoes', () => {
+      expect(valueOf('fuel_tank_stock', s).value).toBe(7000);
+      expect(valueOf('fuel_received_liters', s).value).toBe(2000);
+      expect(valueOf('fuel_internal_liters', s).value).toBe(1200);
+      expect(valueOf('fuel_adjustment_liters', s).value).toBe(-30);
+      expect(valueOf('fuel_received_cost', s).value).toBe(11000);
+      expect(valueOf('fuel_average_purchase_price', s).value).toBe(5.5);
+      expect(valueOf('fuel_movements_count', s).value).toBe(7);
+      expect(valueOf('fuel_reconciliation_divergence_liters', s).value).toBe(-30);
+    });
+
+    it('estoque indisponivel (nenhum tanque com movimentacao ate o periodo) fica UNAVAILABLE, nunca 0', () => {
+      const noStock = snapshot({ fuelTank: { ...s.fuelTank, stockAtEnd: null, tanksConsidered: 1 } });
+      const result = valueOf('fuel_tank_stock', noStock);
+      expect(result.status).toBe('UNAVAILABLE');
+      expect(result.value).toBeNull();
+      expect(result.unavailableReason).toBeTruthy();
+    });
+
+    it('preco medio de compra indisponivel sem recebimento com preco fica UNAVAILABLE, nunca 0', () => {
+      const noPrice = snapshot({ fuelTank: { ...s.fuelTank, averagePurchasePrice: null, pricedReceiptLiters: 0 } });
+      const result = valueOf('fuel_average_purchase_price', noPrice);
+      expect(result.status).toBe('UNAVAILABLE');
+      expect(result.value).toBeNull();
+    });
+
+    it('ajuste negativo (falta) preserva o sinal -- nunca convertido para valor absoluto', () => {
+      expect(valueOf('fuel_adjustment_liters', s).value).toBeLessThan(0);
+      expect(valueOf('fuel_reconciliation_divergence_liters', s).value).toBeLessThan(0);
+    });
+
+    it('evidencias: cada KPI aponta para a fonte correta do ledger', () => {
+      expect(valueOf('fuel_tank_stock', s).evidence).toEqual([expect.objectContaining({ source: 'FUEL_TANK_STOCK_SNAPSHOT' })]);
+      expect(valueOf('fuel_received_liters', s).evidence).toEqual([expect.objectContaining({ source: 'FUEL_TANK_RECEIPT', recordCount: 2 })]);
+      expect(valueOf('fuel_internal_liters', s).evidence).toEqual([
+        expect.objectContaining({ source: 'FUEL_TANK_INTERNAL_FUELING', recordCount: 4 }),
+      ]);
+      expect(valueOf('fuel_adjustment_liters', s).evidence).toEqual([expect.objectContaining({ source: 'FUEL_TANK_ADJUSTMENT', recordCount: 1 })]);
+      expect(valueOf('fuel_reconciliation_divergence_liters', s).evidence).toEqual([
+        expect.objectContaining({ source: 'FUEL_TANK_INVENTORY_CHECK', recordCount: 1 }),
+      ]);
+      const movementsEvidence = valueOf('fuel_movements_count', s).evidence.map((e) => e.source);
+      expect(movementsEvidence).toEqual(['FUEL_TANK_RECEIPT', 'FUEL_TANK_INTERNAL_FUELING', 'FUEL_TANK_ADJUSTMENT']);
+    });
+
+    it('recorte por cliente nao se aplica: fica indisponivel sem executar a formula (mesmo padrao de receita x custo)', () => {
+      const result = buildKpiResult(findKpiDefinition('fuel_tank_stock')!, s, null, { customer: true });
+      expect(result.status).toBe('UNAVAILABLE');
+      expect(result.unavailableReason).toMatch(/cliente/);
+    });
+
+    it('recorte por veiculo/frota nao se aplica a fuel_tank_stock (sem vinculo com veiculo)', () => {
+      const result = buildKpiResult(findKpiDefinition('fuel_tank_stock')!, s, null, { vehicle: true });
+      expect(result.status).toBe('UNAVAILABLE');
+      expect(result.unavailableReason).toMatch(/veiculo/);
+    });
+
+    it('fuel_internal_liters ACEITA recorte por veiculo (abastecimento interno sempre vinculado a um veiculo)', () => {
+      const result = buildKpiResult(findKpiDefinition('fuel_internal_liters')!, s, null, { vehicle: true });
+      expect(result.status).toBe('AVAILABLE');
+      expect(result.value).toBe(1200);
+    });
+
+    it('recorte por tanque so se aplica aos KPIs de tanque -- fuel_cost (FuelSupply) fica indisponivel', () => {
+      const result = buildKpiResult(findKpiDefinition('fuel_cost')!, s, null, { tank: true });
+      expect(result.status).toBe('UNAVAILABLE');
+      expect(result.unavailableReason).toMatch(/tanque/);
+      const tankResult = buildKpiResult(findKpiDefinition('fuel_tank_stock')!, s, null, { tank: true });
+      expect(tankResult.status).toBe('AVAILABLE');
+    });
   });
 });
 

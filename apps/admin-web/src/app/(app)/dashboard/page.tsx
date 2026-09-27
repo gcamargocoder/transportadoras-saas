@@ -22,6 +22,7 @@ import { CostsTab } from '../../../features/intelligence/costs-tab';
 import { DeadlinesTab } from '../../../features/intelligence/deadlines-tab';
 import { FinancialTab } from '../../../features/intelligence/financial-tab';
 import { FleetTab } from '../../../features/intelligence/fleet-tab';
+import { FuelTab } from '../../../features/intelligence/fuel-tab';
 import { KpiDetailDrawer } from '../../../features/intelligence/kpi-detail-drawer';
 import { indexKpis } from '../../../features/intelligence/kpi-format';
 import { OccurrencesTab } from '../../../features/intelligence/occurrences-tab';
@@ -43,7 +44,7 @@ import { ApiError } from '../../../lib/api/errors';
 import { DASHBOARD_ROLES, hasRole } from '../../../lib/auth/roles';
 import type { KpiGranularity, KpiResultEntity } from '../../../types/entities';
 
-const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial', 'fleet', 'costs', 'deadlines', 'comparatives', 'occurrences', 'reports', 'alerts'];
+const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial', 'fleet', 'costs', 'fuel', 'deadlines', 'comparatives', 'occurrences', 'reports', 'alerts'];
 const GRANULARITIES: KpiGranularity[] = ['day', 'week', 'month'];
 const timeFormatter = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
@@ -242,6 +243,15 @@ function IntelligenceCenter(): JSX.Element {
         )}
         {tab === 'costs' && summary.data && range && (
           <CostsTab
+            kpis={kpis}
+            range={range}
+            granularity={granularity}
+            onGranularityChange={(value) => updateParams({ agrupar: value })}
+            onExplain={setExplained}
+          />
+        )}
+        {tab === 'fuel' && summary.data && range && (
+          <FuelTab
             kpis={kpis}
             range={range}
             granularity={granularity}

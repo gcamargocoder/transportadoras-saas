@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { TripOccurrenceSeverity } from '@prisma/client';
+import { FuelTankMovementType, Prisma, TripOccurrenceSeverity } from '@prisma/client';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { FleetIdleTimeService } from '../../fleet-operations/services/fleet-idle-time.service';
@@ -13,6 +13,7 @@ import {
   BiScope,
   buildCompletedDeliveryWhere,
   buildCompletedTripWhere,
+  buildFuelTankMovementWhere,
   buildOccurrenceWhere,
   isDeliveredOnTime,
 } from '../utils/bi-where.util';
@@ -613,5 +614,139 @@ export class BiKpiBreakdownService {
       .sort(byValueDesc);
     const snapshot: Partial<BiPeriodSnapshot> = { costs };
     return { total: this.catalogTotal('cost_per_km', snapshot, period), items: items.slice(0, limit), others: null };
+  }
+
+  // --------------------------------------------------------------------------
+  // Fase 6 -- recorte do ledger de tanque proprio (fuel_*), distinto do
+  // custo de combustivel do veiculo (fuel_cost, FuelSupply) acima.
+  // --------------------------------------------------------------------------
+
+  private async listScopedTanks(tenantId: string, scope: BiScope): Promise<{ tankId: string; name: string }[]> {
+    const tanks = await this.prisma.fuelTank.findMany({
+      where: { tenantId, ...compact({ id: scope.tankId }) },
+      select: { id: true, name: true },
+    });
+    return tanks.map((t) => ({ tankId: t.id, name: t.name }));
+  }
+
+  // Nota: reaproveita summableVehicleBreakdown/RawVehicleRow (o `vehicleId`
+  // do row generico guarda o id do TANQUE aqui) -- ambos operam so por
+  // chave+rotulo+valor, sem nada especifico de veiculo.
+  private async fuelFlowByTank(
+    tenantId: string,
+    scope: BiScope,
+    period: KpiPeriod,
+    limit: number,
+    type: FuelTankMovementType,
+    valueOf: (g: { _sum: { quantityLiters: Prisma.Decimal | null; totalAmount: Prisma.Decimal | null } }) => number,
+  ): Promise<BreakdownResult> {
+    const [tanks, groups] = await Promise.all([
+      this.listScopedTanks(tenantId, scope),
+      this.prisma.fuelTankMovement.groupBy({
+        by: ['tankId'],
+        where: buildFuelTankMovementWhere(tenantId, scope, period, type),
+        _sum: { quantityLiters: true, totalAmount: true },
+        _count: true,
+      }),
+    ]);
+    const byTank = new Map(groups.map((g) => [g.tankId, { value: valueOf(g), count: g._count }]));
+    const raw: RawVehicleRow[] = tanks.map((t) => {
+      const row = byTank.get(t.tankId);
+      return { vehicleId: t.tankId, label: t.name, value: row?.value ?? 0, recordCount: row?.count ?? 0, unavailableReason: null };
+    });
+    return summableVehicleBreakdown(raw, limit);
+  }
+
+  async fuelReceivedLitersByTank(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    return this.fuelFlowByTank(tenantId, scope, period, limit, FuelTankMovementType.RECEIPT, (g) => toNumberOrNull(g._sum.quantityLiters) ?? 0);
+  }
+
+  async fuelReceivedCostByTank(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    return this.fuelFlowByTank(tenantId, scope, period, limit, FuelTankMovementType.RECEIPT, (g) => toNumberOrNull(g._sum.totalAmount) ?? 0);
+  }
+
+  async fuelInternalLitersByTank(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    return this.fuelFlowByTank(tenantId, scope, period, limit, FuelTankMovementType.INTERNAL_FUELING, (g) => toNumberOrNull(g._sum.quantityLiters) ?? 0);
+  }
+
+  async fuelAdjustmentLitersByTank(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    return this.fuelFlowByTank(tenantId, scope, period, limit, FuelTankMovementType.ADJUSTMENT, (g) => toNumberOrNull(g._sum.quantityLiters) ?? 0);
+  }
+
+  // fuel_tank_stock: ponto no tempo (nao um SUM de movimentacoes do
+  // periodo) -- para cada tanque, a ultima FuelTankMovement.newBalanceLiters
+  // com effectiveDate <= fim do periodo. Somar entre TANQUES num mesmo
+  // instante e valido (estoque total da empresa); o que nunca se soma e
+  // entre PERIODOS (ver limitations de fuel_tank_stock no catalogo).
+  async fuelTankStockByTank(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const tanks = await this.listScopedTanks(tenantId, scope);
+    const balances = await Promise.all(
+      tanks.map((t) =>
+        this.prisma.fuelTankMovement.findFirst({
+          where: { tenantId, tankId: t.tankId, effectiveDate: { lte: period.end } },
+          orderBy: [{ effectiveDate: 'desc' }, { createdAt: 'desc' }],
+          select: { newBalanceLiters: true },
+        }),
+      ),
+    );
+    const raw: RawVehicleRow[] = tanks.map((t, i) => {
+      const balance = balances[i];
+      const value = balance ? (toNumberOrNull(balance.newBalanceLiters) ?? 0) : null;
+      return {
+        vehicleId: t.tankId,
+        label: t.name,
+        value,
+        recordCount: value !== null ? 1 : 0,
+        unavailableReason: value === null ? 'Tanque sem movimentacao registrada ate o fim do periodo.' : null,
+      };
+    });
+    return summableVehicleBreakdown(raw, limit);
+  }
+
+  // fuel_internal_liters x veiculo -- abastecimento interno sempre gravado
+  // com vehicleId (Fase 3); "Sem veiculo"/"Veiculo removido" tratados pelo
+  // mesmo padrao das demais quebras por veiculo, por seguranca de dado.
+  async fuelInternalLitersByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const [vehicles, groups] = await Promise.all([
+      this.listScopedVehicles(tenantId, scope),
+      this.prisma.fuelTankMovement.groupBy({
+        by: ['vehicleId'],
+        where: {
+          ...buildFuelTankMovementWhere(tenantId, scope, period, FuelTankMovementType.INTERNAL_FUELING),
+          ...compact({ vehicleId: scope.vehicleId, vehicle: scope.fleetId ? { fleetId: scope.fleetId } : undefined }),
+        },
+        _sum: { quantityLiters: true },
+        _count: true,
+      }),
+    ]);
+    const byVehicle = new Map<string, { value: number; count: number }>();
+    let unassignedLiters = 0;
+    let unassignedCount = 0;
+    for (const g of groups) {
+      if (g.vehicleId === null) {
+        unassignedLiters += toNumberOrNull(g._sum.quantityLiters) ?? 0;
+        unassignedCount += g._count;
+        continue;
+      }
+      byVehicle.set(g.vehicleId, { value: toNumberOrNull(g._sum.quantityLiters) ?? 0, count: g._count });
+    }
+    const raw: RawVehicleRow[] = vehicles.map((v) => {
+      const row = byVehicle.get(v.vehicleId);
+      byVehicle.delete(v.vehicleId);
+      return { vehicleId: v.vehicleId, label: v.plate, value: row?.value ?? 0, recordCount: row?.count ?? 0, unavailableReason: null };
+    });
+    if (byVehicle.size > 0) {
+      let orphanLiters = 0;
+      let orphanCount = 0;
+      for (const row of byVehicle.values()) {
+        orphanLiters += row.value;
+        orphanCount += row.count;
+      }
+      raw.push({ vehicleId: null, label: REMOVED_VEHICLE_LABEL, value: orphanLiters, recordCount: orphanCount, unavailableReason: null });
+    }
+    if (unassignedCount > 0) {
+      raw.push({ vehicleId: null, label: UNASSIGNED_VEHICLE_LABEL, value: unassignedLiters, recordCount: unassignedCount, unavailableReason: null });
+    }
+    return summableVehicleBreakdown(raw, limit);
   }
 }
