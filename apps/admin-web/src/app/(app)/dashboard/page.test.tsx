@@ -181,6 +181,10 @@ function card(name: string): HTMLElement {
 describe('Central de Inteligencia (/dashboard)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
+    getKpiBreakdownMock.mockReset();
+    getKpiBreakdownMock.mockResolvedValue({ kpiId: 'x', dimension: 'vehicle', scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null }, period: PERIOD, total: null, items: [], others: null });
     getDashboardMock.mockReset();
     replaceMock.mockReset();
     searchParams = new URLSearchParams();
@@ -197,6 +201,42 @@ describe('Central de Inteligencia (/dashboard)', () => {
     expect(within(card('Receita')).getByText(/452\.300,00/)).toBeInTheDocument();
     expect(within(card('Entregas no prazo')).getByText('91,2')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Visão geral' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('painel executivo: "O que mudou" mostra insights clicaveis (mesmo motor do BI 9)', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Viagens concluidas' });
+    const insight = await screen.findByText(/Viagens concluidas aumentou/);
+    await userEvent.click(insight);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('formula de trips_completed')).toBeInTheDocument();
+  });
+
+  it('painel executivo: "O que merece atenção" mostra o alerta e "Ver todos" navega para a aba Alertas', async () => {
+    getAlertsMock.mockResolvedValue(alertsResponse([biAlert()]));
+    renderPage();
+    await screen.findByText('Custo por km acima do limite');
+    await userEvent.click(screen.getByRole('button', { name: 'Ver todos' }));
+    expect(replaceMock).toHaveBeenCalledWith('/dashboard?aba=alerts', { scroll: false });
+  });
+
+  it('painel executivo: sem alertas mostra estado positivo, nunca uma lista vazia sem explicação', async () => {
+    renderPage();
+    expect(await screen.findByText('Nenhum alerta no período')).toBeInTheDocument();
+  });
+
+  it('onde investigar: clicar num card de area navega para a aba correspondente, preservando a URL', async () => {
+    renderPage();
+    await screen.findByRole('article', { name: 'Viagens concluidas' });
+    await userEvent.click(screen.getByRole('button', { name: /^Frota/ }));
+    expect(replaceMock).toHaveBeenCalledWith('/dashboard?aba=fleet', { scroll: false });
+  });
+
+  it('contador de alertas aparece na aba "Alertas" da navegação quando ha alertas ativos', async () => {
+    getAlertsMock.mockResolvedValue(alertsResponse([biAlert(), biAlert({ id: 'x2', ruleId: 'revenue_relevant_change' })]));
+    renderPage();
+    await screen.findByRole('article', { name: 'Viagens concluidas' });
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Alertas/ })).toHaveTextContent('2'));
   });
 
   it('usa somente a API /bi (uma chamada) e nunca o endpoint antigo com indicadores divergentes', async () => {
@@ -336,6 +376,8 @@ describe('Central de Inteligencia (/dashboard)', () => {
 describe('cache compartilhado entre abas', () => {
   it('Visao geral e Operacao reaproveitam a mesma consulta', async () => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSummaryMock.mockResolvedValue(buildSummary());
     useAuthMock.mockReturnValue({ user: { role: UserRole.MANAGER } });
     searchParams = new URLSearchParams();
@@ -455,6 +497,8 @@ function buildBreakdown(): KpiBreakdownEntity {
 describe('Central -- aba Financeiro (BI 3)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     getDashboardMock.mockReset();
@@ -673,6 +717,8 @@ function fleetVehiclesList() {
 describe('Central -- aba Frota (BI 4)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     listVehiclesMock.mockReset();
@@ -857,6 +903,8 @@ describe('Central -- aba Frota (BI 4)', () => {
   it('regressao: aba Operacao nao mostra mais o bloco de frota', async () => {
     searchParams = new URLSearchParams('aba=operation');
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSummaryMock.mockResolvedValue(buildSummary());
     renderPage();
     await screen.findByText('Pontualidade');
@@ -919,6 +967,8 @@ function scopedCostSummary(): KpiSummaryEntity {
 describe('Central -- aba Custos (BI 5)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     listVehiclesMock.mockReset();
@@ -1025,6 +1075,8 @@ describe('Central -- aba Custos (BI 5)', () => {
   it('regressao: aba Financeiro continua com os 6 KPIs oficiais apos a extracao de CostCompositionList', async () => {
     searchParams = new URLSearchParams('aba=financial');
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSummaryMock.mockResolvedValue(financialSummary());
     renderPage();
     for (const name of ['Receita', 'Despesas operacionais', 'Resultado operacional', 'Margem operacional', 'Custo por km', 'Receita por km']) {
@@ -1085,6 +1137,8 @@ function deadlinesSeries(): KpiSeriesResponseEntity {
 describe('Central -- aba Prazos (BI 6)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     listVehiclesMock.mockReset();
@@ -1167,6 +1221,8 @@ describe('Central -- aba Prazos (BI 6)', () => {
   it('regressao: aba Operacao continua mostrando o painel de pontualidade apos a extracao para on-time-panel', async () => {
     searchParams = new URLSearchParams('aba=operation');
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSummaryMock.mockResolvedValue(buildSummary());
     renderPage();
     expect(await screen.findByText('Pontualidade')).toBeInTheDocument();
@@ -1215,6 +1271,8 @@ function comparativesSeries(): KpiSeriesResponseEntity {
 describe('Central -- aba Comparativos (BI 7)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     listVehiclesMock.mockReset();
@@ -1368,6 +1426,8 @@ function occurrenceEvidencePage(pageSize: number) {
 describe('Central -- aba Ocorrências (BI 8)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     getKpiEvidenceMock.mockReset();
@@ -1466,6 +1526,8 @@ function reportBreakdown(kpiId: string, dimension: string): KpiBreakdownEntity {
 describe('Central -- aba Relatórios (BI 9)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getKpiSeriesMock.mockReset();
     getKpiBreakdownMock.mockReset();
     listVehiclesMock.mockReset();
@@ -1586,6 +1648,8 @@ function alertsResponse(items: ReturnType<typeof biAlert>[]) {
 describe('Central -- aba Alertas (BI 10)', () => {
   beforeEach(() => {
     getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
     getAlertsMock.mockReset();
     listVehiclesMock.mockReset();
     listFleetsMock.mockReset();

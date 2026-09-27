@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { AlertOctagon, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Badge } from '../../components/ui/badge';
 import { Card } from '../../components/ui/card';
@@ -12,21 +12,12 @@ import { Skeleton } from '../../components/ui/skeleton';
 import { getAlerts } from '../../lib/api/bi.api';
 import { listFleets } from '../../lib/api/fleet.api';
 import type { BiAlertEntity, BiAlertSeverity, FleetEntity, KpiGranularity, KpiComparisonMode, KpiResultEntity, VehicleEntity } from '../../types/entities';
+import { ALERT_SEVERITY_BORDER, ALERT_SEVERITY_ICON, ALERT_SEVERITY_OPTIONS, ALERT_SEVERITY_RANK, ALERT_SEVERITY_TONE, alertSeverityLabel } from './alert-severity';
 import { buildAlertMessage } from './alert-format';
 import { cn } from '../../utils/cn';
 import { ComparisonModePicker, resolveCompareRange } from './comparison-mode-picker';
 import { FleetVehiclePicker } from './fleet-vehicle-picker';
 import type { PeriodRange } from './period';
-
-const SEVERITY_OPTIONS: { value: BiAlertSeverity; label: string }[] = [
-  { value: 'CRITICAL', label: 'Crítica' },
-  { value: 'WARNING', label: 'Atenção' },
-  { value: 'INFO', label: 'Informativa' },
-];
-const SEVERITY_TONE: Record<BiAlertSeverity, 'danger' | 'warning' | 'info'> = { CRITICAL: 'danger', WARNING: 'warning', INFO: 'info' };
-const SEVERITY_ICON = { CRITICAL: AlertOctagon, WARNING: AlertTriangle, INFO: Info };
-const SEVERITY_RANK: Record<BiAlertSeverity, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
-const SEVERITY_BORDER: Record<BiAlertSeverity, string> = { CRITICAL: 'border-l-danger-500', WARNING: 'border-l-warning-500', INFO: 'border-l-info-500' };
 
 function Block({ title, description, children }: { title: string; description: string; children: ReactNode }): JSX.Element {
   return (
@@ -45,15 +36,15 @@ function Block({ title, description, children }: { title: string; description: s
 // icone proprio. "Investigar" reaproveita onExplain/KpiDetailDrawer (mesmo
 // "Como e calculado" + evidencias de todas as outras abas).
 function AlertRow({ alert, onExplain }: { alert: BiAlertEntity; onExplain: (kpi: KpiResultEntity) => void }): JSX.Element {
-  const Icon = SEVERITY_ICON[alert.severity];
-  const severityLabel = SEVERITY_OPTIONS.find((option) => option.value === alert.severity)?.label ?? alert.severity;
+  const Icon = ALERT_SEVERITY_ICON[alert.severity];
+  const severityLabel = alertSeverityLabel(alert.severity);
   return (
-    <li className={cn('flex flex-col gap-2 border-l-4 bg-white px-4 py-3 sm:flex-row sm:items-start sm:justify-between', SEVERITY_BORDER[alert.severity])}>
+    <li className={cn('flex flex-col gap-2 border-l-4 bg-white px-4 py-3 sm:flex-row sm:items-start sm:justify-between', ALERT_SEVERITY_BORDER[alert.severity])}>
       <div className="flex flex-1 items-start gap-3">
         <Icon size={18} className="mt-0.5 shrink-0 text-ink-muted" aria-hidden />
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={SEVERITY_TONE[alert.severity]}>{severityLabel}</Badge>
+            <Badge tone={ALERT_SEVERITY_TONE[alert.severity]}>{severityLabel}</Badge>
             <span className="text-sm font-semibold text-ink">{alert.name}</span>
           </div>
           <p className="mt-1 text-sm text-ink-muted">{buildAlertMessage(alert)}</p>
@@ -114,7 +105,7 @@ export function AlertsTab({
     staleTime: 60_000,
   });
 
-  const items = [...(alerts.data?.items ?? [])].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  const items = [...(alerts.data?.items ?? [])].sort((a, b) => ALERT_SEVERITY_RANK[a.severity] - ALERT_SEVERITY_RANK[b.severity]);
   const counts: Record<BiAlertSeverity, number> = { CRITICAL: 0, WARNING: 0, INFO: 0 };
   for (const item of items) counts[item.severity] += 1;
 
@@ -162,7 +153,7 @@ export function AlertsTab({
               disabled={Boolean(vehicle)}
             />
             <div role="group" aria-label="Filtrar por severidade" className="flex gap-1">
-              {SEVERITY_OPTIONS.map((option) => (
+              {ALERT_SEVERITY_OPTIONS.map((option) => (
                 <button
                   key={option.value}
                   type="button"
@@ -203,10 +194,10 @@ export function AlertsTab({
         {!customIncomplete && alerts.data && items.length > 0 && (
           <>
             <div className="flex flex-wrap gap-2">
-              {SEVERITY_OPTIONS.map(
+              {ALERT_SEVERITY_OPTIONS.map(
                 (option) =>
                   counts[option.value] > 0 && (
-                    <Badge key={option.value} tone={SEVERITY_TONE[option.value]}>
+                    <Badge key={option.value} tone={ALERT_SEVERITY_TONE[option.value]}>
                       {counts[option.value]} {option.label.toLowerCase()}
                     </Badge>
                   ),

@@ -18,10 +18,11 @@ import { FleetVehiclePicker } from './fleet-vehicle-picker';
 import { KPI_DRILL_DOWN } from './intelligence-config';
 import { KpiCard, KpiTrend } from './kpi-card';
 import { formatKpiValue, indexKpis } from './kpi-format';
+import { InsightList } from './insight-list';
 import { OnTimePanel } from './on-time-panel';
 import { formatPeriodLabel, type PeriodRange } from './period';
 import { RankedValueList, sortRankedItems } from './ranked-value-list';
-import { buildInsights, type KpiInsight } from './report-insights';
+import { buildInsights } from './report-insights';
 import { GRANULARITY_LABELS, isGranularityAllowed, toSeriesRows } from './series-format';
 
 const EXECUTIVE_IDS = [
@@ -100,31 +101,6 @@ function StatRow({ kpi }: { kpi: KpiResultEntity | undefined }): JSX.Element | n
         <KpiTrend kpi={kpi} />
       </div>
     </div>
-  );
-}
-
-const TONE_DOT: Record<KpiInsight['tone'], string> = {
-  positive: 'bg-success-500',
-  negative: 'bg-danger-500',
-  neutral: 'bg-info-500',
-  unavailable: 'bg-ink-subtle',
-};
-
-function InsightList({ insights, onSelect }: { insights: KpiInsight[]; kpis: Map<string, KpiResultEntity>; onSelect: (kpiId: string) => void }): JSX.Element {
-  if (insights.length === 0) {
-    return <EmptyState title="Sem base de comparação suficiente" description="Nenhum indicador principal tem período anterior válido para comparar." />;
-  }
-  return (
-    <ul className="flex flex-col gap-3">
-      {insights.map((insight) => (
-        <li key={insight.kpiId}>
-          <button type="button" onClick={() => onSelect(insight.kpiId)} className="group flex w-full items-start gap-2.5 text-left text-sm">
-            <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${TONE_DOT[insight.tone]}`} aria-hidden />
-            <span className="text-ink group-hover:underline">{insight.text}</span>
-          </button>
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -301,7 +277,7 @@ export function ReportsTab({
           </Section>
 
           <Section title="O que mudou" description="Leitura das comparações oficiais — nunca assume que aumento é sempre positivo ou queda sempre negativa.">
-            <InsightList insights={insights} kpis={activeKpis} onSelect={(id) => { const kpi = activeKpis.get(id); if (kpi) onExplain(kpi); }} />
+            <InsightList insights={insights} onSelect={(id) => { const kpi = activeKpis.get(id); if (kpi) onExplain(kpi); }} />
           </Section>
 
           <Section title="Operação" description="Viagens, entregas, pontualidade, utilização da frota e ocorrências do período.">

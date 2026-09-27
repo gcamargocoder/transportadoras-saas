@@ -38,7 +38,7 @@ import {
 import { PeriodSelector } from '../../../features/intelligence/period-selector';
 import { UpcomingTab } from '../../../features/intelligence/upcoming-tab';
 import { useAuth } from '../../../hooks/use-auth';
-import { getKpiSummary } from '../../../lib/api/bi.api';
+import { getAlerts, getKpiSummary } from '../../../lib/api/bi.api';
 import { ApiError } from '../../../lib/api/errors';
 import { DASHBOARD_ROLES, hasRole } from '../../../lib/auth/roles';
 import type { KpiGranularity, KpiResultEntity } from '../../../types/entities';
@@ -115,6 +115,20 @@ function IntelligenceCenter(): JSX.Element {
   const kpis = useMemo(() => indexKpis(summary.data?.kpis), [summary.data]);
   const activeTab = INTELLIGENCE_TAB_CONFIG.find((config) => config.value === tab);
 
+  // BI 11 -- alertas no modo padrao (periodo atual, sem filtro): alimenta o
+  // contador na aba "Alertas" e o painel "O que merece atencao" da Visao
+  // geral. Mesma queryKey/params que AlertsTab usa antes de qualquer filtro
+  // local -- o React Query reaproveita o cache, nunca duplica a chamada.
+  const alerts = useQuery({
+    queryKey: ['bi', 'alerts', range, 'PREVIOUS_PERIOD', null, undefined, '', ''],
+    queryFn: ({ signal }) => {
+      if (!range) throw new Error('Período inválido.');
+      return getAlerts({ startDate: range.startDate, endDate: range.endDate, comparison: 'PREVIOUS_PERIOD' }, signal);
+    },
+    enabled: allowed && range !== null,
+    staleTime: 60_000,
+  });
+
   if (!allowed) {
     return (
       <div>
@@ -152,7 +166,11 @@ function IntelligenceCenter(): JSX.Element {
       />
 
       <Tabs
-        tabs={INTELLIGENCE_TAB_CONFIG.map((config) => ({ value: config.value, label: config.label }))}
+        tabs={INTELLIGENCE_TAB_CONFIG.map((config) => ({
+          value: config.value,
+          label: config.label,
+          ...(config.value === 'alerts' && alerts.data && alerts.data.items.length > 0 ? { count: alerts.data.items.length } : {}),
+        }))}
         active={tab}
         onChange={(value) => updateParams({ aba: value === DEFAULT_INTELLIGENCE_TAB ? null : value })}
       />
@@ -191,7 +209,18 @@ function IntelligenceCenter(): JSX.Element {
           </div>
         )}
 
-        {tab === 'overview' && summary.data && <OverviewTab kpis={kpis} onExplain={setExplained} />}
+        {tab === 'overview' && summary.data && range && (
+          <OverviewTab
+            kpis={kpis}
+            range={range}
+            alerts={alerts.data}
+            alertsLoading={alerts.isLoading}
+            alertsError={alerts.isError}
+            onRetryAlerts={() => alerts.refetch()}
+            onExplain={setExplained}
+            onNavigate={(value) => updateParams({ aba: value === DEFAULT_INTELLIGENCE_TAB ? null : value })}
+          />
+        )}
         {tab === 'operation' && summary.data && <OperationTab kpis={kpis} onExplain={setExplained} />}
         {tab === 'financial' && summary.data && range && (
           <FinancialTab
