@@ -98,6 +98,8 @@ function buildMovement(overrides: Partial<FuelTankMovementEntity> = {}): FuelTan
   };
 }
 
+const emptyPage = { items: [], meta: { total: 0, page: 1, pageSize: 20, totalPages: 0 } };
+
 describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
   beforeEach(() => {
     getFuelTankMock.mockReset();
@@ -111,18 +113,21 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     pushMock.mockReset();
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN' } });
     getFuelTankMovementsMock.mockResolvedValue({ items: [buildMovement()], meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 } });
-    getFuelTankInventoryChecksMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20, totalPages: 0 } });
+    getFuelTankInventoryChecksMock.mockResolvedValue(emptyPage);
     listFuelStationsMock.mockResolvedValue({ items: [{ id: 'station-1', name: 'Distribuidora Raizen' }], meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 } });
   });
 
-  it('mostra o saldo, capacidade e a movimentacao de saldo inicial', async () => {
+  it('mostra o estoque e a capacidade no hero, e a movimentacao de saldo inicial na aba Movimentações', async () => {
     getFuelTankMock.mockResolvedValue(buildTank());
     renderPage();
 
     expect(await screen.findByRole('heading', { name: 'Tanque matriz' })).toBeInTheDocument();
-    expect(screen.getAllByText('8.000 L').length).toBeGreaterThan(0); // estoque atual e inicial
-    expect(screen.getByText('15.000 L')).toBeInTheDocument(); // capacidade
-    expect(within(screen.getByRole('table')).getByText('Saldo inicial')).toBeInTheDocument();
+    expect(screen.getByText(/^8\.000$/)).toBeInTheDocument(); // estoque atual (hero)
+    expect(screen.getByText(/15\.000 L de capacidade/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Movimentações' }));
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('Saldo inicial')).toBeInTheDocument();
   });
 
   it('mostra veiculo/motorista/viagem no historico de um abastecimento interno (Fase 3)', async () => {
@@ -147,6 +152,7 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     });
     renderPage();
 
+    fireEvent.click(await screen.findByRole('tab', { name: 'Movimentações' }));
     const table = await screen.findByRole('table');
     expect(within(table).getByText('Abastecimento interno')).toBeInTheDocument();
     expect(within(table).getByText(/ABC1D23/)).toBeInTheDocument();
@@ -154,11 +160,24 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     expect(within(table).getByText(/Origem → Destino/)).toBeInTheDocument();
   });
 
-  it('mostra badge de estoque baixo quando aplicavel', async () => {
-    getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 500, occupancyPercent: 3.3, isLowStock: true }));
-    renderPage();
+  describe('severidade do hero (Fase 5): normal/atenção/crítico', () => {
+    it('Normal quando o estoque nao esta baixo', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 8000, isLowStock: false }));
+      renderPage();
+      expect(await screen.findByText('Normal')).toBeInTheDocument();
+    });
 
-    expect(await screen.findByText('Estoque baixo')).toBeInTheDocument();
+    it('Atenção quando esta baixo mas acima da metade do minimo', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 1500, minStockLiters: 2000, isLowStock: true }));
+      renderPage();
+      expect(await screen.findByText('Atenção')).toBeInTheDocument();
+    });
+
+    it('Crítico quando cai a metade do minimo configurado', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 500, minStockLiters: 2000, occupancyPercent: 3.3, isLowStock: true }));
+      renderPage();
+      expect(await screen.findByText('Crítico')).toBeInTheDocument();
+    });
   });
 
   it('ativa/desativa o tanque', async () => {
@@ -181,6 +200,100 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     expect(screen.queryByRole('button', { name: /Desativar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Editar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Receber diesel/i })).not.toBeInTheDocument();
+  });
+
+  it('mostra estado de erro com opção de tentar novamente', async () => {
+    getFuelTankMock.mockRejectedValue(new Error('falha de rede'));
+    renderPage();
+    expect(await screen.findByRole('button', { name: /Tentar novamente/i })).toBeInTheDocument();
+  });
+
+  describe('Visão geral (Fase 5): fluxo, indicadores e gráficos', () => {
+    it('sem movimentações: fluxo e gráficos mostram estado de ausência de dados, nunca zero artificial', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank());
+      getFuelTankMovementsMock.mockResolvedValue(emptyPage);
+      renderPage();
+
+      expect(await screen.findByText('Nenhuma entrada registrada.')).toBeInTheDocument();
+      expect(screen.getByText('Nenhum abastecimento interno registrado.')).toBeInTheDocument();
+      expect(screen.getByText('Nenhum ajuste registrado.')).toBeInTheDocument();
+      expect(screen.getByText('Sem movimentações suficientes')).toBeInTheDocument();
+      expect(screen.getByText('Sem entradas ou saídas suficientes')).toBeInTheDocument();
+      expect(screen.getByText('Sem preço suficiente')).toBeInTheDocument();
+      // Indicadores sem base -- "-", nunca "0" inventado.
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    });
+
+    it('com entrada e saída recentes: fluxo mostra os dois lados com os dados reais do ledger', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank());
+      getFuelTankMovementsMock.mockResolvedValue({
+        items: [
+          buildMovement({
+            id: 'mov-fueling',
+            type: 'INTERNAL_FUELING',
+            quantityLiters: 300,
+            vehiclePlate: 'ABC1D23',
+            driverName: 'José da Silva',
+            effectiveDate: '2026-09-05T10:00:00.000Z',
+          }),
+          buildMovement({
+            id: 'mov-receipt',
+            type: 'RECEIPT',
+            quantityLiters: 2000,
+            pricePerLiter: 5.5,
+            totalAmount: 11000,
+            effectiveDate: '2026-09-04T10:00:00.000Z',
+          }),
+        ],
+        meta: { total: 2, page: 1, pageSize: 100, totalPages: 1 },
+      });
+      renderPage();
+
+      expect(await screen.findByText('+2.000 L')).toBeInTheDocument();
+      expect(screen.getByText('-300 L')).toBeInTheDocument();
+      expect(screen.getByText(/ABC1D23/)).toBeInTheDocument();
+      expect(screen.getByText(/José da Silva/)).toBeInTheDocument();
+      // Indicadores agregados da janela recente (rotulo -> valor do StatCard).
+      expect(screen.getByText('Litros recebidos').closest('div')?.parentElement).toHaveTextContent('2.000 L');
+      expect(screen.getByText('Litros abastecidos').closest('div')?.parentElement).toHaveTextContent('300 L');
+    });
+  });
+
+  describe('Abastecimentos (Fase 5): tabela investigativa de INTERNAL_FUELING', () => {
+    it('mostra estado vazio quando nao ha abastecimento interno', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank());
+      getFuelTankMovementsMock.mockResolvedValue(emptyPage);
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('tab', { name: 'Abastecimentos' }));
+      expect(await screen.findByText('Nenhum abastecimento interno registrado')).toBeInTheDocument();
+    });
+
+    it('lista veiculo/motorista/viagem/litros do abastecimento interno', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank());
+      getFuelTankMovementsMock.mockResolvedValue({
+        items: [
+          buildMovement({
+            id: 'mov-internal',
+            type: 'INTERNAL_FUELING',
+            quantityLiters: 300,
+            newBalanceLiters: 7700,
+            vehiclePlate: 'ABC1D23',
+            driverName: 'José da Silva',
+            tripLabel: 'Origem → Destino',
+          }),
+        ],
+        meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('tab', { name: 'Abastecimentos' }));
+      const table = await screen.findByRole('table');
+      expect(within(table).getByText('ABC1D23')).toBeInTheDocument();
+      expect(within(table).getByText('José da Silva')).toBeInTheDocument();
+      expect(within(table).getByText('Origem → Destino')).toBeInTheDocument();
+      expect(within(table).getByText('300 L')).toBeInTheDocument();
+    });
   });
 
   describe('Receber diesel (RECEIPT, Fase 2)', () => {
@@ -359,8 +472,9 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
       });
       renderPage();
 
+      fireEvent.click(await screen.findByRole('tab', { name: 'Conferências' }));
       expect(await screen.findByText('Conferências de estoque')).toBeInTheDocument();
-      expect(screen.getAllByText(/Vazamento identificado\./).length).toBeGreaterThan(0);
+      expect((await screen.findAllByText(/Vazamento identificado\./)).length).toBeGreaterThan(0);
     });
   });
 });
