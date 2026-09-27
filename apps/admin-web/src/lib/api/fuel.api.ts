@@ -39,11 +39,19 @@ export function deleteFuelStation(id: string) {
 }
 
 // --- Fuel supplies (abastecimentos) ---
+
+// Fase 7 -- origem derivada de deviceEventId no backend (nunca uma coluna
+// propria): DRIVER_APP quando o registro veio do app do motorista, ADMIN
+// quando veio do administrativo.
+export type FuelSupplySource = 'DRIVER_APP' | 'ADMIN';
+
 export interface FindFuelSuppliesQuery extends PaginationParams {
   vehicleId?: string | undefined;
   driverId?: string | undefined;
   tripId?: string | undefined;
   fuelStationId?: string | undefined;
+  fuelTankId?: string | undefined;
+  source?: FuelSupplySource | undefined;
   fuelType?: FuelType | undefined;
   supplyDateFrom?: string | undefined;
   supplyDateTo?: string | undefined;
@@ -51,15 +59,21 @@ export interface FindFuelSuppliesQuery extends PaginationParams {
   sortOrder?: 'asc' | 'desc' | undefined;
 }
 
+// Fase 7 -- fuelTankId/fuelStationId sao mutuamente exclusivos: presente =
+// abastecimento INTERNO (baixa o tanque proprio na mesma transacao);
+// ausente = EXTERNO (posto/fornecedor, ou nem isso quando desconhecido).
+// pricePerLiter fica opcional -- obrigatorio (validado no backend) so
+// quando EXTERNO; interno nao tem compra associada a ELE.
 export interface CreateFuelSupplyPayload {
   tripId?: string | undefined;
   vehicleId?: string | undefined;
   driverId?: string | undefined;
-  fuelStationId: string;
+  fuelStationId?: string | undefined;
+  fuelTankId?: string | undefined;
   attachmentId?: string | undefined;
   fuelType: FuelType;
   liters: number;
-  pricePerLiter: number;
+  pricePerLiter?: number | undefined;
   odometerKm: number;
   supplyDate: string;
   paymentType?: PaymentType | undefined;

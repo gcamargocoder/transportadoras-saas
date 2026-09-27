@@ -44,6 +44,7 @@ export function toFuelSupplyEntity(supply: FuelSupplyWithRelations): FuelSupplyE
   entity.latitude = toNumberOrNull(supply.latitude);
   entity.longitude = toNumberOrNull(supply.longitude);
   entity.syncStatus = supply.syncStatus;
+  entity.source = supply.deviceEventId ? 'DRIVER_APP' : 'ADMIN';
   entity.createdBy = supply.createdBy;
   entity.creatorName = supply.creator.name;
   entity.updatedBy = supply.updatedBy;

@@ -66,6 +66,7 @@ function buildSupply(overrides: Partial<FuelSupplyEntity> = {}): FuelSupplyEntit
     paymentType: null,
     invoiceNumber: null,
     notes: null,
+    source: 'ADMIN',
     createdBy: 'u1',
     creatorName: 'Admin',
     updatedBy: null,

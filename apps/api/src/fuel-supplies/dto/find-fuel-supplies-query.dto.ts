@@ -9,11 +9,27 @@ export enum FuelSupplySortField {
   TOTAL_AMOUNT = 'totalAmount',
 }
 
+// Fase 7 -- origem derivada de deviceEventId (nunca uma coluna propria):
+// so o Driver App grava esse campo (idempotencia), entao presente = DRIVER_APP,
+// ausente = ADMIN. Reaproveita o campo existente em vez de criar um novo.
+export const FUEL_SUPPLY_SOURCES = ['DRIVER_APP', 'ADMIN'] as const;
+export type FuelSupplySource = (typeof FUEL_SUPPLY_SOURCES)[number];
+
 export class FindFuelSuppliesQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID('4')
   vehicleId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid', description: 'Gestao de Combustivel -- so abastecimentos internos deste tanque proprio.' })
+  @IsOptional()
+  @IsUUID('4')
+  fuelTankId?: string;
+
+  @ApiPropertyOptional({ enum: FUEL_SUPPLY_SOURCES, description: 'DRIVER_APP ou ADMIN (derivado de deviceEventId).' })
+  @IsOptional()
+  @IsIn(FUEL_SUPPLY_SOURCES)
+  source?: FuelSupplySource;
 
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()

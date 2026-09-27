@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { Button } from '../../components/ui/button';
@@ -18,19 +18,32 @@ import { FUEL_TYPE_LABELS, PAYMENT_TYPE_LABELS } from '../../lib/labels';
 import type { FuelSupplyEntity } from '../../types/entities';
 import type { PaymentType } from '../../types/enums';
 
-const schema = z.object({
-  fuelStationId: z.string().uuid('Selecione o posto.'),
-  fuelType: z.enum(['DIESEL_S10', 'DIESEL_S500', 'GASOLINA', 'ETANOL', 'ARLA32', 'OUTRO']),
-  liters: z.coerce.number().positive('Informe a quantidade de litros.'),
-  pricePerLiter: z.coerce.number().positive('Informe o preço por litro.'),
-  odometerKm: z.coerce.number().nonnegative('Informe o odômetro.'),
-  supplyDate: z.string().min(1, 'Informe a data do abastecimento.'),
-  paymentType: z.string().optional(),
-  invoiceNumber: z.string().optional(),
-  notes: z.string().optional(),
-});
+// Fase 7 -- fuelStationId so e obrigatorio para abastecimento EXTERNO
+// (supply.fuelTankId nulo); interno mostra o tanque como informativo, nunca
+// como campo editavel (fuelTankId e estrutural/imutavel -- ver
+// UpdateFuelSupplyDto no backend), e liters fica desabilitado (o tanque ja
+// foi debitado com a quantidade original -- ver FuelSuppliesService.update).
+function buildSchema(isInternal: boolean) {
+  return z
+    .object({
+      fuelStationId: z.string().optional(),
+      fuelType: z.enum(['DIESEL_S10', 'DIESEL_S500', 'GASOLINA', 'ETANOL', 'ARLA32', 'OUTRO']),
+      liters: z.coerce.number().positive('Informe a quantidade de litros.'),
+      pricePerLiter: z.coerce.number().nonnegative('Informe o preço por litro.'),
+      odometerKm: z.coerce.number().nonnegative('Informe o odômetro.'),
+      supplyDate: z.string().min(1, 'Informe a data do abastecimento.'),
+      paymentType: z.string().optional(),
+      invoiceNumber: z.string().optional(),
+      notes: z.string().optional(),
+    })
+    .superRefine((values, ctx) => {
+      if (!isInternal && !values.fuelStationId) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fuelStationId'], message: 'Selecione o posto.' });
+      }
+    });
+}
 
-type FormValues = z.infer<typeof schema>;
+type FormValues = z.infer<ReturnType<typeof buildSchema>>;
 
 function toDatetimeLocal(iso: string): string {
   const date = new Date(iso);
@@ -55,6 +68,8 @@ export function UpdateFuelSupplyModal({
 }): JSX.Element {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const isInternal = Boolean(supply.fuelTankId);
+  const schema = useMemo(() => buildSchema(isInternal), [isInternal]);
 
   const {
     register,
@@ -67,7 +82,7 @@ export function UpdateFuelSupplyModal({
   useEffect(() => {
     if (open) {
       reset({
-        fuelStationId: supply.fuelStationId,
+        fuelStationId: supply.fuelStationId ?? undefined,
         fuelType: supply.fuelType,
         liters: supply.liters,
         pricePerLiter: supply.pricePerLiter,
@@ -84,6 +99,12 @@ export function UpdateFuelSupplyModal({
     mutationFn: (values: FormValues) =>
       updateFuelSupply(supply.id, {
         ...values,
+        // Fase 7 -- interno nunca envia fuelStationId (as duas origens sao
+        // mutuamente exclusivas). liters permanece o mesmo valor original
+        // (campo desabilitado no formulario quando interno -- ver JSX
+        // abaixo), entao a checagem de igualdade do backend nunca acusa
+        // alteracao (FuelSuppliesService.update nunca quebra o ledger).
+        fuelStationId: isInternal ? undefined : values.fuelStationId,
         supplyDate: new Date(values.supplyDate).toISOString(),
         paymentType: values.paymentType ? (values.paymentType as PaymentType) : undefined,
       }),
@@ -115,30 +136,36 @@ export function UpdateFuelSupplyModal({
       }
     >
       <form className="grid grid-cols-1 gap-4 sm:grid-cols-2" onSubmit={(e) => e.preventDefault()}>
-        <FormField
-          label="Posto"
-          htmlFor="fuelStationId"
-          required
-          error={errors.fuelStationId?.message}
-          className="sm:col-span-2"
-        >
-          <Controller
-            control={control}
-            name="fuelStationId"
-            render={({ field }) => (
-              <EntitySelect
-                id="fuelStationId"
-                queryKey={['fuel-stations', 'select']}
-                queryFn={() => listFuelStations({ pageSize: 100 })}
-                getOptionValue={(s) => s.id}
-                getOptionLabel={(s) => s.name}
-                value={field.value ?? ''}
-                onChange={field.onChange}
-                invalid={Boolean(errors.fuelStationId)}
-              />
-            )}
-          />
-        </FormField>
+        {isInternal ? (
+          <FormField label="Origem" htmlFor="fuelTankName" className="sm:col-span-2" hint="Interno -- tanque de origem, imutável após o registro.">
+            <Input id="fuelTankName" value={`Tanque: ${supply.fuelTankName ?? supply.fuelTankId}`} disabled readOnly />
+          </FormField>
+        ) : (
+          <FormField
+            label="Posto"
+            htmlFor="fuelStationId"
+            required
+            error={errors.fuelStationId?.message}
+            className="sm:col-span-2"
+          >
+            <Controller
+              control={control}
+              name="fuelStationId"
+              render={({ field }) => (
+                <EntitySelect
+                  id="fuelStationId"
+                  queryKey={['fuel-stations', 'select']}
+                  queryFn={() => listFuelStations({ pageSize: 100 })}
+                  getOptionValue={(s) => s.id}
+                  getOptionLabel={(s) => s.name}
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  invalid={Boolean(errors.fuelStationId)}
+                />
+              )}
+            />
+          </FormField>
+        )}
 
         <FormField label="Combustível" htmlFor="fuelType" required>
           <Select id="fuelType" {...register('fuelType')}>
@@ -160,8 +187,14 @@ export function UpdateFuelSupplyModal({
           </Select>
         </FormField>
 
-        <FormField label="Litros" htmlFor="liters" required error={errors.liters?.message}>
-          <Input id="liters" type="number" step="0.001" invalid={Boolean(errors.liters)} {...register('liters')} />
+        <FormField
+          label="Litros"
+          htmlFor="liters"
+          required
+          error={errors.liters?.message}
+          hint={isInternal ? 'Abastecimento interno: não é possível alterar os litros (o tanque já foi debitado). Cancele e registre novamente.' : undefined}
+        >
+          <Input id="liters" type="number" step="0.001" invalid={Boolean(errors.liters)} disabled={isInternal} {...register('liters')} />
         </FormField>
         <FormField label="Preço por litro (R$)" htmlFor="pricePerLiter" required error={errors.pricePerLiter?.message}>
           <Input

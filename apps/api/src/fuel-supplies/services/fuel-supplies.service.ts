@@ -123,39 +123,82 @@ export class FuelSuppliesService {
     }
 
     const vehicle = await this.assertVehicleExists(tenantId, vehicleId);
-    await this.assertFuelStationExists(tenantId, dto.fuelStationId);
+
+    // Fase 7 -- fuelTankId (interno) e fuelStationId (externo) sao mutuamente
+    // exclusivos (mesmo principio ja documentado em FuelTankMovement: nunca
+    // os dois juntos). pricePerLiter so e exigido quando EXTERNO -- interno
+    // nao tem compra associada a ELE (custo ja pago no RECEIPT), mesma regra
+    // do Driver App (createFromDriverApp, Fase 3).
+    if (dto.fuelTankId && dto.fuelStationId) {
+      throw new BadRequestException(
+        'Informe apenas um: fuelTankId (abastecimento interno) ou fuelStationId (abastecimento externo), nunca os dois.',
+      );
+    }
+    if (!dto.fuelTankId && (dto.pricePerLiter === undefined || dto.pricePerLiter <= 0)) {
+      throw new BadRequestException('pricePerLiter e obrigatorio (maior que zero) para abastecimento externo.');
+    }
+    if (dto.fuelStationId) {
+      await this.assertFuelStationExists(tenantId, dto.fuelStationId);
+    }
     if (dto.attachmentId) {
       await assertAttachmentExists(this.prisma, tenantId, dto.attachmentId);
     }
 
     this.assertOdometerNotBelowCurrent(vehicle, dto.odometerKm);
-    const totalAmount = computeTotalAmount(dto.liters, dto.pricePerLiter);
+    const pricePerLiter = dto.pricePerLiter ?? 0;
+    const totalAmount = computeTotalAmount(dto.liters, pricePerLiter);
 
-    const supply = await this.prisma.fuelSupply.create({
-      data: {
-        tenantId,
-        vehicleId,
-        driverId,
+    const supplyData = {
+      tenantId,
+      vehicleId,
+      driverId,
+      fuelType: dto.fuelType,
+      liters: dto.liters,
+      pricePerLiter,
+      totalAmount,
+      odometerKm: dto.odometerKm,
+      supplyDate: new Date(dto.supplyDate),
+      createdBy: actor.userId,
+      ...compact({
+        tripId: dto.tripId,
         fuelStationId: dto.fuelStationId,
-        fuelType: dto.fuelType,
-        liters: dto.liters,
-        pricePerLiter: dto.pricePerLiter,
-        totalAmount,
-        odometerKm: dto.odometerKm,
-        supplyDate: new Date(dto.supplyDate),
-        createdBy: actor.userId,
-        ...compact({
-          tripId: dto.tripId,
-          attachmentId: dto.attachmentId,
-          paymentType: dto.paymentType,
-          invoiceNumber: dto.invoiceNumber,
-          notes: dto.notes,
-        }),
-      },
-      include: SUPPLY_INCLUDE,
-    });
+        attachmentId: dto.attachmentId,
+        paymentType: dto.paymentType,
+        invoiceNumber: dto.invoiceNumber,
+        notes: dto.notes,
+      }),
+    } satisfies Prisma.FuelSupplyUncheckedCreateInput;
 
-    await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm);
+    let supply: FuelSupplyWithRelations;
+    if (dto.fuelTankId) {
+      // Gestao de Combustivel, Fase 7 -- abastecimento interno lancado pelo
+      // administrativo: MESMA operacao atomica do Driver App
+      // (createFromDriverApp abaixo) -- FuelSupply + FuelTankMovement
+      // (INTERNAL_FUELING) + baixa do tanque numa UNICA transacao
+      // Serializable, via FuelTanksService.registerInternalFueling (mesmo
+      // wrapper de applyMovement das Fases 1-3). Nenhuma logica de saldo/
+      // capacidade/concorrencia duplicada -- a unica diferenca entre as duas
+      // origens e o ator/auditoria.
+      const fuelTankId = dto.fuelTankId;
+      supply = await runSerializable(this.prisma, async (tx) => {
+        const created = await tx.fuelSupply.create({
+          data: { ...supplyData, fuelTankId },
+          include: SUPPLY_INCLUDE,
+        });
+        await this.fuelTanksService.registerInternalFueling(tx, tenantId, fuelTankId, dto.liters, actor, {
+          fuelSupplyId: created.id,
+          vehicleId,
+          driverId,
+          ...compact({ tripId: dto.tripId }),
+        });
+        await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm, tx);
+        return created;
+      });
+    } else {
+      // Abastecimento EXTERNO -- fluxo inalterado, nunca toca em FuelTank.
+      supply = await this.prisma.fuelSupply.create({ data: supplyData, include: SUPPLY_INCLUDE });
+      await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm);
+    }
 
     await this.audit.log({
       tenantId,
@@ -169,10 +212,24 @@ export class FuelSuppliesService {
         tripId: supply.tripId,
         liters: supply.liters,
         totalAmount: supply.totalAmount,
+        fuelTankId: supply.fuelTankId,
+        source: 'admin',
       }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
+    if (supply.fuelTankId) {
+      await this.audit.log({
+        tenantId,
+        userId: actor.userId,
+        action: 'fuel_tank.internal_fueling_registered',
+        entityName: 'FuelTank',
+        entityId: supply.fuelTankId,
+        newValue: toJsonSafe({ fuelSupplyId: supply.id, liters: supply.liters, vehicleId, driverId, tripId: supply.tripId, source: 'admin' }),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      });
+    }
 
     return toFuelSupplyEntity(supply);
   }
@@ -320,6 +377,15 @@ export class FuelSuppliesService {
       }
     }
 
+    // Fase 7 -- fuelTankId e imutavel (fora do DTO de update, ver
+    // UpdateFuelSupplyDto) e a exclusividade fuelTankId x fuelStationId
+    // estabelecida na criacao nunca pode ser quebrada por uma edicao
+    // (deixaria o registro com as duas origens ao mesmo tempo).
+    if (before.fuelTankId && dto.fuelStationId) {
+      throw new ConflictException(
+        'Nao e possivel definir um posto (fuelStationId) em um abastecimento interno (vinculado a um tanque proprio).',
+      );
+    }
     if (dto.fuelStationId) {
       await this.assertFuelStationExists(tenantId, dto.fuelStationId);
     }
@@ -616,6 +682,8 @@ export class FuelSuppliesService {
       ...(query.driverId ? { driverId: query.driverId } : {}),
       ...(query.tripId ? { tripId: query.tripId } : {}),
       ...(query.fuelStationId ? { fuelStationId: query.fuelStationId } : {}),
+      ...(query.fuelTankId ? { fuelTankId: query.fuelTankId } : {}),
+      ...(query.source ? { deviceEventId: query.source === 'DRIVER_APP' ? { not: null } : null } : {}),
       ...(query.fuelType ? { fuelType: query.fuelType } : {}),
       ...(query.supplyDateFrom || query.supplyDateTo
         ? {

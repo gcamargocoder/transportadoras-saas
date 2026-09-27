@@ -5,6 +5,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { Droplets, Fuel, Gauge, Pencil, Plus, Route, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
+import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
 import { ConfirmDialog } from '../../../components/ui/confirm-dialog';
 import { DataTable } from '../../../components/ui/data-table';
@@ -100,7 +101,19 @@ export default function FuelSuppliesPage(): JSX.Element {
       },
       { header: 'Combustível', accessorFn: (row) => FUEL_TYPE_LABELS[row.fuelType] },
       { header: 'Litros', cell: ({ row }) => `${formatNumber(row.original.liters, 1)} L` },
+      { header: 'Odômetro', cell: ({ row }) => `${formatNumber(row.original.odometerKm)} km` },
       { header: 'Valor', cell: ({ row }) => formatCurrency(row.original.totalAmount) },
+      {
+        header: 'Via',
+        // Fase 7 -- distingue quem registrou (App do motorista x
+        // administrativo), derivado de deviceEventId no backend.
+        cell: ({ row }) =>
+          row.original.source === 'DRIVER_APP' ? (
+            <Badge tone="info">App do motorista</Badge>
+          ) : (
+            <Badge tone="neutral">Administrativo</Badge>
+          ),
+      },
       ...(canWrite
         ? [
             {

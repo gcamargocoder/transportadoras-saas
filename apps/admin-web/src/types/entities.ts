@@ -1385,7 +1385,9 @@ export interface FuelSupplyEntity {
   // Fase 107 -- "origem -> destino" da viagem vinculada; nulo quando tripId
   // e nulo (mesma convencao ja usada em TripBillingEntity/FinanceReconciliationEntity).
   tripLabel: string | null;
-  fuelStationId: string;
+  // Nulo quando o abastecimento e interno (fuelTankId) ou quando o posto
+  // externo nao e conhecido.
+  fuelStationId: string | null;
   fuelStationName: string | null;
   // Gestao de Combustivel, Fase 3 -- preenchido quando o abastecimento e
   // INTERNO (tanque proprio); nulo para abastecimento externo (posto).
@@ -1401,6 +1403,10 @@ export interface FuelSupplyEntity {
   paymentType: PaymentType | null;
   invoiceNumber: string | null;
   notes: string | null;
+  // Fase 7 -- derivado de deviceEventId no backend (nunca uma coluna
+  // propria): DRIVER_APP = registrado pelo app do motorista; ADMIN =
+  // lancado pelo administrativo (interno ou externo).
+  source: 'DRIVER_APP' | 'ADMIN';
   createdBy: string;
   creatorName: string | null;
   updatedBy: string | null;

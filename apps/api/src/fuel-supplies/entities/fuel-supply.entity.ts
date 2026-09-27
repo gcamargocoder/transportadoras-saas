@@ -93,6 +93,12 @@ export class FuelSupplyEntity {
   @ApiProperty({ enum: SyncStatus })
   syncStatus!: SyncStatus;
 
+  @ApiProperty({
+    enum: ['DRIVER_APP', 'ADMIN'],
+    description: 'Fase 7 -- derivado de deviceEventId (nunca uma coluna propria): presente = registrado pelo Driver App.',
+  })
+  source!: 'DRIVER_APP' | 'ADMIN';
+
   @ApiProperty({ format: 'uuid' })
   createdBy!: string;
 

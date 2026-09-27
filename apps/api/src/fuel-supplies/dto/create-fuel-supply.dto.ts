@@ -22,6 +22,16 @@ import {
 // diretamente (ver TripAdvance/TripExpense para o mesmo principio aplicado
 // ao caso "sempre ha viagem" -- aqui a viagem e opcional, entao existe um
 // caminho alternativo explicito).
+//
+// Fase 7 (Gestao de Combustivel) -- fuelTankId/fuelStationId sao mutuamente
+// exclusivos (validado no service, onde a mensagem pode citar os dois
+// campos): presente = abastecimento INTERNO (baixa o tanque proprio na
+// mesma transacao, via FuelTanksService.registerInternalFueling -- mesma
+// funcao ja usada pelo Driver App, Fase 3); ausente = EXTERNO (posto/
+// fornecedor, fluxo inalterado). pricePerLiter fica opcional pelo mesmo
+// motivo do Driver App: abastecimento interno nao tem compra associada a
+// ELE (o custo ja foi pago no RECEIPT) -- exigido apenas quando EXTERNO
+// (validado no service, pois so ali se sabe se e interno).
 export class CreateFuelSupplyDto {
   @ApiPropertyOptional({ format: 'uuid', description: 'Viagem associada (opcional).' })
   @IsOptional()
@@ -44,9 +54,23 @@ export class CreateFuelSupplyDto {
   @IsUUID('4', { message: 'driverId deve ser um UUID valido.' })
   driverId?: string;
 
-  @ApiProperty({ format: 'uuid' })
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Posto/fornecedor externo. Omitido quando o abastecimento e interno (fuelTankId) ou quando o posto nao e conhecido.',
+  })
+  @IsOptional()
   @IsUUID('4', { message: 'fuelStationId deve ser um UUID valido.' })
-  fuelStationId!: string;
+  fuelStationId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Gestao de Combustivel -- tanque proprio de origem. Presente = abastecimento INTERNO ' +
+      '(baixa o tanque); nunca junto de fuelStationId.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'fuelTankId deve ser um UUID valido.' })
+  fuelTankId?: string;
 
   @ApiPropertyOptional({
     format: 'uuid',
@@ -65,10 +89,14 @@ export class CreateFuelSupplyDto {
   @IsPositive({ message: 'liters deve ser maior que zero.' })
   liters!: number;
 
-  @ApiProperty({ example: 5.899, description: 'Preco por litro -- deve ser maior que zero.' })
+  @ApiPropertyOptional({
+    example: 5.899,
+    description: 'Preco por litro -- obrigatorio (maior que zero) para abastecimento EXTERNO; opcional para INTERNO (fuelTankId).',
+  })
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 4 })
-  @IsPositive({ message: 'pricePerLiter deve ser maior que zero.' })
-  pricePerLiter!: number;
+  @Min(0, { message: 'pricePerLiter nao pode ser negativo.' })
+  pricePerLiter?: number;
 
   @ApiProperty({ example: 125000, description: 'Odometro no momento do abastecimento.' })
   @IsNumber({ maxDecimalPlaces: 2 })
