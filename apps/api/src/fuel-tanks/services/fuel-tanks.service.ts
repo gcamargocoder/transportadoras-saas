@@ -1,20 +1,23 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { FuelTank, FuelTankMovementType, FuelTankStatus, Prisma } from '@prisma/client';
+import { FuelTank, FuelTankMovement, FuelTankMovementType, FuelTankStatus, Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
 import { buildPaginationMeta } from '../../common/entities/pagination-meta.entity';
 import { AuditActor } from '../../common/interfaces/audit-actor.interface';
 import { compact } from '../../common/utils/compact.util';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
+import { computeTotalAmount } from '../../common/utils/fuel-consumption.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { runSerializable } from '../../tenants/utils/plan-limit.util';
+import { CreateFuelTankReceiptDto } from '../dto/create-fuel-tank-receipt.dto';
 import { CreateFuelTankDto } from '../dto/create-fuel-tank.dto';
 import { FindFuelTankMovementsQueryDto } from '../dto/find-fuel-tank-movements-query.dto';
 import { FindFuelTanksQueryDto } from '../dto/find-fuel-tanks-query.dto';
 import { UpdateFuelTankDto } from '../dto/update-fuel-tank.dto';
 import { UpdateFuelTankStatusDto } from '../dto/update-fuel-tank-status.dto';
 import { FuelTankBalanceEntity } from '../entities/fuel-tank-balance.entity';
+import { FuelTankReceiptResultEntity } from '../entities/fuel-tank-receipt-result.entity';
 import { PaginatedFuelTankMovementsEntity } from '../entities/paginated-fuel-tank-movements.entity';
 import { PaginatedFuelTanksEntity } from '../entities/paginated-fuel-tanks.entity';
 import { FuelTankEntity } from '../entities/fuel-tank.entity';
@@ -102,7 +105,7 @@ export class FuelTanksService {
       throw new BadRequestException('minStockLiters nao pode ser maior que capacityLiters.');
     }
 
-    const tank = await runSerializable(this.prisma, async (tx) => {
+    const { tank } = await runSerializable(this.prisma, async (tx) => {
       // isLowStock nasce false (default do schema) -- applyMovement() abaixo
       // recalcula com o saldo real (initialStockLiters) na mesma transacao,
       // antes de qualquer leitor externo poder ver a linha.
@@ -250,6 +253,58 @@ export class FuelTanksService {
     return result;
   }
 
+  // Fase 2 -- entrada/compra de diesel no tanque proprio. totalAmount e
+  // SEMPRE calculado aqui (nunca aceito do cliente, mesma funcao
+  // computeTotalAmount de FuelSupply) -- unica fonte de verdade para o
+  // custo do recebimento.
+  async registerReceipt(
+    tenantId: string,
+    id: string,
+    dto: CreateFuelTankReceiptDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<FuelTankReceiptResultEntity> {
+    if (dto.fuelStationId) {
+      await this.assertFuelStationExists(tenantId, dto.fuelStationId);
+    }
+    const totalAmount = computeTotalAmount(dto.quantityLiters, dto.pricePerLiter);
+
+    const { tank, movement } = await runSerializable(this.prisma, (tx) =>
+      this.applyMovement(tx, tenantId, id, FuelTankMovementType.RECEIPT, dto.quantityLiters, actor, {
+        notes: dto.notes,
+        fuelStationId: dto.fuelStationId,
+        invoiceNumber: dto.invoiceNumber,
+        pricePerLiter: dto.pricePerLiter,
+        totalAmount,
+        effectiveDate: dto.receivedAt ? new Date(dto.receivedAt) : undefined,
+      }),
+    );
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'fuel_tank.receipt_registered',
+      entityName: 'FuelTank',
+      entityId: id,
+      newValue: toJsonSafe({
+        quantityLiters: dto.quantityLiters,
+        pricePerLiter: dto.pricePerLiter,
+        totalAmount,
+        previousBalanceLiters: toNumberOrNull(movement.previousBalanceLiters),
+        newBalanceLiters: toNumberOrNull(movement.newBalanceLiters),
+        fuelStationId: dto.fuelStationId ?? null,
+        invoiceNumber: dto.invoiceNumber ?? null,
+      }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    const result = new FuelTankReceiptResultEntity();
+    result.tank = toFuelTankEntity(tank);
+    result.movement = toFuelTankMovementEntity(movement);
+    return result;
+  }
+
   // Motor generico de movimentacao -- unico ponto que le e grava o saldo do
   // tanque (secao 1/5 da Fase 1). Roda dentro do runSerializable do chamador
   // (mesmo padrao de PartsService.applyMovement/Fase 48): qualquer conflito
@@ -268,13 +323,18 @@ export class FuelTanksService {
     actor: AuditActor,
     extra: {
       notes?: string | undefined;
+      pricePerLiter?: number | undefined;
+      totalAmount?: number | undefined;
+      invoiceNumber?: string | undefined;
+      fuelStationId?: string | undefined;
       fuelSupplyId?: string | undefined;
       vehicleId?: string | undefined;
       driverId?: string | undefined;
       tripId?: string | undefined;
       deviceEventId?: string | undefined;
+      effectiveDate?: Date | undefined;
     },
-  ): Promise<FuelTank> {
+  ): Promise<{ tank: FuelTank; movement: FuelTankMovement }> {
     const tank = await tx.fuelTank.findFirst({ where: { id: tankId, tenantId } });
     if (!tank) {
       throw new NotFoundException('Tanque nao encontrado nesta empresa.');
@@ -291,7 +351,7 @@ export class FuelTanksService {
       data: { currentStockLiters: nextBalance, isLowStock: computeIsLowStock(nextBalance, toNumberOrNull(tank.minStockLiters)) },
     });
 
-    await tx.fuelTankMovement.create({
+    const movement = await tx.fuelTankMovement.create({
       data: {
         tenantId,
         tankId,
@@ -302,16 +362,28 @@ export class FuelTanksService {
         createdBy: actor.userId,
         ...compact({
           notes: extra.notes,
+          pricePerLiter: extra.pricePerLiter,
+          totalAmount: extra.totalAmount,
+          invoiceNumber: extra.invoiceNumber,
+          fuelStationId: extra.fuelStationId,
           fuelSupplyId: extra.fuelSupplyId,
           vehicleId: extra.vehicleId,
           driverId: extra.driverId,
           tripId: extra.tripId,
           deviceEventId: extra.deviceEventId,
+          effectiveDate: extra.effectiveDate,
         }),
       },
     });
 
-    return updated;
+    return { tank: updated, movement };
+  }
+
+  private async assertFuelStationExists(tenantId: string, fuelStationId: string): Promise<void> {
+    const station = await this.prisma.fuelStation.findFirst({ where: { id: fuelStationId, tenantId } });
+    if (!station) {
+      throw new NotFoundException('Posto/fornecedor (fuelStationId) nao encontrado nesta empresa.');
+    }
   }
 
   private async findOwnedOrThrow(tenantId: string, id: string): Promise<FuelTank> {

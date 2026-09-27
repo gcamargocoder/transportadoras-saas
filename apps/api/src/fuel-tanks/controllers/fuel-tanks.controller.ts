@@ -13,12 +13,14 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FUEL_SUPPLY_READ_ROLES, FUEL_SUPPLY_WRITE_ROLES } from '../../fuel-supplies/constants/fuel-supply-roles.constants';
+import { CreateFuelTankReceiptDto } from '../dto/create-fuel-tank-receipt.dto';
 import { CreateFuelTankDto } from '../dto/create-fuel-tank.dto';
 import { FindFuelTankMovementsQueryDto } from '../dto/find-fuel-tank-movements-query.dto';
 import { FindFuelTanksQueryDto } from '../dto/find-fuel-tanks-query.dto';
 import { UpdateFuelTankDto } from '../dto/update-fuel-tank.dto';
 import { UpdateFuelTankStatusDto } from '../dto/update-fuel-tank-status.dto';
 import { FuelTankBalanceEntity } from '../entities/fuel-tank-balance.entity';
+import { FuelTankReceiptResultEntity } from '../entities/fuel-tank-receipt-result.entity';
 import { PaginatedFuelTankMovementsEntity } from '../entities/paginated-fuel-tank-movements.entity';
 import { PaginatedFuelTanksEntity } from '../entities/paginated-fuel-tanks.entity';
 import { FuelTankEntity } from '../entities/fuel-tank.entity';
@@ -116,6 +118,29 @@ export class FuelTanksController {
   @ApiNotFoundResponse({ description: 'Tanque nao encontrado nesta empresa.' })
   updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFuelTankStatusDto): Promise<FuelTankEntity> {
     return this.fuelTanksService.updateStatus(
+      this.tenantContext.requireTenantId(),
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Post(':id/receipts')
+  @Roles(...FUEL_SUPPLY_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Registra entrada/compra de diesel no tanque (RECEIPT). totalAmount e sempre calculado ' +
+      '(quantityLiters * pricePerLiter) -- nunca aceito do cliente. Retorna o novo saldo e a movimentacao criada.',
+  })
+  @ApiCreatedResponse({ type: FuelTankReceiptResultEntity })
+  @ApiNotFoundResponse({ description: 'Tanque ou fornecedor (fuelStationId) nao encontrados nesta empresa.' })
+  @ApiConflictResponse({ description: 'Tanque inativo, ou a entrada excederia a capacidade do tanque.' })
+  registerReceipt(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateFuelTankReceiptDto,
+  ): Promise<FuelTankReceiptResultEntity> {
+    return this.fuelTanksService.registerReceipt(
       this.tenantContext.requireTenantId(),
       id,
       dto,

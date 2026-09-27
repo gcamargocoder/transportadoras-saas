@@ -4201,12 +4201,22 @@ export interface FuelTankMovementEntity {
   newBalanceLiters: number;
   effectiveDate: string;
   notes: string | null;
+  pricePerLiter: number | null;
+  totalAmount: number | null;
+  invoiceNumber: string | null;
+  fuelStationId: string | null;
   fuelSupplyId: string | null;
   vehicleId: string | null;
   driverId: string | null;
   tripId: string | null;
   createdBy: string;
   createdAt: string;
+}
+
+// Gestao de Combustivel, Fase 2 -- resposta de POST /fuel-tanks/:id/receipts.
+export interface FuelTankReceiptResultEntity {
+  tank: FuelTankEntity;
+  movement: FuelTankMovementEntity;
 }
 
 export interface FuelTankBalanceEntity {

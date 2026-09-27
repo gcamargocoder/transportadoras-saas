@@ -1800,8 +1800,9 @@ model FuelStation {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  supplies FuelSupply[]
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplies     FuelSupply[]
+  tankReceipts FuelTankMovement[]
 
   @@index([tenantId])
   @@map("fuel_stations")
@@ -1934,6 +1935,17 @@ model FuelTankMovement {
   newBalanceLiters      Decimal              @map("new_balance_liters") @db.Decimal(10, 3)
   effectiveDate         DateTime             @default(now()) @map("effective_date")
   notes                 String?
+  /// Custo do RECEIPT (Fase 2) -- nulo para INITIAL_BALANCE/INTERNAL_FUELING/
+  /// ADJUSTMENT, que nao representam uma compra. totalAmount e SEMPRE
+  /// calculado no service (quantityLiters * pricePerLiter, mesma funcao
+  /// computeTotalAmount de FuelSupply), nunca aceito do cliente.
+  pricePerLiter         Decimal?             @map("price_per_liter") @db.Decimal(10, 4)
+  totalAmount           Decimal?             @map("total_amount") @db.Decimal(10, 2)
+  invoiceNumber         String?              @map("invoice_number")
+  /// Fornecedor do RECEIPT (Fase 2) -- reaproveita FuelStation (mesma
+  /// entidade ja usada por FuelSupply.fuelStationId) em vez de criar um
+  /// cadastro de fornecedor paralelo.
+  fuelStationId         String?              @map("fuel_station_id") @db.Uuid
   /// Preenchido quando a origem e um abastecimento interno (Fase 3) -- 1:1
   /// com FuelSupply.
   fuelSupplyId          String?              @unique @map("fuel_supply_id") @db.Uuid
@@ -1947,16 +1959,18 @@ model FuelTankMovement {
   createdBy             String               @map("created_by") @db.Uuid
   createdAt             DateTime             @default(now()) @map("created_at")
 
-  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tank       FuelTank    @relation(fields: [tankId], references: [id], onDelete: Restrict)
-  fuelSupply FuelSupply? @relation(fields: [fuelSupplyId], references: [id], onDelete: SetNull)
-  vehicle    Vehicle?    @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  driver     Driver?     @relation(fields: [driverId], references: [id], onDelete: SetNull)
-  trip       Trip?       @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  creator    UserAccount @relation("FuelTankMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tank        FuelTank     @relation(fields: [tankId], references: [id], onDelete: Restrict)
+  fuelStation FuelStation? @relation(fields: [fuelStationId], references: [id], onDelete: Restrict)
+  fuelSupply  FuelSupply?  @relation(fields: [fuelSupplyId], references: [id], onDelete: SetNull)
+  vehicle     Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver      Driver?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  trip        Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  creator     UserAccount  @relation("FuelTankMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
   @@index([tenantId, tankId])
+  @@index([tenantId, fuelStationId])
   @@index([tenantId, vehicleId])
   @@index([tenantId, driverId])
   @@index([tenantId, tripId])

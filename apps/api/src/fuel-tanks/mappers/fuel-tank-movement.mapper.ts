@@ -12,6 +12,10 @@ export function toFuelTankMovementEntity(movement: FuelTankMovement): FuelTankMo
   entity.newBalanceLiters = toNumberOrNull(movement.newBalanceLiters) ?? 0;
   entity.effectiveDate = movement.effectiveDate;
   entity.notes = movement.notes;
+  entity.pricePerLiter = toNumberOrNull(movement.pricePerLiter);
+  entity.totalAmount = toNumberOrNull(movement.totalAmount);
+  entity.invoiceNumber = movement.invoiceNumber;
+  entity.fuelStationId = movement.fuelStationId;
   entity.fuelSupplyId = movement.fuelSupplyId;
   entity.vehicleId = movement.vehicleId;
   entity.driverId = movement.driverId;

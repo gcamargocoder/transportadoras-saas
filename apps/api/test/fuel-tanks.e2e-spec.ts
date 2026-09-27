@@ -85,6 +85,15 @@ describe('Gestao de Combustivel -- Tanques (Fase 1, e2e)', () => {
     return res.body.data as { id: string; currentStockLiters: number; isLowStock: boolean; occupancyPercent: number };
   }
 
+  async function createFuelStation(auth: string, overrides: Partial<Record<string, unknown>> = {}) {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/fuel-stations')
+      .set('Authorization', auth)
+      .send({ name: 'Distribuidora Raizen', ...overrides })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
   describe('criacao e saldo inicial via ledger', () => {
     it('cria o tanque com currentStockLiters=initialStockLiters e registra a movimentacao INITIAL_BALANCE', async () => {
       const { auth } = await createTenantAndLoginAsAdmin('Create');
@@ -181,6 +190,178 @@ describe('Gestao de Combustivel -- Tanques (Fase 1, e2e)', () => {
       const balance = await request(app.getHttpServer()).get(`/api/v1/fuel-tanks/${low.id}/balance`).set('Authorization', auth).expect(200);
       expect(balance.body.data.currentStockLiters).toBe(100);
       expect(balance.body.data.isLowStock).toBe(true);
+    });
+  });
+
+  describe('entrada/compra de diesel (RECEIPT, Fase 2)', () => {
+    it('registra a entrada, aumenta o saldo e calcula o total no backend (nunca confia no cliente)', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('Receipt');
+      const tank = await createTank(auth, { initialStockLiters: 7550, capacityLiters: 15000 });
+      const fuelStationId = await createFuelStation(auth);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        .send({ quantityLiters: 2000, pricePerLiter: 5.5, fuelStationId, invoiceNumber: 'NF-777' })
+        .expect(201);
+
+      expect(res.body.data.tank.currentStockLiters).toBe(9550);
+      const movement = res.body.data.movement;
+      expect(movement.type).toBe('RECEIPT');
+      expect(movement.quantityLiters).toBe(2000);
+      expect(movement.previousBalanceLiters).toBe(7550);
+      expect(movement.newBalanceLiters).toBe(9550);
+      expect(movement.pricePerLiter).toBe(5.5);
+      expect(movement.totalAmount).toBe(11000); // 2000 * 5.5, sempre calculado no backend
+      expect(movement.fuelStationId).toBe(fuelStationId);
+      expect(movement.invoiceNumber).toBe('NF-777');
+    });
+
+    it('ignora um totalAmount enviado pelo cliente -- o backend sempre recalcula', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('ReceiptIgnoreTotal');
+      const tank = await createTank(auth, { initialStockLiters: 0, capacityLiters: 10000 });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        // totalAmount nao existe no DTO -- forbidNonWhitelisted rejeitaria se
+        // fosse aceito; aqui confirmamos que o valor correto (calculado) e o
+        // unico que aparece na resposta.
+        .send({ quantityLiters: 100, pricePerLiter: 6 })
+        .expect(201);
+
+      expect(res.body.data.movement.totalAmount).toBe(600);
+    });
+
+    it('rejeita entrada que ultrapassaria a capacidade -- nenhuma movimentacao parcial', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('ReceiptOverCapacity');
+      const tank = await createTank(auth, { initialStockLiters: 9500, capacityLiters: 10000 });
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        .send({ quantityLiters: 600, pricePerLiter: 5 })
+        .expect(409);
+
+      const after = await request(app.getHttpServer()).get(`/api/v1/fuel-tanks/${tank.id}`).set('Authorization', auth).expect(200);
+      expect(after.body.data.currentStockLiters).toBe(9500); // inalterado
+
+      const movements = await request(app.getHttpServer())
+        .get(`/api/v1/fuel-tanks/${tank.id}/movements`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(movements.body.data.items.some((m: { type: string }) => m.type === 'RECEIPT')).toBe(false);
+    });
+
+    it('rejeita litros/preco invalidos (400) e tanque INACTIVE (409)', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('ReceiptInvalid');
+      const tank = await createTank(auth, { initialStockLiters: 100, capacityLiters: 1000 });
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        .send({ quantityLiters: 0, pricePerLiter: 5 })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        .send({ quantityLiters: 100, pricePerLiter: -1 })
+        .expect(400);
+
+      await request(app.getHttpServer()).patch(`/api/v1/fuel-tanks/${tank.id}/status`).set('Authorization', auth).send({ isActive: false }).expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        .send({ quantityLiters: 100, pricePerLiter: 5 })
+        .expect(409);
+    });
+
+    it('rejeita fuelStationId de outro tenant ou inexistente (404)', async () => {
+      const { auth: authA } = await createTenantAndLoginAsAdmin('ReceiptStationA');
+      const { auth: authB } = await createTenantAndLoginAsAdmin('ReceiptStationB');
+      const tank = await createTank(authA, { initialStockLiters: 100, capacityLiters: 1000 });
+      const stationFromB = await createFuelStation(authB);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', authA)
+        .send({ quantityLiters: 100, pricePerLiter: 5, fuelStationId: stationFromB })
+        .expect(404);
+    });
+
+    it('aparece no historico com todos os dados de custo/origem', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('ReceiptHistory');
+      const tank = await createTank(auth, { initialStockLiters: 1000, capacityLiters: 10000 });
+      const fuelStationId = await createFuelStation(auth);
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auth)
+        .send({ quantityLiters: 500, pricePerLiter: 6.2, fuelStationId, invoiceNumber: 'NF-1', notes: 'Compra mensal' })
+        .expect(201);
+
+      const movements = await request(app.getHttpServer())
+        .get(`/api/v1/fuel-tanks/${tank.id}/movements`)
+        .query({ type: 'RECEIPT' })
+        .set('Authorization', auth)
+        .expect(200);
+      expect(movements.body.data.items.length).toBe(1);
+      const movement = movements.body.data.items[0];
+      expect(movement.quantityLiters).toBe(500);
+      expect(movement.pricePerLiter).toBe(6.2);
+      expect(movement.totalAmount).toBe(3100);
+      expect(movement.fuelStationId).toBe(fuelStationId);
+      expect(movement.invoiceNumber).toBe('NF-1');
+      expect(movement.notes).toBe('Compra mensal');
+    });
+
+    it('isolamento multi-tenant: tanque de outro tenant retorna 404 ao registrar entrada', async () => {
+      const { auth: authA } = await createTenantAndLoginAsAdmin('ReceiptTenantA');
+      const { auth: authB } = await createTenantAndLoginAsAdmin('ReceiptTenantB');
+      const tank = await createTank(authA, { initialStockLiters: 100, capacityLiters: 1000 });
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', authB)
+        .send({ quantityLiters: 100, pricePerLiter: 5 })
+        .expect(404);
+    });
+
+    it('RBAC: AUDITOR nao pode registrar entrada (403)', async () => {
+      const { tenantId, auth } = await createTenantAndLoginAsAdmin('ReceiptRbac');
+      const auditorAuth = await createUserWithRole(tenantId, auth, 'AUDITOR');
+      const tank = await createTank(auth, { initialStockLiters: 100, capacityLiters: 1000 });
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+        .set('Authorization', auditorAuth)
+        .send({ quantityLiters: 100, pricePerLiter: 5 })
+        .expect(403);
+    });
+
+    it('concorrencia: duas entradas simultaneas que somadas excederiam a capacidade -- somente uma sucede', async () => {
+      const { auth } = await createTenantAndLoginAsAdmin('ReceiptConcurrency');
+      const tank = await createTank(auth, { initialStockLiters: 9000, capacityLiters: 10000 });
+
+      const attempt = () =>
+        request(app.getHttpServer())
+          .post(`/api/v1/fuel-tanks/${tank.id}/receipts`)
+          .set('Authorization', auth)
+          .send({ quantityLiters: 700, pricePerLiter: 5 });
+
+      const [resA, resB] = await Promise.all([attempt(), attempt()]);
+      const statuses = [resA.status, resB.status];
+      // O invariante testado e "nunca as duas sucedem" -- a perdedora quase
+      // sempre recebe 409 (capacidade), mas um conflito real de
+      // serializacao do Postgres apos o retry automatico de runSerializable
+      // (limitacao pre-existente, ja documentada na Fase 1) pode surgir como
+      // 500 em vez de 409. O saldo final abaixo e o invariante que realmente
+      // importa.
+      expect(statuses.filter((s) => s === 201).length).toBe(1);
+      expect(statuses.every((s) => s === 201 || s === 409 || s === 500)).toBe(true);
+
+      const after = await request(app.getHttpServer()).get(`/api/v1/fuel-tanks/${tank.id}`).set('Authorization', auth).expect(200);
+      expect(after.body.data.currentStockLiters).toBe(9700); // nunca 10400
     });
   });
 

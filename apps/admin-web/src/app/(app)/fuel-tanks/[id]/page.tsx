@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Ban, CheckCircle2, Pencil } from 'lucide-react';
+import { Ban, CheckCircle2, Droplets, Pencil } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { Badge } from '../../../../components/ui/badge';
@@ -17,13 +17,15 @@ import { RadialGauge } from '../../../../components/ui/radial-gauge';
 import { StatCard } from '../../../../components/ui/stat-card';
 import { useToast } from '../../../../components/ui/toast';
 import { useAuth } from '../../../../hooks/use-auth';
+import { RegisterFuelTankReceiptModal } from '../../../../features/fuel-tanks/register-fuel-tank-receipt-modal';
 import { UpdateFuelTankModal } from '../../../../features/fuel-tanks/update-fuel-tank-modal';
 import { toFriendlyMessage } from '../../../../lib/api/errors';
+import { listFuelStations } from '../../../../lib/api/fuel.api';
 import { getFuelTank, getFuelTankMovements, updateFuelTankStatus } from '../../../../lib/api/fuel-tanks.api';
 import { FUEL_SUPPLY_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { FUEL_TANK_MOVEMENT_TYPE_LABELS, FUEL_TYPE_LABELS } from '../../../../lib/labels';
 import type { FuelTankMovementEntity } from '../../../../types/entities';
-import { formatDateTime, formatNumber } from '../../../../utils/format';
+import { formatCurrency, formatDateTime, formatNumber } from '../../../../utils/format';
 
 const PAGE_SIZE = 20;
 
@@ -43,6 +45,7 @@ export default function FuelTankDetailPage(): JSX.Element {
   const canWrite = hasRole(user?.role, FUEL_SUPPLY_WRITE_ROLES);
 
   const [editOpen, setEditOpen] = useState(false);
+  const [receiveOpen, setReceiveOpen] = useState(false);
   const [movementsPage, setMovementsPage] = useState(1);
 
   const query = useQuery({ queryKey: ['fuel-tanks', id], queryFn: () => getFuelTank(id) });
@@ -50,6 +53,13 @@ export default function FuelTankDetailPage(): JSX.Element {
     queryKey: ['fuel-tanks', id, 'movements', movementsPage],
     queryFn: () => getFuelTankMovements(id, { page: movementsPage, pageSize: PAGE_SIZE }),
   });
+  // Mesma queryKey do EntitySelect do modal de recebimento -- compartilha o
+  // cache (nenhuma requisicao extra quando o modal ja foi aberto nesta sessao).
+  const fuelStationsQuery = useQuery({
+    queryKey: ['fuel-stations', 'select'],
+    queryFn: () => listFuelStations({ pageSize: 100 }),
+  });
+  const fuelStationNameById = new Map((fuelStationsQuery.data?.items ?? []).map((s) => [s.id, s.name]));
 
   const statusMutation = useMutation({
     mutationFn: (active: boolean) => updateFuelTankStatus(id, active),
@@ -73,6 +83,26 @@ export default function FuelTankDetailPage(): JSX.Element {
     },
     { header: 'Saldo anterior', cell: ({ row }) => `${formatNumber(row.original.previousBalanceLiters)} L` },
     { header: 'Saldo posterior', cell: ({ row }) => `${formatNumber(row.original.newBalanceLiters)} L` },
+    {
+      header: 'Custo',
+      cell: ({ row }) =>
+        row.original.pricePerLiter !== null && row.original.totalAmount !== null ? (
+          <div>
+            <p className="text-ink">{formatCurrency(row.original.totalAmount)}</p>
+            <p className="text-xs text-ink-subtle">{formatCurrency(row.original.pricePerLiter)}/L</p>
+          </div>
+        ) : (
+          '—'
+        ),
+    },
+    {
+      header: 'Origem',
+      cell: ({ row }) => {
+        const stationName = row.original.fuelStationId ? fuelStationNameById.get(row.original.fuelStationId) : null;
+        const parts = [stationName, row.original.invoiceNumber ? `NF ${row.original.invoiceNumber}` : null].filter(Boolean);
+        return parts.length > 0 ? parts.join(' · ') : '—';
+      },
+    },
     { header: 'Observação', accessorFn: (row) => row.notes ?? '—' },
   ];
 
@@ -103,6 +133,12 @@ export default function FuelTankDetailPage(): JSX.Element {
 
       {canWrite && (
         <div className="mb-4 flex flex-wrap gap-2">
+          {tank.status === 'ACTIVE' && (
+            <Button size="sm" onClick={() => setReceiveOpen(true)}>
+              <Droplets size={14} />
+              Receber diesel
+            </Button>
+          )}
           <Button
             size="sm"
             variant={tank.status === 'ACTIVE' ? 'danger' : 'outline'}
@@ -158,6 +194,7 @@ export default function FuelTankDetailPage(): JSX.Element {
       </div>
 
       <UpdateFuelTankModal open={editOpen} onClose={() => setEditOpen(false)} tank={tank} />
+      <RegisterFuelTankReceiptModal open={receiveOpen} onClose={() => setReceiveOpen(false)} tank={tank} />
     </div>
   );
 }

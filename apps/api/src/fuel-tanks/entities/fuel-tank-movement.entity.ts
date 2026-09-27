@@ -26,6 +26,18 @@ export class FuelTankMovementEntity {
   @ApiProperty({ nullable: true })
   notes!: string | null;
 
+  @ApiProperty({ nullable: true, description: 'Preco por litro pago (RECEIPT). Nulo para os demais tipos.' })
+  pricePerLiter!: number | null;
+
+  @ApiProperty({ nullable: true, description: 'quantityLiters * pricePerLiter, sempre calculado (RECEIPT). Nulo para os demais tipos.' })
+  totalAmount!: number | null;
+
+  @ApiProperty({ nullable: true })
+  invoiceNumber!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Fornecedor do RECEIPT (FuelStation).' })
+  fuelStationId!: string | null;
+
   @ApiProperty({ format: 'uuid', nullable: true, description: 'FuelSupply de origem, quando o movimento e um abastecimento interno.' })
   fuelSupplyId!: string | null;
 

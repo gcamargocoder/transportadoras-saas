@@ -1,5 +1,5 @@
 import type { Paginated, PaginationParams } from '../../types/api';
-import type { FuelTankBalanceEntity, FuelTankEntity, FuelTankMovementEntity } from '../../types/entities';
+import type { FuelTankBalanceEntity, FuelTankEntity, FuelTankMovementEntity, FuelTankReceiptResultEntity } from '../../types/entities';
 import type { FuelTankMovementType, FuelType } from '../../types/enums';
 import { api } from './http';
 
@@ -59,4 +59,17 @@ export interface FindFuelTankMovementsQuery extends PaginationParams {
 
 export function getFuelTankMovements(id: string, query: FindFuelTankMovementsQuery = {}, signal?: AbortSignal) {
   return api.get<Paginated<FuelTankMovementEntity>>(`/fuel-tanks/${id}/movements`, query, signal);
+}
+
+export interface CreateFuelTankReceiptPayload {
+  quantityLiters: number;
+  pricePerLiter: number;
+  fuelStationId?: string | undefined;
+  invoiceNumber?: string | undefined;
+  receivedAt?: string | undefined;
+  notes?: string | undefined;
+}
+
+export function registerFuelTankReceipt(id: string, payload: CreateFuelTankReceiptPayload) {
+  return api.post<FuelTankReceiptResultEntity>(`/fuel-tanks/${id}/receipts`, payload);
 }

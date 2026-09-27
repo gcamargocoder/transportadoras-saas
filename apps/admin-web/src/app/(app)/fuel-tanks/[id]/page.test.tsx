@@ -9,6 +9,8 @@ import FuelTankDetailPage from './page';
 const getFuelTankMock = vi.fn();
 const getFuelTankMovementsMock = vi.fn();
 const updateFuelTankStatusMock = vi.fn();
+const registerFuelTankReceiptMock = vi.fn();
+const listFuelStationsMock = vi.fn();
 const useAuthMock = vi.fn();
 const pushMock = vi.fn();
 
@@ -17,6 +19,11 @@ vi.mock('../../../../lib/api/fuel-tanks.api', () => ({
   getFuelTankMovements: (...args: unknown[]) => getFuelTankMovementsMock(...args),
   updateFuelTankStatus: (...args: unknown[]) => updateFuelTankStatusMock(...args),
   updateFuelTank: vi.fn(),
+  registerFuelTankReceipt: (...args: unknown[]) => registerFuelTankReceiptMock(...args),
+}));
+
+vi.mock('../../../../lib/api/fuel.api', () => ({
+  listFuelStations: (...args: unknown[]) => listFuelStationsMock(...args),
 }));
 
 vi.mock('../../../../hooks/use-auth', () => ({
@@ -70,6 +77,10 @@ function buildMovement(overrides: Partial<FuelTankMovementEntity> = {}): FuelTan
     newBalanceLiters: 8000,
     effectiveDate: '2026-09-01T08:00:00.000Z',
     notes: 'Saldo inicial na criação do tanque.',
+    pricePerLiter: null,
+    totalAmount: null,
+    invoiceNumber: null,
+    fuelStationId: null,
     fuelSupplyId: null,
     vehicleId: null,
     driverId: null,
@@ -85,10 +96,13 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     getFuelTankMock.mockReset();
     getFuelTankMovementsMock.mockReset();
     updateFuelTankStatusMock.mockReset();
+    registerFuelTankReceiptMock.mockReset();
+    listFuelStationsMock.mockReset();
     useAuthMock.mockReset();
     pushMock.mockReset();
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN' } });
     getFuelTankMovementsMock.mockResolvedValue({ items: [buildMovement()], meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 } });
+    listFuelStationsMock.mockResolvedValue({ items: [{ id: 'station-1', name: 'Distribuidora Raizen' }], meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 } });
   });
 
   it('mostra o saldo, capacidade e a movimentacao de saldo inicial', async () => {
@@ -127,5 +141,74 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     await screen.findByRole('heading', { name: 'Tanque matriz' });
     expect(screen.queryByRole('button', { name: /Desativar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Editar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Receber diesel/i })).not.toBeInTheDocument();
+  });
+
+  describe('Receber diesel (RECEIPT, Fase 2)', () => {
+    it('abre o formulario, calcula o total e a previa do novo estoque', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550, capacityLiters: 15000 }));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Receber diesel/i }));
+      expect(await screen.findByRole('heading', { name: 'Receber diesel' })).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Quantidade (litros)', { exact: false }), { target: { value: '2000' } });
+      fireEvent.change(screen.getByLabelText('Preço por litro (R$)', { exact: false }), { target: { value: '5' } });
+
+      expect(await screen.findByText('9.550 L')).toBeInTheDocument(); // novo estoque
+      expect(screen.getByText(/R\$\s*10\.000,00/)).toBeInTheDocument(); // valor total (2000 * 5)
+    });
+
+    it('impede o envio quando a entrada excede a capacidade e explica o motivo', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 9500, capacityLiters: 10000 }));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Receber diesel/i }));
+      await screen.findByRole('heading', { name: 'Receber diesel' });
+
+      fireEvent.change(screen.getByLabelText('Quantidade (litros)', { exact: false }), { target: { value: '600' } });
+      fireEvent.change(screen.getByLabelText('Preço por litro (R$)', { exact: false }), { target: { value: '5' } });
+
+      expect(await screen.findByText(/excede a capacidade do tanque em 100 L/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Registrar entrada' })).toBeDisabled();
+      expect(registerFuelTankReceiptMock).not.toHaveBeenCalled();
+    });
+
+    it('registra a entrada com sucesso e atualiza saldo/historico', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550, capacityLiters: 15000 }));
+      registerFuelTankReceiptMock.mockResolvedValue({
+        tank: buildTank({ currentStockLiters: 9550, capacityLiters: 15000 }),
+        movement: buildMovement({ id: 'mov-2', type: 'RECEIPT', quantityLiters: 2000 }),
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Receber diesel/i }));
+      await screen.findByRole('heading', { name: 'Receber diesel' });
+
+      fireEvent.change(screen.getByLabelText('Quantidade (litros)', { exact: false }), { target: { value: '2000' } });
+      fireEvent.change(screen.getByLabelText('Preço por litro (R$)', { exact: false }), { target: { value: '5' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Registrar entrada' }));
+
+      await waitFor(() =>
+        expect(registerFuelTankReceiptMock).toHaveBeenCalledWith('tank-1', expect.objectContaining({ quantityLiters: 2000, pricePerLiter: 5 })),
+      );
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Receber diesel' })).not.toBeInTheDocument());
+    });
+
+    it('mostra erro da API e mantem o formulario aberto para correcao', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550, capacityLiters: 15000 }));
+      registerFuelTankReceiptMock.mockRejectedValue(new Error('falha de rede'));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Receber diesel/i }));
+      await screen.findByRole('heading', { name: 'Receber diesel' });
+
+      fireEvent.change(screen.getByLabelText('Quantidade (litros)', { exact: false }), { target: { value: '2000' } });
+      fireEvent.change(screen.getByLabelText('Preço por litro (R$)', { exact: false }), { target: { value: '5' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Registrar entrada' }));
+
+      await waitFor(() => expect(registerFuelTankReceiptMock).toHaveBeenCalled());
+      expect(screen.getByRole('heading', { name: 'Receber diesel' })).toBeInTheDocument(); // continua aberto
+    });
   });
 });
