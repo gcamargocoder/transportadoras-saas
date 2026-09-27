@@ -13,14 +13,18 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { TenantContext } from '../../tenants/context/tenant-context';
 import { RequireModule } from '../../tenants/decorators/require-module.decorator';
 import { FUEL_SUPPLY_READ_ROLES, FUEL_SUPPLY_WRITE_ROLES } from '../../fuel-supplies/constants/fuel-supply-roles.constants';
+import { CreateFuelTankInventoryCheckDto } from '../dto/create-fuel-tank-inventory-check.dto';
 import { CreateFuelTankReceiptDto } from '../dto/create-fuel-tank-receipt.dto';
 import { CreateFuelTankDto } from '../dto/create-fuel-tank.dto';
+import { FindFuelTankInventoryChecksQueryDto } from '../dto/find-fuel-tank-inventory-checks-query.dto';
 import { FindFuelTankMovementsQueryDto } from '../dto/find-fuel-tank-movements-query.dto';
 import { FindFuelTanksQueryDto } from '../dto/find-fuel-tanks-query.dto';
 import { UpdateFuelTankDto } from '../dto/update-fuel-tank.dto';
 import { UpdateFuelTankStatusDto } from '../dto/update-fuel-tank-status.dto';
 import { FuelTankBalanceEntity } from '../entities/fuel-tank-balance.entity';
+import { FuelTankInventoryCheckResultEntity } from '../entities/fuel-tank-inventory-check-result.entity';
 import { FuelTankReceiptResultEntity } from '../entities/fuel-tank-receipt-result.entity';
+import { PaginatedFuelTankInventoryChecksEntity } from '../entities/paginated-fuel-tank-inventory-checks.entity';
 import { PaginatedFuelTankMovementsEntity } from '../entities/paginated-fuel-tank-movements.entity';
 import { PaginatedFuelTanksEntity } from '../entities/paginated-fuel-tanks.entity';
 import { FuelTankEntity } from '../entities/fuel-tank.entity';
@@ -141,6 +145,44 @@ export class FuelTanksController {
     @Body() dto: CreateFuelTankReceiptDto,
   ): Promise<FuelTankReceiptResultEntity> {
     return this.fuelTanksService.registerReceipt(
+      this.tenantContext.requireTenantId(),
+      id,
+      dto,
+      { userId: this.tenantContext.requireUserId() },
+      this.tenantContext.requestMetadata,
+    );
+  }
+
+  @Get(':id/inventories')
+  @Roles(...FUEL_SUPPLY_READ_ROLES)
+  @ApiOperation({ summary: 'Historico de conferencias fisicas do tanque (paginado).' })
+  @ApiOkResponse({ type: PaginatedFuelTankInventoryChecksEntity })
+  @ApiNotFoundResponse({ description: 'Tanque nao encontrado nesta empresa.' })
+  getInventoryChecks(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: FindFuelTankInventoryChecksQueryDto,
+  ): Promise<PaginatedFuelTankInventoryChecksEntity> {
+    return this.fuelTanksService.getInventoryChecks(this.tenantContext.requireTenantId(), id, query);
+  }
+
+  @Post(':id/inventories')
+  @Roles(...FUEL_SUPPLY_WRITE_ROLES)
+  @ApiOperation({
+    summary:
+      'Registra uma conferencia fisica do tanque (estoque teorico x medido). O estoque teorico e ' +
+      'sempre lido no servidor (nunca aceito do cliente). Sem divergencia, nenhuma movimentacao e ' +
+      'criada. Com divergencia, so cria o ADJUSTMENT quando applyAdjustment=true (decisao explicita).',
+  })
+  @ApiCreatedResponse({ type: FuelTankInventoryCheckResultEntity })
+  @ApiNotFoundResponse({ description: 'Tanque nao encontrado nesta empresa.' })
+  @ApiConflictResponse({
+    description: 'Medicao fisica acima da capacidade do tanque, tanque inativo, ou ajuste deixaria o saldo negativo.',
+  })
+  registerInventoryCheck(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateFuelTankInventoryCheckDto,
+  ): Promise<FuelTankInventoryCheckResultEntity> {
+    return this.fuelTanksService.registerInventoryCheck(
       this.tenantContext.requireTenantId(),
       id,
       dto,

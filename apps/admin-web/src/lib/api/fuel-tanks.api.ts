@@ -1,5 +1,12 @@
 import type { Paginated, PaginationParams } from '../../types/api';
-import type { FuelTankBalanceEntity, FuelTankEntity, FuelTankMovementEntity, FuelTankReceiptResultEntity } from '../../types/entities';
+import type {
+  FuelTankBalanceEntity,
+  FuelTankEntity,
+  FuelTankInventoryCheckEntity,
+  FuelTankInventoryCheckResultEntity,
+  FuelTankMovementEntity,
+  FuelTankReceiptResultEntity,
+} from '../../types/entities';
 import type { FuelTankMovementType, FuelType } from '../../types/enums';
 import { api } from './http';
 
@@ -72,4 +79,18 @@ export interface CreateFuelTankReceiptPayload {
 
 export function registerFuelTankReceipt(id: string, payload: CreateFuelTankReceiptPayload) {
   return api.post<FuelTankReceiptResultEntity>(`/fuel-tanks/${id}/receipts`, payload);
+}
+
+export interface CreateFuelTankInventoryCheckPayload {
+  measuredStockLiters: number;
+  applyAdjustment: boolean;
+  notes?: string | undefined;
+}
+
+export function registerFuelTankInventoryCheck(id: string, payload: CreateFuelTankInventoryCheckPayload) {
+  return api.post<FuelTankInventoryCheckResultEntity>(`/fuel-tanks/${id}/inventories`, payload);
+}
+
+export function getFuelTankInventoryChecks(id: string, query: PaginationParams = {}, signal?: AbortSignal) {
+  return api.get<Paginated<FuelTankInventoryCheckEntity>>(`/fuel-tanks/${id}/inventories`, query, signal);
 }

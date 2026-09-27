@@ -5,6 +5,7 @@ import {
   assertTankActiveForMovement,
   assertTankBalanceNotNegative,
   assertTankBalanceWithinCapacity,
+  computeDivergencePercent,
   computeIsLowStock,
   computeOccupancyPercent,
 } from './fuel-tank-stock.util';
@@ -82,5 +83,23 @@ describe('assertTankActiveForMovement', () => {
 
   it('lanca ConflictException quando o tanque esta INACTIVE', () => {
     expect(() => assertTankActiveForMovement(FuelTankStatus.INACTIVE, 'Tanque A')).toThrow(ConflictException);
+  });
+});
+
+describe('computeDivergencePercent (Fase 4)', () => {
+  it('divergencia negativa (fisico < teorico)', () => {
+    expect(computeDivergencePercent(7550, -70)).toBeCloseTo(-0.9, 5);
+  });
+
+  it('divergencia positiva (fisico > teorico)', () => {
+    expect(computeDivergencePercent(7550, 70)).toBeCloseTo(0.9, 5);
+  });
+
+  it('divergencia zero', () => {
+    expect(computeDivergencePercent(7550, 0)).toBe(0);
+  });
+
+  it('retorna null quando o teorico e 0 (divisao indefinida, nunca inventada)', () => {
+    expect(computeDivergencePercent(0, 50)).toBeNull();
   });
 });

@@ -327,6 +327,18 @@ export class FuelSuppliesService {
       await assertAttachmentExists(this.prisma, tenantId, dto.attachmentId);
     }
 
+    // Gestao de Combustivel, Fase 4 -- um abastecimento INTERNO ja baixou o
+    // tanque com os litros originais (FuelTankMovement.INTERNAL_FUELING,
+    // Fase 3). Editar liters aqui deixaria o ledger e o FuelSupply
+    // divergentes sem nenhuma movimentacao compensatoria -- fora do escopo
+    // desta fase (so cancelamento/exclusao ganhou estorno, ver remove()
+    // abaixo). Para corrigir a quantidade, cancele e registre novamente.
+    if (before.fuelTankId && dto.liters !== undefined && dto.liters !== (toNumberOrNull(before.liters) ?? 0)) {
+      throw new ConflictException(
+        'Nao e possivel alterar os litros de um abastecimento interno (vinculado a um tanque proprio). Cancele o abastecimento e registre novamente.',
+      );
+    }
+
     const liters = dto.liters ?? toNumberOrNull(before.liters) ?? 0;
     const pricePerLiter = dto.pricePerLiter ?? toNumberOrNull(before.pricePerLiter) ?? 0;
     const totalAmount = computeTotalAmount(liters, pricePerLiter);
@@ -391,7 +403,27 @@ export class FuelSuppliesService {
   ): Promise<void> {
     const before = await this.findOwnedOrThrow(tenantId, id);
 
-    await this.prisma.fuelSupply.delete({ where: { id } });
+    if (before.fuelTankId) {
+      // Gestao de Combustivel, Fase 4, secao 13 -- excluir um abastecimento
+      // INTERNO devolve os litros ao tanque via um ADJUSTMENT compensatorio
+      // (FuelTanksService.reverseInternalFueling, mesmo applyMovement das
+      // Fases 1-3), na MESMA transacao da exclusao. O INTERNAL_FUELING
+      // original NUNCA e apagado/editado -- so perde o vinculo com o
+      // FuelSupply (fuelSupplyId -> null via onDelete: SetNull no schema),
+      // permanecendo no ledger exatamente como aconteceu. Se o tanque
+      // estiver inativo ou sem capacidade para receber de volta, a
+      // exclusao inteira e rejeitada (nunca deixa o FuelSupply sumir com o
+      // tanque inconsistente) -- limitacao aceitavel e documentada.
+      const litersToRestore = toNumberOrNull(before.liters) ?? 0;
+      await runSerializable(this.prisma, async (tx) => {
+        await this.fuelTanksService.reverseInternalFueling(tx, tenantId, before.fuelTankId!, litersToRestore, actor, {
+          notes: `Estorno do abastecimento interno cancelado (FuelSupply ${before.id}).`,
+        });
+        await tx.fuelSupply.delete({ where: { id } });
+      });
+    } else {
+      await this.prisma.fuelSupply.delete({ where: { id } });
+    }
 
     await this.audit.log({
       tenantId,
@@ -409,6 +441,18 @@ export class FuelSuppliesService {
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
+    if (before.fuelTankId) {
+      await this.audit.log({
+        tenantId,
+        userId: actor.userId,
+        action: 'fuel_tank.internal_fueling_reversed',
+        entityName: 'FuelTank',
+        entityId: before.fuelTankId,
+        newValue: toJsonSafe({ fuelSupplyId: before.id, litersRestored: toNumberOrNull(before.liters) }),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      });
+    }
   }
 
   // GET /vehicles/:id/fuel-history -- items = ultimos N (limit); os totais/

@@ -4226,6 +4226,27 @@ export interface FuelTankReceiptResultEntity {
   movement: FuelTankMovementEntity;
 }
 
+// Gestao de Combustivel, Fase 4 -- conferencia fisica do tanque.
+export interface FuelTankInventoryCheckEntity {
+  id: string;
+  tankId: string;
+  checkedAt: string;
+  theoreticalStockLiters: number;
+  measuredStockLiters: number;
+  divergenceLiters: number;
+  divergencePercent: number | null;
+  adjusted: boolean;
+  adjustmentMovementId: string | null;
+  notes: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface FuelTankInventoryCheckResultEntity {
+  tank: FuelTankEntity;
+  check: FuelTankInventoryCheckEntity;
+}
+
 export interface FuelTankBalanceEntity {
   tankId: string;
   currentStockLiters: number;

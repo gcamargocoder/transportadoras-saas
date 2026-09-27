@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { FuelTank, FuelTankMovement, FuelTankMovementType, FuelTankStatus, Prisma } from '@prisma/client';
 import { AuditService } from '../../audit/services/audit.service';
 import { RequestMetadata } from '../../auth/utils/request-metadata.util';
@@ -10,17 +10,22 @@ import { computeTotalAmount } from '../../common/utils/fuel-consumption.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { runSerializable } from '../../tenants/utils/plan-limit.util';
+import { CreateFuelTankInventoryCheckDto } from '../dto/create-fuel-tank-inventory-check.dto';
 import { CreateFuelTankReceiptDto } from '../dto/create-fuel-tank-receipt.dto';
 import { CreateFuelTankDto } from '../dto/create-fuel-tank.dto';
+import { FindFuelTankInventoryChecksQueryDto } from '../dto/find-fuel-tank-inventory-checks-query.dto';
 import { FindFuelTankMovementsQueryDto } from '../dto/find-fuel-tank-movements-query.dto';
 import { FindFuelTanksQueryDto } from '../dto/find-fuel-tanks-query.dto';
 import { UpdateFuelTankDto } from '../dto/update-fuel-tank.dto';
 import { UpdateFuelTankStatusDto } from '../dto/update-fuel-tank-status.dto';
 import { FuelTankBalanceEntity } from '../entities/fuel-tank-balance.entity';
+import { FuelTankInventoryCheckResultEntity } from '../entities/fuel-tank-inventory-check-result.entity';
 import { FuelTankReceiptResultEntity } from '../entities/fuel-tank-receipt-result.entity';
+import { PaginatedFuelTankInventoryChecksEntity } from '../entities/paginated-fuel-tank-inventory-checks.entity';
 import { PaginatedFuelTankMovementsEntity } from '../entities/paginated-fuel-tank-movements.entity';
 import { PaginatedFuelTanksEntity } from '../entities/paginated-fuel-tanks.entity';
 import { FuelTankEntity } from '../entities/fuel-tank.entity';
+import { toFuelTankInventoryCheckEntity } from '../mappers/fuel-tank-inventory-check.mapper';
 import { MOVEMENT_INCLUDE, toFuelTankMovementEntity } from '../mappers/fuel-tank-movement.mapper';
 import { toFuelTankBalanceEntity, toFuelTankEntity } from '../mappers/fuel-tank.mapper';
 import {
@@ -333,6 +338,136 @@ export class FuelTanksService {
     extra: { fuelSupplyId: string; vehicleId?: string | undefined; driverId?: string | undefined; tripId?: string | undefined },
   ): Promise<{ tank: FuelTank; movement: FuelTankMovement }> {
     return this.applyMovement(tx, tenantId, tankId, FuelTankMovementType.INTERNAL_FUELING, quantityLiters, actor, extra);
+  }
+
+  // Fase 4 -- estorno de um abastecimento interno cancelado/excluido (secao
+  // 13). Reaproveita applyMovement como ADJUSTMENT positivo (devolve os
+  // litros ao tanque); NUNCA reutiliza o fuelSupplyId do INTERNAL_FUELING
+  // original -- essa FK e 1:1 com ele, que permanece intacto (so perde o
+  // vinculo via onDelete: SetNull quando o FuelSupply e excluido). Chamado
+  // por FuelSuppliesService.remove() DENTRO da mesma transacao da exclusao:
+  // se o tanque estiver inativo ou sem capacidade para receber de volta, a
+  // exclusao inteira e revertida -- nunca deixa o FuelSupply sumir com o
+  // tanque inconsistente.
+  async reverseInternalFueling(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    tankId: string,
+    quantityLiters: number,
+    actor: AuditActor,
+    extra: { notes: string },
+  ): Promise<{ tank: FuelTank; movement: FuelTankMovement }> {
+    return this.applyMovement(tx, tenantId, tankId, FuelTankMovementType.ADJUSTMENT, quantityLiters, actor, extra);
+  }
+
+  // Fase 4 -- conferencia fisica do tanque (estoque teorico -> medicao
+  // fisica -> divergencia -> ajuste opcional). theoreticalStockLiters e
+  // SEMPRE lido de FuelTank.currentStockLiters DENTRO da mesma transacao
+  // Serializable que eventualmente aplica o ADJUSTMENT (nunca numa leitura
+  // separada antes dela) -- e assim que se evita basear um ajuste num saldo
+  // obsoleto quando ha um abastecimento/recebimento concorrente (secao 14).
+  // Sem divergencia, ou quando o usuario opta por so registrar
+  // (applyAdjustment=false), nenhum ADJUSTMENT e criado (secao 4/9).
+  async registerInventoryCheck(
+    tenantId: string,
+    id: string,
+    dto: CreateFuelTankInventoryCheckDto,
+    actor: AuditActor,
+    metadata: RequestMetadata,
+  ): Promise<FuelTankInventoryCheckResultEntity> {
+    const { tank, check } = await runSerializable(this.prisma, async (tx) => {
+      const tankRow = await tx.fuelTank.findFirst({ where: { id, tenantId } });
+      if (!tankRow) {
+        throw new NotFoundException('Tanque nao encontrado nesta empresa.');
+      }
+      const capacityLiters = toNumberOrNull(tankRow.capacityLiters) ?? 0;
+      if (dto.measuredStockLiters > capacityLiters) {
+        throw new ConflictException(
+          `A medicao fisica (${dto.measuredStockLiters} L) excede a capacidade do tanque "${tankRow.name}" (${capacityLiters} L).`,
+        );
+      }
+
+      const theoreticalStockLiters = toNumberOrNull(tankRow.currentStockLiters) ?? 0;
+      // Arredondado a 3 casas (mesma precisao de FuelTank.currentStockLiters)
+      // para nunca congelar um artefato de ponto flutuante na divergencia.
+      const divergenceLiters = Math.round((dto.measuredStockLiters - theoreticalStockLiters) * 1000) / 1000;
+      const willAdjust = divergenceLiters !== 0 && dto.applyAdjustment;
+
+      // Secao 7 -- "nenhum ajuste silencioso": so exige motivo quando um
+      // ADJUSTMENT sera de fato criado (nao no DTO, porque a divergencia so
+      // e conhecida aqui, com o teorico real do servidor).
+      if (willAdjust && !dto.notes) {
+        throw new BadRequestException('notes (motivo) e obrigatorio ao confirmar um ajuste com divergencia.');
+      }
+
+      const adjustment = willAdjust
+        ? await this.applyMovement(tx, tenantId, id, FuelTankMovementType.ADJUSTMENT, divergenceLiters, actor, {
+            notes: dto.notes,
+          })
+        : null;
+
+      const createdCheck = await tx.fuelTankInventoryCheck.create({
+        data: {
+          tenantId,
+          tankId: id,
+          theoreticalStockLiters,
+          measuredStockLiters: dto.measuredStockLiters,
+          divergenceLiters,
+          adjusted: adjustment !== null,
+          createdBy: actor.userId,
+          ...compact({ notes: dto.notes, adjustmentMovementId: adjustment?.movement.id }),
+        },
+      });
+
+      return { tank: adjustment?.tank ?? tankRow, check: createdCheck };
+    });
+
+    await this.audit.log({
+      tenantId,
+      userId: actor.userId,
+      action: 'fuel_tank.inventory_checked',
+      entityName: 'FuelTank',
+      entityId: id,
+      newValue: toJsonSafe({
+        theoreticalStockLiters: check.theoreticalStockLiters,
+        measuredStockLiters: check.measuredStockLiters,
+        divergenceLiters: check.divergenceLiters,
+        adjusted: check.adjusted,
+        adjustmentMovementId: check.adjustmentMovementId,
+      }),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    const result = new FuelTankInventoryCheckResultEntity();
+    result.tank = toFuelTankEntity(tank);
+    result.check = toFuelTankInventoryCheckEntity(check);
+    return result;
+  }
+
+  async getInventoryChecks(
+    tenantId: string,
+    id: string,
+    query: FindFuelTankInventoryChecksQueryDto,
+  ): Promise<PaginatedFuelTankInventoryChecksEntity> {
+    await this.findOwnedOrThrow(tenantId, id);
+
+    const where: Prisma.FuelTankInventoryCheckWhereInput = { tenantId, tankId: id };
+
+    const [items, total] = await Promise.all([
+      this.prisma.fuelTankInventoryCheck.findMany({
+        where,
+        orderBy: { checkedAt: 'desc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.fuelTankInventoryCheck.count({ where }),
+    ]);
+
+    const result = new PaginatedFuelTankInventoryChecksEntity();
+    result.items = items.map(toFuelTankInventoryCheckEntity);
+    result.meta = buildPaginationMeta(total, query.page, query.pageSize);
+    return result;
   }
 
   // Motor generico de movimentacao -- unico ponto que le e grava o saldo do

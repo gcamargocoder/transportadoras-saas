@@ -10,6 +10,8 @@ const getFuelTankMock = vi.fn();
 const getFuelTankMovementsMock = vi.fn();
 const updateFuelTankStatusMock = vi.fn();
 const registerFuelTankReceiptMock = vi.fn();
+const registerFuelTankInventoryCheckMock = vi.fn();
+const getFuelTankInventoryChecksMock = vi.fn();
 const listFuelStationsMock = vi.fn();
 const useAuthMock = vi.fn();
 const pushMock = vi.fn();
@@ -20,6 +22,8 @@ vi.mock('../../../../lib/api/fuel-tanks.api', () => ({
   updateFuelTankStatus: (...args: unknown[]) => updateFuelTankStatusMock(...args),
   updateFuelTank: vi.fn(),
   registerFuelTankReceipt: (...args: unknown[]) => registerFuelTankReceiptMock(...args),
+  registerFuelTankInventoryCheck: (...args: unknown[]) => registerFuelTankInventoryCheckMock(...args),
+  getFuelTankInventoryChecks: (...args: unknown[]) => getFuelTankInventoryChecksMock(...args),
 }));
 
 vi.mock('../../../../lib/api/fuel.api', () => ({
@@ -100,11 +104,14 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     getFuelTankMovementsMock.mockReset();
     updateFuelTankStatusMock.mockReset();
     registerFuelTankReceiptMock.mockReset();
+    registerFuelTankInventoryCheckMock.mockReset();
+    getFuelTankInventoryChecksMock.mockReset();
     listFuelStationsMock.mockReset();
     useAuthMock.mockReset();
     pushMock.mockReset();
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN' } });
     getFuelTankMovementsMock.mockResolvedValue({ items: [buildMovement()], meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 } });
+    getFuelTankInventoryChecksMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20, totalPages: 0 } });
     listFuelStationsMock.mockResolvedValue({ items: [{ id: 'station-1', name: 'Distribuidora Raizen' }], meta: { total: 1, page: 1, pageSize: 100, totalPages: 1 } });
   });
 
@@ -241,6 +248,119 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
 
       await waitFor(() => expect(registerFuelTankReceiptMock).toHaveBeenCalled());
       expect(screen.getByRole('heading', { name: 'Receber diesel' })).toBeInTheDocument(); // continua aberto
+    });
+  });
+
+  describe('Conferir estoque (inventario, Fase 4)', () => {
+    it('sem divergencia: mostra um unico botao e registra applyAdjustment=false', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550 }));
+      registerFuelTankInventoryCheckMock.mockResolvedValue({
+        tank: buildTank({ currentStockLiters: 7550 }),
+        check: { id: 'chk-1', tankId: 'tank-1', checkedAt: '2026-09-01T08:00:00.000Z', theoreticalStockLiters: 7550, measuredStockLiters: 7550, divergenceLiters: 0, divergencePercent: 0, adjusted: false, adjustmentMovementId: null, notes: null, createdBy: 'u1', createdAt: '2026-09-01T08:00:00.000Z' },
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Conferir estoque/i }));
+      await screen.findByRole('heading', { name: 'Conferir estoque' });
+
+      fireEvent.change(screen.getByLabelText('Medição física (litros)', { exact: false }), { target: { value: '7550' } });
+
+      expect(await screen.findByText('Estoque conferido -- sem divergência.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Confirmar ajuste' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Registrar sem ajustar' })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Registrar conferência' }));
+
+      await waitFor(() =>
+        expect(registerFuelTankInventoryCheckMock).toHaveBeenCalledWith('tank-1', expect.objectContaining({ measuredStockLiters: 7550, applyAdjustment: false })),
+      );
+    });
+
+    it('com divergencia: exige motivo para confirmar o ajuste', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550 }));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Conferir estoque/i }));
+      await screen.findByRole('heading', { name: 'Conferir estoque' });
+
+      fireEvent.change(screen.getByLabelText('Medição física (litros)', { exact: false }), { target: { value: '7480' } });
+      expect(await screen.findByText(/-70/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar ajuste' }));
+
+      expect(await screen.findByText('Informe o motivo da divergência para confirmar o ajuste.')).toBeInTheDocument();
+      expect(registerFuelTankInventoryCheckMock).not.toHaveBeenCalled();
+    });
+
+    it('com divergencia e motivo: confirma o ajuste com applyAdjustment=true', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550 }));
+      registerFuelTankInventoryCheckMock.mockResolvedValue({
+        tank: buildTank({ currentStockLiters: 7480 }),
+        check: { id: 'chk-2', tankId: 'tank-1', checkedAt: '2026-09-01T08:00:00.000Z', theoreticalStockLiters: 7550, measuredStockLiters: 7480, divergenceLiters: -70, divergencePercent: -0.9, adjusted: true, adjustmentMovementId: 'mov-2', notes: 'Vazamento', createdBy: 'u1', createdAt: '2026-09-01T08:00:00.000Z' },
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Conferir estoque/i }));
+      await screen.findByRole('heading', { name: 'Conferir estoque' });
+
+      fireEvent.change(screen.getByLabelText('Medição física (litros)', { exact: false }), { target: { value: '7480' } });
+      await screen.findByText(/-70/);
+      fireEvent.change(screen.getByLabelText('Motivo da divergência', { exact: false }), { target: { value: 'Vazamento' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar ajuste' }));
+
+      await waitFor(() =>
+        expect(registerFuelTankInventoryCheckMock).toHaveBeenCalledWith(
+          'tank-1',
+          expect.objectContaining({ measuredStockLiters: 7480, applyAdjustment: true, notes: 'Vazamento' }),
+        ),
+      );
+    });
+
+    it('com divergencia: "Registrar sem ajustar" envia applyAdjustment=false mesmo sem motivo', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank({ currentStockLiters: 7550 }));
+      registerFuelTankInventoryCheckMock.mockResolvedValue({
+        tank: buildTank({ currentStockLiters: 7550 }),
+        check: { id: 'chk-3', tankId: 'tank-1', checkedAt: '2026-09-01T08:00:00.000Z', theoreticalStockLiters: 7550, measuredStockLiters: 7480, divergenceLiters: -70, divergencePercent: -0.9, adjusted: false, adjustmentMovementId: null, notes: null, createdBy: 'u1', createdAt: '2026-09-01T08:00:00.000Z' },
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Conferir estoque/i }));
+      await screen.findByRole('heading', { name: 'Conferir estoque' });
+
+      fireEvent.change(screen.getByLabelText('Medição física (litros)', { exact: false }), { target: { value: '7480' } });
+      await screen.findByText(/-70/);
+      fireEvent.click(screen.getByRole('button', { name: 'Registrar sem ajustar' }));
+
+      await waitFor(() =>
+        expect(registerFuelTankInventoryCheckMock).toHaveBeenCalledWith('tank-1', expect.objectContaining({ applyAdjustment: false })),
+      );
+    });
+
+    it('mostra o historico de conferencias com divergencia e status de ajuste', async () => {
+      getFuelTankMock.mockResolvedValue(buildTank());
+      getFuelTankInventoryChecksMock.mockResolvedValue({
+        items: [
+          {
+            id: 'chk-1',
+            tankId: 'tank-1',
+            checkedAt: '2026-09-01T08:00:00.000Z',
+            theoreticalStockLiters: 7550,
+            measuredStockLiters: 7480,
+            divergenceLiters: -70,
+            divergencePercent: -0.9,
+            adjusted: true,
+            adjustmentMovementId: 'mov-2',
+            notes: 'Vazamento identificado.',
+            createdBy: 'u1',
+            createdAt: '2026-09-01T08:00:00.000Z',
+          },
+        ],
+        meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+      });
+      renderPage();
+
+      expect(await screen.findByText('Conferências de estoque')).toBeInTheDocument();
+      expect(screen.getAllByText(/Vazamento identificado\./).length).toBeGreaterThan(0);
     });
   });
 });

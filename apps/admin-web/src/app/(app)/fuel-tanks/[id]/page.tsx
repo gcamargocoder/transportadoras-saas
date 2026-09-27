@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Ban, CheckCircle2, Droplets, Pencil } from 'lucide-react';
+import { Ban, CheckCircle2, ClipboardCheck, Droplets, Pencil } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { Badge } from '../../../../components/ui/badge';
@@ -17,14 +17,20 @@ import { RadialGauge } from '../../../../components/ui/radial-gauge';
 import { StatCard } from '../../../../components/ui/stat-card';
 import { useToast } from '../../../../components/ui/toast';
 import { useAuth } from '../../../../hooks/use-auth';
+import { CheckFuelTankInventoryModal } from '../../../../features/fuel-tanks/check-fuel-tank-inventory-modal';
 import { RegisterFuelTankReceiptModal } from '../../../../features/fuel-tanks/register-fuel-tank-receipt-modal';
 import { UpdateFuelTankModal } from '../../../../features/fuel-tanks/update-fuel-tank-modal';
 import { toFriendlyMessage } from '../../../../lib/api/errors';
 import { listFuelStations } from '../../../../lib/api/fuel.api';
-import { getFuelTank, getFuelTankMovements, updateFuelTankStatus } from '../../../../lib/api/fuel-tanks.api';
+import {
+  getFuelTank,
+  getFuelTankInventoryChecks,
+  getFuelTankMovements,
+  updateFuelTankStatus,
+} from '../../../../lib/api/fuel-tanks.api';
 import { FUEL_SUPPLY_WRITE_ROLES, hasRole } from '../../../../lib/auth/roles';
 import { FUEL_TANK_MOVEMENT_TYPE_LABELS, FUEL_TYPE_LABELS } from '../../../../lib/labels';
-import type { FuelTankMovementEntity } from '../../../../types/entities';
+import type { FuelTankInventoryCheckEntity, FuelTankMovementEntity } from '../../../../types/entities';
 import { formatCurrency, formatDateTime, formatNumber } from '../../../../utils/format';
 
 const PAGE_SIZE = 20;
@@ -46,12 +52,18 @@ export default function FuelTankDetailPage(): JSX.Element {
 
   const [editOpen, setEditOpen] = useState(false);
   const [receiveOpen, setReceiveOpen] = useState(false);
+  const [checkOpen, setCheckOpen] = useState(false);
   const [movementsPage, setMovementsPage] = useState(1);
+  const [inventoryPage, setInventoryPage] = useState(1);
 
   const query = useQuery({ queryKey: ['fuel-tanks', id], queryFn: () => getFuelTank(id) });
   const movementsQuery = useQuery({
     queryKey: ['fuel-tanks', id, 'movements', movementsPage],
     queryFn: () => getFuelTankMovements(id, { page: movementsPage, pageSize: PAGE_SIZE }),
+  });
+  const inventoryChecksQuery = useQuery({
+    queryKey: ['fuel-tanks', id, 'inventories', inventoryPage],
+    queryFn: () => getFuelTankInventoryChecks(id, { page: inventoryPage, pageSize: PAGE_SIZE }),
   });
   // Mesma queryKey do EntitySelect do modal de recebimento -- compartilha o
   // cache (nenhuma requisicao extra quando o modal ja foi aberto nesta sessao).
@@ -115,6 +127,31 @@ export default function FuelTankDetailPage(): JSX.Element {
     { header: 'Observação', accessorFn: (row) => row.notes ?? '—' },
   ];
 
+  const inventoryCheckColumns: ColumnDef<FuelTankInventoryCheckEntity, unknown>[] = [
+    { header: 'Data', cell: ({ row }) => formatDateTime(row.original.checkedAt) },
+    { header: 'Teórico', cell: ({ row }) => `${formatNumber(row.original.theoreticalStockLiters)} L` },
+    { header: 'Medido', cell: ({ row }) => `${formatNumber(row.original.measuredStockLiters)} L` },
+    {
+      header: 'Divergência',
+      cell: ({ row }) => {
+        const d = row.original;
+        if (d.divergenceLiters === 0) return <span className="text-success-600">Sem divergência</span>;
+        return (
+          <span className={d.adjusted ? 'text-ink' : 'text-warning-600'}>
+            {d.divergenceLiters > 0 ? '+' : ''}
+            {formatNumber(d.divergenceLiters)} L
+            {d.divergencePercent !== null && ` (${d.divergenceLiters > 0 ? '+' : ''}${formatNumber(d.divergencePercent, 1)}%)`}
+          </span>
+        );
+      },
+    },
+    {
+      header: 'Ajustado',
+      cell: ({ row }) => (row.original.adjusted ? <Badge tone="success">Sim</Badge> : <Badge tone="neutral">Não</Badge>),
+    },
+    { header: 'Motivo', accessorFn: (row) => row.notes ?? '—' },
+  ];
+
   if (query.isLoading) return <LoadingState label="Carregando tanque" />;
   if (query.isError || !query.data) return <ErrorState onRetry={() => query.refetch()} />;
 
@@ -148,6 +185,10 @@ export default function FuelTankDetailPage(): JSX.Element {
               Receber diesel
             </Button>
           )}
+          <Button size="sm" variant="outline" onClick={() => setCheckOpen(true)}>
+            <ClipboardCheck size={14} />
+            Conferir estoque
+          </Button>
           <Button
             size="sm"
             variant={tank.status === 'ACTIVE' ? 'danger' : 'outline'}
@@ -202,8 +243,25 @@ export default function FuelTankDetailPage(): JSX.Element {
         {movementsQuery.data && <Pagination meta={movementsQuery.data.meta} onPageChange={setMovementsPage} />}
       </div>
 
+      <div className="mt-6 overflow-hidden rounded-lg border border-border bg-white">
+        <CardHeader
+          title="Conferências de estoque"
+          description="Histórico de medições físicas -- inclui conferências sem divergência e divergências ainda não ajustadas."
+        />
+        <DataTable
+          columns={inventoryCheckColumns}
+          data={inventoryChecksQuery.data?.items ?? []}
+          isLoading={inventoryChecksQuery.isLoading}
+          isError={inventoryChecksQuery.isError}
+          getRowId={(c) => c.id}
+          emptyTitle="Nenhuma conferência registrada"
+        />
+        {inventoryChecksQuery.data && <Pagination meta={inventoryChecksQuery.data.meta} onPageChange={setInventoryPage} />}
+      </div>
+
       <UpdateFuelTankModal open={editOpen} onClose={() => setEditOpen(false)} tank={tank} />
       <RegisterFuelTankReceiptModal open={receiveOpen} onClose={() => setReceiveOpen(false)} tank={tank} />
+      <CheckFuelTankInventoryModal open={checkOpen} onClose={() => setCheckOpen(false)} tank={tank} />
     </div>
   );
 }

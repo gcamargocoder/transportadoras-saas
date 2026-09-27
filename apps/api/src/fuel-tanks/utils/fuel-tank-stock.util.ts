@@ -64,3 +64,12 @@ export function assertTankActiveForMovement(status: FuelTankStatus, tankName: st
     throw new ConflictException(`O tanque "${tankName}" esta inativo e nao aceita novas movimentacoes.`);
   }
 }
+
+// Fase 4 -- divergencia percentual da conferencia fisica, calculada na
+// leitura (nunca persistida) a partir de dois valores ja congelados
+// (theoreticalStockLiters/divergenceLiters), sem segunda fonte de verdade.
+// Nulo quando o teorico e 0 (divisao indefinida, nunca inventada).
+export function computeDivergencePercent(theoreticalStockLiters: number, divergenceLiters: number): number | null {
+  if (theoreticalStockLiters === 0) return null;
+  return Math.round((divergenceLiters / theoreticalStockLiters) * 1000) / 10;
+}
