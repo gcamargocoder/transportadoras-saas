@@ -41,6 +41,16 @@ export class FuelSupplyEntity {
   @ApiProperty({ nullable: true })
   fuelStationName!: string | null;
 
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    description: 'Gestao de Combustivel, Fase 3 -- tanque proprio de origem. Preenchido = abastecimento interno.',
+  })
+  fuelTankId!: string | null;
+
+  @ApiProperty({ nullable: true })
+  fuelTankName!: string | null;
+
   @ApiProperty({ format: 'uuid', nullable: true })
   attachmentId!: string | null;
 

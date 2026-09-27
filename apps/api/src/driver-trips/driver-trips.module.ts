@@ -6,6 +6,7 @@ import { buildChecklistEvidenceMulterOptions } from '../checklists/config/checkl
 import { ChecklistsModule } from '../checklists/checklists.module';
 import { FiscalModule } from '../fiscal/fiscal.module';
 import { FuelSuppliesModule } from '../fuel-supplies/fuel-supplies.module';
+import { FuelTanksModule } from '../fuel-tanks/fuel-tanks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RoutingModule } from '../routing/routing.module';
 import { TripOperationsModule } from '../trip-operations/trip-operations.module';
@@ -36,6 +37,7 @@ import { DriverTripsService } from './services/driver-trips.service';
     TripsModule,
     TripOperationsModule,
     FuelSuppliesModule,
+    FuelTanksModule,
     RoutingModule,
     ChecklistsModule,
     FiscalModule,

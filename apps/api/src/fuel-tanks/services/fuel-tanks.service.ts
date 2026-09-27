@@ -21,7 +21,7 @@ import { FuelTankReceiptResultEntity } from '../entities/fuel-tank-receipt-resul
 import { PaginatedFuelTankMovementsEntity } from '../entities/paginated-fuel-tank-movements.entity';
 import { PaginatedFuelTanksEntity } from '../entities/paginated-fuel-tanks.entity';
 import { FuelTankEntity } from '../entities/fuel-tank.entity';
-import { toFuelTankMovementEntity } from '../mappers/fuel-tank-movement.mapper';
+import { MOVEMENT_INCLUDE, toFuelTankMovementEntity } from '../mappers/fuel-tank-movement.mapper';
 import { toFuelTankBalanceEntity, toFuelTankEntity } from '../mappers/fuel-tank.mapper';
 import {
   applyTankMovementDelta,
@@ -38,13 +38,13 @@ import {
 // Serializable de cada FuelTankMovement (applyMovement abaixo), nunca uma
 // segunda fonte de verdade -- mesmo espirito de PartsService (Fase 83).
 //
-// Unico caminho de escrita nesta fase: create() (saldo inicial na criacao
-// do tanque). RECEIPT (compra, Fase 2), INTERNAL_FUELING (abastecimento
-// interno vinculado a um FuelSupply, Fase 3) e ADJUSTMENT (divergencia de
-// inventario, Fase 4) ja existem no enum e no ledger para o modelo nascer
-// completo, mas nenhum endpoint desta fase os cria -- applyMovement() e o
-// motor generico e concorrencia-safe que essas fases futuras reaproveitarao
-// sem reescrever a logica de saldo.
+// Caminhos de escrita: create() (saldo inicial), registerReceipt() (Fase 2,
+// RECEIPT) e registerInternalFueling() (Fase 3, INTERNAL_FUELING -- chamado
+// por FuelSuppliesService DENTRO da transacao do abastecimento interno,
+// nunca isolado). ADJUSTMENT (divergencia de inventario, Fase 4) ja existe
+// no enum/ledger para o modelo nascer completo, mas nenhum endpoint ainda o
+// cria. Todos reaproveitam o MESMO applyMovement() -- motor generico e
+// concorrencia-safe, nunca reescrito por fase nenhuma.
 @Injectable()
 export class FuelTanksService {
   constructor(
@@ -90,6 +90,17 @@ export class FuelTanksService {
 
   async getBalance(tenantId: string, id: string): Promise<FuelTankBalanceEntity> {
     return toFuelTankBalanceEntity(await this.findOwnedOrThrow(tenantId, id));
+  }
+
+  // Fase 3, secao 10 -- lista enxuta (sem paginacao/filtros) para o Driver
+  // App escolher o tanque do abastecimento interno. Filtrada por tenant e
+  // status SEMPRE no backend (nunca confia em filtro do app).
+  async findAllActive(tenantId: string): Promise<FuelTankEntity[]> {
+    const tanks = await this.prisma.fuelTank.findMany({
+      where: { tenantId, status: FuelTankStatus.ACTIVE },
+      orderBy: { name: 'asc' },
+    });
+    return tanks.map(toFuelTankEntity);
   }
 
   async create(
@@ -240,6 +251,7 @@ export class FuelTanksService {
     const [items, total] = await Promise.all([
       this.prisma.fuelTankMovement.findMany({
         where,
+        include: MOVEMENT_INCLUDE,
         orderBy: { effectiveDate: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -303,6 +315,24 @@ export class FuelTanksService {
     result.tank = toFuelTankEntity(tank);
     result.movement = toFuelTankMovementEntity(movement);
     return result;
+  }
+
+  // Fase 3 -- baixa do tanque para um abastecimento interno do Driver App.
+  // Wrapper FINO sobre applyMovement (nao duplica validacao/saldo/
+  // concorrencia): FuelSuppliesService.createFromDriverApp e quem abre a
+  // transacao Serializable e chama este metodo DENTRO dela, junto da criacao
+  // do FuelSupply -- por isso `tx` vem do chamador, nunca criado aqui. Se
+  // este metodo lancar (tanque inativo/saldo insuficiente/nao encontrado), o
+  // FuelSupply criado na mesma transacao tambem sofre rollback.
+  async registerInternalFueling(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    tankId: string,
+    quantityLiters: number,
+    actor: AuditActor,
+    extra: { fuelSupplyId: string; vehicleId?: string | undefined; driverId?: string | undefined; tripId?: string | undefined },
+  ): Promise<{ tank: FuelTank; movement: FuelTankMovement }> {
+    return this.applyMovement(tx, tenantId, tankId, FuelTankMovementType.INTERNAL_FUELING, quantityLiters, actor, extra);
   }
 
   // Motor generico de movimentacao -- unico ponto que le e grava o saldo do

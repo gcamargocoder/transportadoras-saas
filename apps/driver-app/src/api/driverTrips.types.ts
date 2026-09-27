@@ -220,6 +220,15 @@ export interface FuelSupply {
   odometerKm: number;
 }
 
+// Gestao de Combustivel, Fase 3, secao 10 -- lista enxuta (so nome/saldo, o
+// suficiente para a tela decidir auto-selecionar ou mostrar um seletor) dos
+// tanques ACTIVE do tenant, filtrados sempre no backend.
+export interface FuelTank {
+  id: string;
+  name: string;
+  currentStockLiters: number;
+}
+
 export interface TrackingPointInput {
   deviceEventId: string;
   latitude: number;

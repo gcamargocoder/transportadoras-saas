@@ -1,12 +1,13 @@
 import * as Location from 'expo-location';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { ScreenContainer } from '../components/ScreenContainer';
 import { TextField } from '../components/TextField';
-import { FuelType } from '../api/driverTrips.types';
+import * as driverTripsApi from '../api/driverTrips.api';
+import { FuelTank, FuelType } from '../api/driverTrips.types';
 import { generateDeviceEventId } from '../storage/deviceEventId';
 import { submitOrQueue } from '../storage/syncQueue';
 import { colors } from '../theme/colors';
@@ -46,6 +47,25 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
   const [fuelLocation, setFuelLocation] = useState<FuelLocation>('TRANSPORTADORA');
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  // Gestao de Combustivel, Fase 3, secao 10 -- tanques ACTIVE do tenant.
+  // null = ainda carregando; [] = nenhum tanque disponivel (so externo).
+  const [activeTanks, setActiveTanks] = useState<FuelTank[] | null>(null);
+  const [selectedTankId, setSelectedTankId] = useState<string | null>(null);
+
+  useEffect(() => {
+    driverTripsApi
+      .getActiveFuelTanks()
+      .then((tanks) => {
+        setActiveTanks(tanks);
+        // Um unico tanque ativo: auto-seleciona, o motorista nunca precisa
+        // escolher (secao 10 do pedido, "evitar etapa desnecessaria").
+        if (tanks.length === 1) setSelectedTankId(tanks[0]!.id);
+      })
+      .catch(() => setActiveTanks([]));
+  }, []);
+
+  const isInternal = fuelLocation === 'TRANSPORTADORA';
+  const needsTankChoice = isInternal && (activeTanks?.length ?? 0) > 1;
 
   async function handleConfirm(): Promise<void> {
     const odometer = Number(odometerKm.replace(',', '.'));
@@ -53,6 +73,14 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
     const amountValue = Number(amountPaid.replace(',', '.'));
     if (!odometer || !litersValue || !amountValue) {
       setFeedback('Informe KM, litros e valor pago validos.');
+      return;
+    }
+    // So bloqueia quando ha uma escolha REAL e ambigua entre tanques (2+
+    // ativos). Sem tanque algum cadastrado, "Transportadora" continua
+    // funcionando exatamente como antes da Fase 3 (abastecimento externo,
+    // so sem GPS) -- nunca quebra tenants que ainda nao configuraram tanques.
+    if (needsTankChoice && !selectedTankId) {
+      setFeedback('Selecione o tanque de onde saiu o diesel.');
       return;
     }
 
@@ -69,7 +97,11 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
         liters: litersValue,
         fuelType,
         pricePerLiter: amountValue / litersValue,
-        ...compact({ latitude: position?.coords.latitude, longitude: position?.coords.longitude }),
+        ...compact({
+          latitude: position?.coords.latitude,
+          longitude: position?.coords.longitude,
+          fuelTankId: isInternal ? (selectedTankId ?? undefined) : undefined,
+        }),
       });
       setFeedback(
         result.queued
@@ -137,6 +169,23 @@ export function FuelScreen({ route, navigation }: Props): React.JSX.Element {
           </View>
         </View>
       </Card>
+
+      {needsTankChoice && (
+        <Card>
+          <Text style={{ color: colors.text, fontWeight: '700' }}>Tanque</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+            {activeTanks!.map((tank) => (
+              <View key={tank.id} style={{ width: '48%' }}>
+                <Button
+                  label={tank.name}
+                  variant={selectedTankId === tank.id ? 'primary' : 'secondary'}
+                  onPress={() => setSelectedTankId(tank.id)}
+                />
+              </View>
+            ))}
+          </View>
+        </Card>
+      )}
 
       {feedback ? <Text style={{ color: colors.textMuted }}>{feedback}</Text> : null}
       <Button label="CONFIRMAR" onPress={handleConfirm} loading={submitting} />

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Droplets, Fuel, Gauge, Pencil, Plus, Route, Trash2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Button } from '../../../components/ui/button';
 import { ConfirmDialog } from '../../../components/ui/confirm-dialog';
@@ -31,6 +32,7 @@ import { formatCurrency, formatDate, formatNumber } from '../../../utils/format'
 const PAGE_SIZE = 20;
 
 export default function FuelSuppliesPage(): JSX.Element {
+  const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -78,7 +80,24 @@ export default function FuelSuppliesPage(): JSX.Element {
       { header: 'Veículo', accessorFn: (row) => row.vehiclePlate ?? '-' },
       { header: 'Motorista', accessorFn: (row) => row.driverName ?? '-' },
       { header: 'Viagem', accessorFn: (row) => row.tripLabel ?? '—' },
-      { header: 'Posto', accessorFn: (row) => row.fuelStationName ?? '-' },
+      {
+        header: 'Origem',
+        cell: ({ row }) =>
+          row.original.fuelTankId ? (
+            <button
+              type="button"
+              className="text-brand-700 hover:underline"
+              onClick={(e) => {
+                e.stopPropagation();
+                router.push(`/fuel-tanks/${row.original.fuelTankId}`);
+              }}
+            >
+              Tanque: {row.original.fuelTankName ?? row.original.fuelTankId.slice(0, 8)}
+            </button>
+          ) : (
+            row.original.fuelStationName ?? '-'
+          ),
+      },
       { header: 'Combustível', accessorFn: (row) => FUEL_TYPE_LABELS[row.fuelType] },
       { header: 'Litros', cell: ({ row }) => `${formatNumber(row.original.liters, 1)} L` },
       { header: 'Valor', cell: ({ row }) => formatCurrency(row.original.totalAmount) },
@@ -101,7 +120,7 @@ export default function FuelSuppliesPage(): JSX.Element {
           ]
         : []),
     ],
-    [canWrite],
+    [canWrite, router],
   );
 
   return (

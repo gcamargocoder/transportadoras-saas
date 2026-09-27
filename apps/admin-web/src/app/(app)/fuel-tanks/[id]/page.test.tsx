@@ -83,8 +83,11 @@ function buildMovement(overrides: Partial<FuelTankMovementEntity> = {}): FuelTan
     fuelStationId: null,
     fuelSupplyId: null,
     vehicleId: null,
+    vehiclePlate: null,
     driverId: null,
+    driverName: null,
     tripId: null,
+    tripLabel: null,
     createdBy: 'u1',
     createdAt: '2026-09-01T08:00:00.000Z',
     ...overrides,
@@ -113,6 +116,35 @@ describe('FuelTankDetailPage (Gestão de Combustível, Fase 1)', () => {
     expect(screen.getAllByText('8.000 L').length).toBeGreaterThan(0); // estoque atual e inicial
     expect(screen.getByText('15.000 L')).toBeInTheDocument(); // capacidade
     expect(within(screen.getByRole('table')).getByText('Saldo inicial')).toBeInTheDocument();
+  });
+
+  it('mostra veiculo/motorista/viagem no historico de um abastecimento interno (Fase 3)', async () => {
+    getFuelTankMock.mockResolvedValue(buildTank());
+    getFuelTankMovementsMock.mockResolvedValue({
+      items: [
+        buildMovement({
+          id: 'mov-internal',
+          type: 'INTERNAL_FUELING',
+          quantityLiters: 300,
+          previousBalanceLiters: 8000,
+          newBalanceLiters: 7700,
+          vehicleId: 'v1',
+          vehiclePlate: 'ABC1D23',
+          driverId: 'd1',
+          driverName: 'José da Silva',
+          tripId: 't1',
+          tripLabel: 'Origem → Destino',
+        }),
+      ],
+      meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+    });
+    renderPage();
+
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('Abastecimento interno')).toBeInTheDocument();
+    expect(within(table).getByText(/ABC1D23/)).toBeInTheDocument();
+    expect(within(table).getByText(/José da Silva/)).toBeInTheDocument();
+    expect(within(table).getByText(/Origem → Destino/)).toBeInTheDocument();
   });
 
   it('mostra badge de estoque baixo quando aplicavel', async () => {

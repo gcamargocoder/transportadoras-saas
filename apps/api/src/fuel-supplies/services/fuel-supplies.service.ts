@@ -20,7 +20,9 @@ import {
 } from '../../common/utils/fuel-consumption.util';
 import { assertOdometerNotBelowVehicle, computeBumpedOdometer } from '../../common/utils/odometer.util';
 import { toJsonSafe } from '../../common/utils/to-json-safe.util';
+import { FuelTanksService } from '../../fuel-tanks/services/fuel-tanks.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { runSerializable } from '../../tenants/utils/plan-limit.util';
 import { CreateDriverFuelSupplyDto } from '../dto/create-driver-fuel-supply.dto';
 import { CreateFuelSupplyDto } from '../dto/create-fuel-supply.dto';
 import { FindFuelSuppliesQueryDto } from '../dto/find-fuel-supplies-query.dto';
@@ -48,6 +50,8 @@ const SUPPLY_INCLUDE = {
     },
   },
   fuelStation: true,
+  // Gestao de Combustivel, Fase 3 -- mesmo padrao de fuelStation acima.
+  fuelTank: true,
   creator: true,
   updater: true,
 } satisfies Prisma.FuelSupplyInclude;
@@ -57,6 +61,7 @@ export class FuelSuppliesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly fuelTanksService: FuelTanksService,
   ) {}
 
   async findAll(
@@ -208,28 +213,53 @@ export class FuelSuppliesService {
 
     const pricePerLiter = dto.pricePerLiter ?? 0;
     const totalAmount = computeTotalAmount(dto.liters, pricePerLiter);
+    const supplyData = {
+      tenantId,
+      vehicleId,
+      driverId,
+      tripId,
+      fuelType: dto.fuelType ?? FuelType.OUTRO,
+      liters: dto.liters,
+      pricePerLiter,
+      totalAmount,
+      odometerKm: dto.odometerKm,
+      supplyDate: dto.supplyDate ? new Date(dto.supplyDate) : new Date(),
+      deviceEventId: dto.deviceEventId,
+      syncedAt: new Date(),
+      createdBy: actor.userId,
+      ...compact({ latitude: dto.latitude, longitude: dto.longitude }),
+    } satisfies Prisma.FuelSupplyUncheckedCreateInput;
 
-    const supply = await this.prisma.fuelSupply.create({
-      data: {
-        tenantId,
-        vehicleId,
-        driverId,
-        tripId,
-        fuelType: dto.fuelType ?? FuelType.OUTRO,
-        liters: dto.liters,
-        pricePerLiter,
-        totalAmount,
-        odometerKm: dto.odometerKm,
-        supplyDate: dto.supplyDate ? new Date(dto.supplyDate) : new Date(),
-        deviceEventId: dto.deviceEventId,
-        syncedAt: new Date(),
-        createdBy: actor.userId,
-        ...compact({ latitude: dto.latitude, longitude: dto.longitude }),
-      },
-      include: SUPPLY_INCLUDE,
-    });
-
-    await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm);
+    let supply: FuelSupplyWithRelations;
+    if (dto.fuelTankId) {
+      // Gestao de Combustivel, Fase 3 -- abastecimento INTERNO: FuelSupply +
+      // FuelTankMovement(INTERNAL_FUELING) + baixa do tanque numa UNICA
+      // transacao Serializable (regra central da fase). Reaproveita
+      // FuelTanksService.registerInternalFueling (wrapper de applyMovement,
+      // Fase 1) -- nenhuma logica de saldo/capacidade/concorrencia duplicada
+      // aqui. Se o tanque estiver inativo, sem saldo, ou nao existir, o
+      // metodo lanca e o FuelSupply criado acima sofre rollback junto.
+      const fuelTankId = dto.fuelTankId;
+      supply = await runSerializable(this.prisma, async (tx) => {
+        const created = await tx.fuelSupply.create({
+          data: { ...supplyData, fuelTankId },
+          include: SUPPLY_INCLUDE,
+        });
+        await this.fuelTanksService.registerInternalFueling(tx, tenantId, fuelTankId, dto.liters, actor, {
+          fuelSupplyId: created.id,
+          vehicleId,
+          driverId,
+          tripId,
+        });
+        await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm, tx);
+        return created;
+      });
+    } else {
+      // Abastecimento EXTERNO -- fluxo inalterado desde a Fase 25, nunca
+      // toca em FuelTank.
+      supply = await this.prisma.fuelSupply.create({ data: supplyData, include: SUPPLY_INCLUDE });
+      await this.bumpVehicleOdometerIfGreater(vehicleId, dto.odometerKm, vehicle.odometerKm);
+    }
 
     await this.audit.log({
       tenantId,
@@ -243,11 +273,24 @@ export class FuelSuppliesService {
         tripId: supply.tripId,
         liters: supply.liters,
         totalAmount: supply.totalAmount,
+        fuelTankId: supply.fuelTankId,
         source: 'driver-app',
       }),
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
+    if (supply.fuelTankId) {
+      await this.audit.log({
+        tenantId,
+        userId: actor.userId,
+        action: 'fuel_tank.internal_fueling_registered',
+        entityName: 'FuelTank',
+        entityId: supply.fuelTankId,
+        newValue: toJsonSafe({ fuelSupplyId: supply.id, liters: supply.liters, vehicleId, driverId, tripId }),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      });
+    }
 
     return toFuelSupplyEntity(supply);
   }
@@ -552,10 +595,11 @@ export class FuelSuppliesService {
     vehicleId: string,
     odometerKm: number,
     currentOdometerKm: Prisma.Decimal | null,
+    tx?: Prisma.TransactionClient,
   ): Promise<void> {
     const bumped = computeBumpedOdometer(toNumberOrNull(currentOdometerKm), odometerKm);
     if (bumped !== null) {
-      await this.prisma.vehicle.update({ where: { id: vehicleId }, data: { odometerKm: bumped } });
+      await (tx ?? this.prisma).vehicle.update({ where: { id: vehicleId }, data: { odometerKm: bumped } });
     }
   }
 

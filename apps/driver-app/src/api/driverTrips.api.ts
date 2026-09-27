@@ -11,6 +11,7 @@ import {
   DriverShift,
   DriverTrip,
   FuelSupply,
+  FuelTank,
   FuelType,
   NearbyTollPlaza,
   OccurrenceEvidence,
@@ -31,6 +32,13 @@ import {
 
 export function getConfig(): Promise<DriverConfig> {
   return apiRequest<DriverConfig>('/driver/config');
+}
+
+// Gestao de Combustivel, Fase 3, secao 10 -- tanques ACTIVE do tenant para a
+// tela de abastecimento decidir: 0 = so externo, 1 = auto-seleciona, 2+ =
+// motorista escolhe.
+export function getActiveFuelTanks(): Promise<FuelTank[]> {
+  return apiRequest<FuelTank[]>('/driver/fuel-tanks');
 }
 
 export function getActiveTrip(): Promise<DriverActiveTrip | null> {
@@ -198,6 +206,10 @@ export function createFuelSupply(
     pricePerLiter?: number;
     latitude?: number;
     longitude?: number;
+    // Gestao de Combustivel, Fase 3 -- tanque proprio de onde o diesel saiu.
+    // Presente = abastecimento interno (baixa o tanque); ausente = externo
+    // (comportamento inalterado desde a Fase 25).
+    fuelTankId?: string;
   },
 ): Promise<FuelSupply> {
   return apiRequest<FuelSupply>(`/driver/trips/${tripId}/fuel-supplies`, {

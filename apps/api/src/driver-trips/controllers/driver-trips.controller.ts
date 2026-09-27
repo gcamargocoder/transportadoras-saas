@@ -59,6 +59,8 @@ import { TripStopsService } from '../../trip-operations/services/trip-stops.serv
 import { CreateDriverFuelSupplyDto } from '../../fuel-supplies/dto/create-driver-fuel-supply.dto';
 import { FuelSupplyEntity } from '../../fuel-supplies/entities/fuel-supply.entity';
 import { FuelSuppliesService } from '../../fuel-supplies/services/fuel-supplies.service';
+import { FuelTankEntity } from '../../fuel-tanks/entities/fuel-tank.entity';
+import { FuelTanksService } from '../../fuel-tanks/services/fuel-tanks.service';
 import { SubmitDeliveryProofDto } from '../../fiscal/dto/submit-delivery-proof.dto';
 import { SubmitOccurrenceEvidenceDto } from '../../fiscal/dto/submit-occurrence-evidence.dto';
 import { FiscalDocumentEntity } from '../../fiscal/entities/fiscal-document.entity';
@@ -108,6 +110,7 @@ export class DriverTripsController {
     private readonly tripEtaService: TripEtaService,
     private readonly driverShiftsService: DriverShiftsService,
     private readonly fuelSuppliesService: FuelSuppliesService,
+    private readonly fuelTanksService: FuelTanksService,
     private readonly routingService: RoutingService,
     private readonly checklistTemplatesService: ChecklistTemplatesService,
     private readonly checklistExecutionsService: ChecklistExecutionsService,
@@ -586,11 +589,22 @@ export class DriverTripsController {
     );
   }
 
+  // Gestao de Combustivel, Fase 3, secao 10 -- lista enxuta (so tanques
+  // ACTIVE do tenant) para a tela de abastecimento decidir: 0 = so externo
+  // disponivel, 1 = auto-seleciona sem perguntar, 2+ = motorista escolhe.
+  @Get('fuel-tanks')
+  @ApiOperation({ summary: 'Lista tanques ativos disponiveis para abastecimento interno.' })
+  @ApiOkResponse({ type: FuelTankEntity, isArray: true })
+  getFuelTanks(): Promise<FuelTankEntity[]> {
+    return this.fuelTanksService.findAllActive(this.tenantContext.requireTenantId());
+  }
+
   @Post('trips/:id/fuel-supplies')
   @ApiOperation({
     summary:
       'Registra um abastecimento (so KM + litros na tela do app). vehicleId/driverId/data/' +
-      'localizacao/posto sempre derivados automaticamente -- idempotente por deviceEventId.',
+      'localizacao/posto sempre derivados automaticamente -- idempotente por deviceEventId. ' +
+      'fuelTankId presente = abastecimento interno (baixa o tanque na mesma transacao).',
   })
   @ApiOkResponse({ type: FuelSupplyEntity })
   async createFuelSupply(

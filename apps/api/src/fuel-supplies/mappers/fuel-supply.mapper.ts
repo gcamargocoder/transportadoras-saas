@@ -1,4 +1,4 @@
-import { Driver, FuelStation, FuelSupply, UserAccount, Vehicle } from '@prisma/client';
+import { Driver, FuelStation, FuelSupply, FuelTank, UserAccount, Vehicle } from '@prisma/client';
 import { toNumberOrNull } from '../../common/utils/decimal.util';
 import { FuelSupplyEntity } from '../entities/fuel-supply.entity';
 
@@ -10,6 +10,9 @@ export type FuelSupplyWithRelations = FuelSupply & {
   // supply.driver diretamente, mesma regra de sempre).
   trip: { origin: { name: string }; destination: { name: string } } | null;
   fuelStation: FuelStation | null;
+  // Gestao de Combustivel, Fase 3 -- mesmo principio de fuelStation acima:
+  // preenchido so quando o abastecimento e INTERNO (fuelTankId setado).
+  fuelTank: FuelTank | null;
   creator: UserAccount;
   updater: UserAccount | null;
 };
@@ -26,6 +29,8 @@ export function toFuelSupplyEntity(supply: FuelSupplyWithRelations): FuelSupplyE
   entity.tripLabel = supply.trip ? `${supply.trip.origin.name} → ${supply.trip.destination.name}` : null;
   entity.fuelStationId = supply.fuelStationId;
   entity.fuelStationName = supply.fuelStation?.name ?? null;
+  entity.fuelTankId = supply.fuelTankId;
+  entity.fuelTankName = supply.fuelTank?.name ?? null;
   entity.attachmentId = supply.attachmentId;
   entity.fuelType = supply.fuelType;
   entity.liters = toNumberOrNull(supply.liters) ?? 0;

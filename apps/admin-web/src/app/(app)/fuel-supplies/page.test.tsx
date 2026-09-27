@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '../../../components/ui/toast';
@@ -10,6 +10,11 @@ const listFuelSuppliesMock = vi.fn();
 const getFuelDashboardMock = vi.fn();
 const listTripsMock = vi.fn();
 const useAuthMock = vi.fn();
+const pushMock = vi.fn();
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: pushMock }),
+}));
 
 vi.mock('../../../lib/api/fuel.api', () => ({
   listFuelSupplies: (...args: unknown[]) => listFuelSuppliesMock(...args),
@@ -72,6 +77,8 @@ function buildSupply(overrides: Partial<FuelSupplyEntity> = {}): FuelSupplyEntit
     tripLabel: null,
     fuelStationId: 'fs1',
     fuelStationName: 'Posto Central',
+    fuelTankId: null,
+    fuelTankName: null,
     attachmentId: null,
     fuelType: 'DIESEL_S10',
     liters: 200,
@@ -98,6 +105,7 @@ describe('FuelSuppliesPage (Fase 107)', () => {
     getFuelDashboardMock.mockReset();
     listTripsMock.mockReset();
     useAuthMock.mockReset();
+    pushMock.mockReset();
     useAuthMock.mockReturnValue({ user: { role: 'ADMIN' } });
     listTripsMock.mockResolvedValue({ items: [] });
     getFuelDashboardMock.mockResolvedValue(buildDashboard());
@@ -147,6 +155,23 @@ describe('FuelSuppliesPage (Fase 107)', () => {
 
     await screen.findAllByText('José da Silva');
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  // Gestao de Combustivel, Fase 3 -- abastecimento interno mostra a origem
+  // como um link para o tanque (secao 13 do pedido), nunca o nome do posto.
+  it('abastecimento interno mostra "Tanque: <nome>" clicavel; externo mostra o nome do posto', async () => {
+    listFuelSuppliesMock.mockResolvedValue({
+      items: [
+        buildSupply({ id: 'supply-internal', fuelStationId: null as unknown as string, fuelTankId: 'tank-1', fuelTankName: 'Tanque matriz' }),
+      ],
+      meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
+    });
+    renderPage();
+
+    const links = await screen.findAllByText('Tanque: Tanque matriz');
+    expect(links.length).toBeGreaterThan(0);
+    fireEvent.click(links[0]!);
+    expect(pushMock).toHaveBeenCalledWith('/fuel-tanks/tank-1');
   });
 
   it('filtra por viagem ao selecionar no filtro (reenvia listFuelSupplies com tripId)', async () => {

@@ -96,10 +96,19 @@ export default function FuelTankDetailPage(): JSX.Element {
         ),
     },
     {
-      header: 'Origem',
+      // RECEIPT: fornecedor + nota fiscal. INTERNAL_FUELING (Fase 3): veículo
+      // + motorista + viagem -- "qual veículo retirou, quem realizou, de qual
+      // tanque" (secao 12 do pedido), sem virar um segundo módulo de compras.
+      header: 'Origem / destino',
       cell: ({ row }) => {
         const stationName = row.original.fuelStationId ? fuelStationNameById.get(row.original.fuelStationId) : null;
-        const parts = [stationName, row.original.invoiceNumber ? `NF ${row.original.invoiceNumber}` : null].filter(Boolean);
+        const parts = [
+          stationName,
+          row.original.invoiceNumber ? `NF ${row.original.invoiceNumber}` : null,
+          row.original.vehiclePlate,
+          row.original.driverName,
+          row.original.tripLabel,
+        ].filter(Boolean);
         return parts.length > 0 ? parts.join(' · ') : '—';
       },
     },

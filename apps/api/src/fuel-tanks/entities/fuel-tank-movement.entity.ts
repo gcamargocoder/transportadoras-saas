@@ -44,11 +44,20 @@ export class FuelTankMovementEntity {
   @ApiProperty({ format: 'uuid', nullable: true })
   vehicleId!: string | null;
 
+  @ApiProperty({ nullable: true, description: 'Preenchido apenas quando a listagem inclui a relacao (GET .../movements).' })
+  vehiclePlate!: string | null;
+
   @ApiProperty({ format: 'uuid', nullable: true })
   driverId!: string | null;
 
+  @ApiProperty({ nullable: true, description: 'Preenchido apenas quando a listagem inclui a relacao (GET .../movements).' })
+  driverName!: string | null;
+
   @ApiProperty({ format: 'uuid', nullable: true })
   tripId!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'Preenchido apenas quando a listagem inclui a relacao (GET .../movements).' })
+  tripLabel!: string | null;
 
   @ApiProperty({ format: 'uuid' })
   createdBy!: string;

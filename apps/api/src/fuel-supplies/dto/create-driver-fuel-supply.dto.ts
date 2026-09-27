@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  IsUUID,
   Min,
 } from 'class-validator';
 
@@ -67,4 +68,15 @@ export class CreateDriverFuelSupplyDto {
   @IsOptional()
   @IsNumber()
   longitude?: number;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Gestao de Combustivel, Fase 3 -- tanque proprio de onde o diesel saiu. Presente = ' +
+      'abastecimento INTERNO (baixa o tanque); ausente = EXTERNO (comportamento inalterado). ' +
+      'A origem e decidida so por este campo, nunca por qualquer outra informacao do app.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'fuelTankId deve ser um UUID valido.' })
+  fuelTankId?: string;
 }

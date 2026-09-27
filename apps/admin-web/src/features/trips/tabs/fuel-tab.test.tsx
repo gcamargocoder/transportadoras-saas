@@ -54,6 +54,8 @@ function buildSupply(overrides: Partial<FuelSupplyEntity> = {}): FuelSupplyEntit
     tripLabel: 'Catanduva/SP → São Paulo/SP',
     fuelStationId: 'fs1',
     fuelStationName: 'Posto Central',
+    fuelTankId: null,
+    fuelTankName: null,
     attachmentId: null,
     fuelType: 'DIESEL_S10',
     liters: 200,

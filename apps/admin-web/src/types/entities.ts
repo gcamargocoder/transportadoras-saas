@@ -1387,6 +1387,10 @@ export interface FuelSupplyEntity {
   tripLabel: string | null;
   fuelStationId: string;
   fuelStationName: string | null;
+  // Gestao de Combustivel, Fase 3 -- preenchido quando o abastecimento e
+  // INTERNO (tanque proprio); nulo para abastecimento externo (posto).
+  fuelTankId: string | null;
+  fuelTankName: string | null;
   attachmentId: string | null;
   fuelType: FuelType;
   liters: number;
@@ -4207,8 +4211,11 @@ export interface FuelTankMovementEntity {
   fuelStationId: string | null;
   fuelSupplyId: string | null;
   vehicleId: string | null;
+  vehiclePlate: string | null;
   driverId: string | null;
+  driverName: string | null;
   tripId: string | null;
+  tripLabel: string | null;
   createdBy: string;
   createdAt: string;
 }

@@ -52,6 +52,8 @@ type PendingAction =
       pricePerLiter?: number;
       latitude?: number;
       longitude?: number;
+      // Gestao de Combustivel, Fase 3 -- presente = abastecimento interno.
+      fuelTankId?: string;
     }
   | {
       kind: 'axle-event-open';
@@ -215,6 +217,7 @@ async function runAction(action: PendingAction): Promise<void> {
           pricePerLiter: action.pricePerLiter,
           latitude: action.latitude,
           longitude: action.longitude,
+          fuelTankId: action.fuelTankId,
         }),
       });
       return;
