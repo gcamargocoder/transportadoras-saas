@@ -16,6 +16,7 @@ import {
   isIntelligenceTab,
   type IntelligenceTab,
 } from '../../../features/intelligence/intelligence-config';
+import { AlertsTab } from '../../../features/intelligence/alerts-tab';
 import { ComparativesTab } from '../../../features/intelligence/comparatives-tab';
 import { CostsTab } from '../../../features/intelligence/costs-tab';
 import { DeadlinesTab } from '../../../features/intelligence/deadlines-tab';
@@ -42,7 +43,7 @@ import { ApiError } from '../../../lib/api/errors';
 import { DASHBOARD_ROLES, hasRole } from '../../../lib/auth/roles';
 import type { KpiGranularity, KpiResultEntity } from '../../../types/entities';
 
-const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial', 'fleet', 'costs', 'deadlines', 'comparatives', 'occurrences', 'reports'];
+const DATA_TABS: IntelligenceTab[] = ['overview', 'operation', 'financial', 'fleet', 'costs', 'deadlines', 'comparatives', 'occurrences', 'reports', 'alerts'];
 const GRANULARITIES: KpiGranularity[] = ['day', 'week', 'month'];
 const timeFormatter = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
@@ -248,6 +249,15 @@ function IntelligenceCenter(): JSX.Element {
         )}
         {tab === 'reports' && summary.data && range && (
           <ReportsTab
+            kpis={kpis}
+            range={range}
+            granularity={granularity}
+            onGranularityChange={(value) => updateParams({ agrupar: value })}
+            onExplain={setExplained}
+          />
+        )}
+        {tab === 'alerts' && summary.data && range && (
+          <AlertsTab
             kpis={kpis}
             range={range}
             granularity={granularity}

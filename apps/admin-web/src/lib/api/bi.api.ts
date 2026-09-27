@@ -1,5 +1,6 @@
 import type { QueryableParams } from '../../types/api';
 import type {
+  BiAlertsResponseEntity,
   KpiBreakdownEntity,
   KpiCatalogEntity,
   KpiComparisonMode,
@@ -70,4 +71,18 @@ export function getKpiSeries(query: BiKpiSeriesQuery, signal?: AbortSignal) {
 
 export function getKpiBreakdown(query: BiKpiBreakdownQuery, signal?: AbortSignal) {
   return api.get<KpiBreakdownEntity>('/bi/kpis/breakdown', query, signal);
+}
+
+// BI 10 -- alertas deterministicos; mesmo escopo/periodo/comparacao do
+// summary (nenhum algoritmo de comparacao novo).
+export interface BiAlertsQuery extends BiKpiScopeQuery {
+  comparison?: KpiComparisonMode | undefined;
+  compareStartDate?: string | undefined;
+  compareEndDate?: string | undefined;
+  /** Severidades separadas por virgula (ex: "WARNING,CRITICAL"). Omitido = todas. */
+  severity?: string | undefined;
+}
+
+export function getAlerts(query: BiAlertsQuery, signal?: AbortSignal) {
+  return api.get<BiAlertsResponseEntity>('/bi/alerts', query, signal);
 }

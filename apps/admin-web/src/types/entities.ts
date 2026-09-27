@@ -4412,3 +4412,31 @@ export interface KpiBreakdownEntity {
   items: KpiBreakdownItemEntity[];
   others: KpiBreakdownItemEntity | null;
 }
+
+// BI 10 -- alertas deterministicos sobre os KPIs oficiais (espelho de
+// bi-alert.entity.ts). `kpi` e o MESMO KpiResultEntity de /bi/kpis/summary.
+// Prefixo "Bi" evita colisao com o AlertSeverity/AlertType ja existentes
+// (monitoramento de rota, dominio totalmente diferente -- ver types/enums.ts).
+export type BiAlertSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+export type BiAlertConditionType = 'ABSOLUTE_THRESHOLD' | 'COMPARISON_CHANGE' | 'PERIOD_DEVIATION';
+
+export interface BiAlertEntity {
+  id: string;
+  ruleId: string;
+  ruleVersion: number;
+  name: string;
+  description: string;
+  severity: BiAlertSeverity;
+  conditionType: BiAlertConditionType;
+  limitValue: number | null;
+  referenceLabel: string;
+  kpi: KpiResultEntity;
+}
+
+export interface BiAlertsResponseEntity {
+  catalogVersion: string;
+  calculatedAt: string;
+  scope: KpiScopeEntity;
+  period: KpiPeriodEntity;
+  items: BiAlertEntity[];
+}

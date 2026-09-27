@@ -24,6 +24,7 @@ let searchParams = new URLSearchParams();
 const getKpiSeriesMock = vi.fn();
 const getKpiBreakdownMock = vi.fn();
 const getKpiEvidenceMock = vi.fn();
+const getAlertsMock = vi.fn();
 const listVehiclesMock = vi.fn();
 const listFleetsMock = vi.fn();
 
@@ -32,6 +33,7 @@ vi.mock('../../../lib/api/bi.api', () => ({
   getKpiSeries: (...args: unknown[]) => getKpiSeriesMock(...args),
   getKpiBreakdown: (...args: unknown[]) => getKpiBreakdownMock(...args),
   getKpiEvidence: (...args: unknown[]) => getKpiEvidenceMock(...args),
+  getAlerts: (...args: unknown[]) => getAlertsMock(...args),
 }));
 
 // BI 4 -- filtro local da aba Frota (busca de veiculo + lista de frotas).
@@ -327,7 +329,7 @@ describe('Central de Inteligencia (/dashboard)', () => {
   it('todas as abas previstas estao na navegacao', () => {
     renderPage();
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios']);
+    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios', 'Alertas']);
   });
 });
 
@@ -1531,5 +1533,153 @@ describe('Central -- aba Relatórios (BI 9)', () => {
     renderPage();
     await userEvent.click(await screen.findByRole('button', { name: 'Imprimir' }));
     expect(printSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ============================================================================
+// BI 10 -- aba Alertas
+// ============================================================================
+function alertKpi(id: string, overrides: Partial<KpiResultEntity> = {}): KpiResultEntity {
+  return {
+    id,
+    name: id,
+    description: '',
+    category: 'OPERATIONAL',
+    unit: 'BRL_PER_KM',
+    direction: 'LOWER_IS_BETTER',
+    formula: `formula de ${id}`,
+    sources: [],
+    dimensions: [],
+    limitations: [],
+    additive: false,
+    status: 'AVAILABLE',
+    unavailableReason: null,
+    value: 9,
+    period: PERIOD,
+    comparison: null,
+    inputs: [],
+    evidence: [],
+    ...overrides,
+  };
+}
+
+function biAlert(overrides: Partial<{ id: string; ruleId: string; ruleVersion: number; name: string; description: string; severity: 'INFO' | 'WARNING' | 'CRITICAL'; conditionType: string; limitValue: number | null; referenceLabel: string; kpi: KpiResultEntity }> = {}) {
+  return {
+    id: 'cost_per_km_above_limit:v1:cost_per_km:x:y',
+    ruleId: 'cost_per_km_above_limit',
+    ruleVersion: 1,
+    name: 'Custo por km acima do limite',
+    description: 'Custo por km do período acima de um limite explícito.',
+    severity: 'CRITICAL' as const,
+    conditionType: 'ABSOLUTE_THRESHOLD',
+    limitValue: 7,
+    referenceLabel: 'limite',
+    kpi: alertKpi('cost_per_km'),
+    ...overrides,
+  };
+}
+
+function alertsResponse(items: ReturnType<typeof biAlert>[]) {
+  return { catalogVersion: '2', calculatedAt: '2026-09-22T18:00:00.000Z', scope: { tenantId: 't1', vehicleId: null, fleetId: null, customerId: null }, period: PERIOD, items };
+}
+
+describe('Central -- aba Alertas (BI 10)', () => {
+  beforeEach(() => {
+    getKpiSummaryMock.mockReset();
+    getAlertsMock.mockReset();
+    listVehiclesMock.mockReset();
+    listFleetsMock.mockReset();
+    getDashboardMock.mockReset();
+    replaceMock.mockReset();
+    useAuthMock.mockReturnValue({ user: { role: UserRole.ADMIN } });
+    searchParams = new URLSearchParams('aba=alerts');
+    getKpiSummaryMock.mockResolvedValue(buildSummary());
+    getAlertsMock.mockResolvedValue(
+      alertsResponse([
+        biAlert(),
+        biAlert({
+          id: 'revenue_relevant_change:v1:revenue:x:y',
+          ruleId: 'revenue_relevant_change',
+          name: 'Receita com variação relevante',
+          severity: 'WARNING',
+          conditionType: 'COMPARISON_CHANGE',
+          limitValue: null,
+          referenceLabel: 'período de comparação',
+          kpi: alertKpi('revenue', {
+            name: 'Receita',
+            unit: 'BRL',
+            direction: 'HIGHER_IS_BETTER',
+            value: 82000,
+            comparison: { period: PERIOD, value: 100000, absoluteChange: -18000, percentChange: -18, unavailableReason: null },
+          }),
+        }),
+      ]),
+    );
+    listVehiclesMock.mockResolvedValue({ items: [], meta: { total: 0, page: 1, pageSize: 20 } });
+    listFleetsMock.mockResolvedValue({ items: [{ id: 'f1', name: 'Frota Principal' }], meta: { total: 1, page: 1, pageSize: 100 } });
+  });
+
+  it('lista os alertas priorizados por severidade, com badge e mensagem', async () => {
+    renderPage();
+    const table = await screen.findByText('Custo por km acima do limite');
+    const list = table.closest('ul') as HTMLElement;
+    const items = within(list).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('Crítica');
+    expect(items[0]).toHaveTextContent('Custo por km acima do limite');
+    expect(items[1]).toHaveTextContent('Atenção');
+    expect(screen.getByText(/limite de R\$/)).toBeInTheDocument();
+  });
+
+  it('"Investigar" abre o detalhe do KPI (mesmo KpiDetailDrawer das outras abas)', async () => {
+    renderPage();
+    await screen.findByText('Custo por km acima do limite');
+    await userEvent.click(screen.getAllByRole('button', { name: /Investigar/ })[0]!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('formula de cost_per_km')).toBeInTheDocument();
+  });
+
+  it('filtro de severidade refaz a chamada so com a severidade escolhida', async () => {
+    renderPage();
+    await screen.findByText('Custo por km acima do limite');
+    expect(getAlertsMock).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Crítica' }));
+    await waitFor(() => expect(getAlertsMock).toHaveBeenCalledTimes(2));
+    const calls = getAlertsMock.mock.calls as [{ severity?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ severity: 'CRITICAL' });
+  });
+
+  it('trocar para "ano anterior" refaz a chamada com comparison=PREVIOUS_YEAR', async () => {
+    renderPage();
+    await screen.findByText('Custo por km acima do limite');
+    const comparisonGroup = screen.getByRole('radiogroup', { name: 'Comparar com' });
+    await userEvent.click(within(comparisonGroup).getByRole('radio', { name: 'Mesmo período do ano passado' }));
+    await waitFor(() => expect(getAlertsMock).toHaveBeenCalledTimes(2));
+    const calls = getAlertsMock.mock.calls as [{ comparison?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ comparison: 'PREVIOUS_YEAR' });
+  });
+
+  it('sem alertas: estado vazio positivo (normalidade), nunca uma tela quebrada', async () => {
+    getAlertsMock.mockResolvedValue(alertsResponse([]));
+    renderPage();
+    expect(await screen.findByText('Nenhum alerta no período')).toBeInTheDocument();
+  });
+
+  it('erro ao carregar: estado de erro com retry', async () => {
+    getAlertsMock.mockRejectedValue(new ApiError(500, 'INTERNAL', 'falha', '/bi/alerts'));
+    renderPage();
+    expect(await screen.findByText('Não foi possível carregar os alertas.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Tentar novamente/ })).toBeInTheDocument();
+  });
+
+  it('filtro de veiculo dispara uma nova chamada escopada', async () => {
+    listVehiclesMock.mockResolvedValue(fleetVehiclesList());
+    renderPage();
+    await screen.findByText('Custo por km acima do limite');
+    expect(getAlertsMock).toHaveBeenCalledTimes(1);
+    await userEvent.type(screen.getByPlaceholderText(/placa, marca, modelo/i), 'AAA');
+    await userEvent.click(await screen.findByRole('button', { name: /AAA1111/ }));
+    await waitFor(() => expect(getAlertsMock).toHaveBeenCalledTimes(2));
+    const calls = getAlertsMock.mock.calls as [{ vehicleId?: string }][];
+    expect(calls[1]?.[0]).toMatchObject({ vehicleId: 'v1' });
   });
 });
