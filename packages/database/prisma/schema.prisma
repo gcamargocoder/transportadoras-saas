@@ -123,6 +123,30 @@ enum FuelType {
   @@map("fuel_type")
 }
 
+/// Gestao de Combustivel, Fase 1 -- ciclo de vida do tanque proprio da
+/// transportadora. INACTIVE rejeita novas movimentacoes (ver FuelTanksService).
+enum FuelTankStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("fuel_tank_status")
+}
+
+/// Tipos minimos de movimentacao do ledger do tanque (Fase 1). RECEIPT
+/// (compra de diesel) e INTERNAL_FUELING (abastecimento interno do
+/// veiculo, com FuelTankMovement.fuelSupplyId preenchido) ja existem aqui
+/// para o ledger nascer completo, mas nenhum endpoint desta fase os cria --
+/// isso e Fase 2 (compra) e Fase 3 (abastecimento interno). Nesta fase, o
+/// unico tipo efetivamente gravado e INITIAL_BALANCE, na criacao do tanque.
+enum FuelTankMovementType {
+  INITIAL_BALANCE
+  RECEIPT
+  INTERNAL_FUELING
+  ADJUSTMENT
+
+  @@map("fuel_tank_movement_type")
+}
+
 /// Forma de pagamento do abastecimento -- DISTINTO de ExpensePaymentMethod
 /// (Fase 16): FLEET_CARD (cartao frota, o meio mais comum de pagamento de
 /// combustivel) e INVOICE (fatura do posto) nao existem la, e nao ha
@@ -737,6 +761,9 @@ model Tenant {
   /// Fase 83 -- catalogo de pecas e ledger de estoque.
   parts                     Part[]
   partStockMovements        PartStockMovement[]
+  /// Gestao de Combustivel, Fase 1 -- tanques proprios e ledger de estoque.
+  fuelTanks                 FuelTank[]
+  fuelTankMovements         FuelTankMovement[]
   /// Fase 84 -- oficinas/fornecedores de manutencao.
   maintenanceProviders      MaintenanceProvider[]
   /// Fase 88 -- paradas/entregas planejadas de viagens multi-entrega.
@@ -974,6 +1001,8 @@ model UserAccount {
   tireDisposalsCreated            TireDisposal[]            @relation("TireDisposalCreator")
   partsCreated                    Part[]                    @relation("PartCreator")
   partStockMovementsCreated       PartStockMovement[]       @relation("PartStockMovementCreator")
+  fuelTanksCreated                FuelTank[]                @relation("FuelTankCreator")
+  fuelTankMovementsCreated        FuelTankMovement[]        @relation("FuelTankMovementCreator")
   maintenanceProvidersCreated     MaintenanceProvider[]     @relation("MaintenanceProviderCreator")
   tollRatesCreated                TollRate[]                @relation("TollRateCreator")
   subscriptionPaymentsCreated     SubscriptionPayment[]
@@ -1151,6 +1180,7 @@ model Vehicle {
   axleEvents              AxleEvent[]
   tripOccurrences         TripOccurrence[]
   routePlans              RoutePlan[]
+  fuelTankMovements       FuelTankMovement[]
   tires                   Tire[]                    @relation("TireCurrentVehicle")
   tireMovementsAsPrevious TireMovement[]            @relation("TireMovementPreviousVehicle")
   tireMovementsAsNew      TireMovement[]            @relation("TireMovementNewVehicle")
@@ -1793,6 +1823,12 @@ model FuelSupply {
   driverId      String       @map("driver_id") @db.Uuid
   tripId        String?      @map("trip_id") @db.Uuid
   fuelStationId String?      @map("fuel_station_id") @db.Uuid
+  /// Gestao de Combustivel, Fase 1 -- preenchido quando o abastecimento e
+  /// INTERNO (tanque proprio), nunca junto de fuelStationId (posto externo).
+  /// So a preparacao do vinculo: a transacao atomica que grava FuelSupply +
+  /// FuelTankMovement juntos (Fase 3) ainda nao existe, entao este campo nao
+  /// e gravado por nenhum fluxo hoje.
+  fuelTankId    String?      @map("fuel_tank_id") @db.Uuid
   attachmentId  String?      @map("attachment_id") @db.Uuid
   fuelType      FuelType     @map("fuel_type")
   liters        Decimal      @db.Decimal(10, 3)
@@ -1818,22 +1854,114 @@ model FuelSupply {
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  vehicle     Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  driver      Driver       @relation(fields: [driverId], references: [id], onDelete: Restrict)
-  trip        Trip?        @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  fuelStation FuelStation? @relation(fields: [fuelStationId], references: [id], onDelete: Restrict)
-  attachment  Attachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
-  creator     UserAccount  @relation("FuelSupplyCreator", fields: [createdBy], references: [id], onDelete: Restrict)
-  updater     UserAccount? @relation("FuelSupplyUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle      Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  driver       Driver            @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  trip         Trip?             @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  fuelStation  FuelStation?      @relation(fields: [fuelStationId], references: [id], onDelete: Restrict)
+  fuelTank     FuelTank?         @relation(fields: [fuelTankId], references: [id], onDelete: Restrict)
+  attachment   Attachment?       @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  creator      UserAccount       @relation("FuelSupplyCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater      UserAccount?      @relation("FuelSupplyUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+  /// Lado inverso de FuelTankMovement.fuelSupplyId (1:1, Fase 3).
+  tankMovement FuelTankMovement?
 
   @@index([tenantId])
   @@index([tenantId, vehicleId])
   @@index([tenantId, driverId])
   @@index([tenantId, tripId])
   @@index([tenantId, fuelStationId])
+  @@index([tenantId, fuelTankId])
   @@index([tenantId, supplyDate])
   @@map("fuel_supplies")
+}
+
+/// Gestao de Combustivel, Fase 1 -- tanque proprio da transportadora
+/// (estoque fisico de diesel, DISTINTO de FuelSupply: FuelSupply e o que o
+/// veiculo recebeu/consumiu, FuelTank e o que a empresa tem guardado).
+/// currentStockLiters e um cache persistido (mesmo espirito de
+/// Part.currentStock, Fase 83): nunca atualizado isoladamente, sempre
+/// recalculado dentro da MESMA transacao Serializable (runSerializable) que
+/// grava a FuelTankMovement correspondente -- ver FuelTanksService.
+model FuelTank {
+  id                 String         @id @default(uuid()) @db.Uuid
+  tenantId           String         @map("tenant_id") @db.Uuid
+  name               String
+  fuelType           FuelType       @default(DIESEL_S10) @map("fuel_type")
+  capacityLiters     Decimal        @map("capacity_liters") @db.Decimal(10, 3)
+  /// Estoque declarado na criacao do tanque -- gera a primeira
+  /// FuelTankMovement (INITIAL_BALANCE) na mesma transacao (ver service).
+  initialStockLiters Decimal        @map("initial_stock_liters") @db.Decimal(10, 3)
+  /// Cache persistido -- ver comentario do model.
+  currentStockLiters Decimal        @default(0) @map("current_stock_liters") @db.Decimal(10, 3)
+  minStockLiters     Decimal?       @map("min_stock_liters") @db.Decimal(10, 3)
+  /// Cache persistido -- currentStockLiters <= minStockLiters (sempre false
+  /// quando minStockLiters nao informado, nunca uma comparacao inventada).
+  isLowStock         Boolean        @default(false) @map("is_low_stock")
+  location           String?
+  status             FuelTankStatus @default(ACTIVE)
+  createdBy          String         @map("created_by") @db.Uuid
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator      UserAccount        @relation("FuelTankCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  movements    FuelTankMovement[]
+  fuelSupplies FuelSupply[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, isLowStock])
+  @@map("fuel_tanks")
+}
+
+/// Ledger de movimentacao do tanque (Fase 1) -- append-only (mesmo espirito
+/// de PartStockMovement/TireMovement): nunca ha UPDATE/DELETE pela API.
+/// Ao contrario de PartStockMovement, guarda saldo anterior/posterior por
+/// linha (previousBalanceLiters/newBalanceLiters) -- exigencia explicita da
+/// Fase 1 para auditoria de combustivel, alem do que Pecas ja fazia.
+/// fuelSupplyId/vehicleId/driverId/tripId ficam prontos para a Fase 3
+/// (abastecimento interno), mas nenhum fluxo desta fase os preenche.
+model FuelTankMovement {
+  id                    String               @id @default(uuid()) @db.Uuid
+  tenantId              String               @map("tenant_id") @db.Uuid
+  tankId                String               @map("tank_id") @db.Uuid
+  type                  FuelTankMovementType
+  /// INITIAL_BALANCE/RECEIPT/INTERNAL_FUELING: sempre positivo (o efeito no
+  /// saldo vem de `type`). ADJUSTMENT: delta com sinal, aplicado direto.
+  quantityLiters        Decimal              @map("quantity_liters") @db.Decimal(10, 3)
+  previousBalanceLiters Decimal              @map("previous_balance_liters") @db.Decimal(10, 3)
+  newBalanceLiters      Decimal              @map("new_balance_liters") @db.Decimal(10, 3)
+  effectiveDate         DateTime             @default(now()) @map("effective_date")
+  notes                 String?
+  /// Preenchido quando a origem e um abastecimento interno (Fase 3) -- 1:1
+  /// com FuelSupply.
+  fuelSupplyId          String?              @unique @map("fuel_supply_id") @db.Uuid
+  vehicleId             String?              @map("vehicle_id") @db.Uuid
+  driverId              String?              @map("driver_id") @db.Uuid
+  tripId                String?              @map("trip_id") @db.Uuid
+  /// Idempotencia -- mesmo padrao/nome de FuelSupply.deviceEventId (Fase
+  /// 25), reaproveitado (nao reinventado) para quando a origem for o app do
+  /// motorista.
+  deviceEventId         String?              @unique @map("device_event_id")
+  createdBy             String               @map("created_by") @db.Uuid
+  createdAt             DateTime             @default(now()) @map("created_at")
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tank       FuelTank    @relation(fields: [tankId], references: [id], onDelete: Restrict)
+  fuelSupply FuelSupply? @relation(fields: [fuelSupplyId], references: [id], onDelete: SetNull)
+  vehicle    Vehicle?    @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver     Driver?     @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  trip       Trip?       @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  creator    UserAccount @relation("FuelTankMovementCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, tankId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, driverId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, effectiveDate])
+  @@map("fuel_tank_movements")
 }
 
 /// Implemento (carreta simples, bitrem, rodotrem, vanderleia, reboque,
@@ -2000,6 +2128,7 @@ model Driver {
   axleEvents          AxleEvent[]
   checklistExecutions ChecklistExecution[]
   fiscalDocuments     FiscalDocument[]
+  fuelTankMovements   FuelTankMovement[]
   /// Fase 61 -- historico de vinculo com veiculo (atual = endedAt null).
   vehicleAssignments  DriverVehicleAssignment[]
 
@@ -2503,6 +2632,7 @@ model Trip {
   tripOccurrences     TripOccurrence[]
   telemetry           Telemetry[]
   tripStops           TripStop[]
+  fuelTankMovements   FuelTankMovement[]
   /// Fase 88 -- paradas/entregas PLANEJADAS (distinto de tripStops acima,
   /// que sao paradas OPERACIONAIS detectadas pelo app do motorista).
   tripDeliveryStops   TripDeliveryStop[]

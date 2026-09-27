@@ -28,6 +28,8 @@ import {
   FleetType,
   FreightRuleStatus,
   FreightTableStatus,
+  FuelTankMovementType,
+  FuelTankStatus,
   FuelType,
   ImportJobStatus,
   LocationType,
@@ -326,6 +328,18 @@ export const FUEL_TYPE_LABELS: Record<FuelType, string> = {
   ETANOL: 'Etanol',
   ARLA32: 'Arla 32',
   OUTRO: 'Outro',
+};
+
+export const FUEL_TANK_STATUS_LABELS: Record<FuelTankStatus, string> = {
+  ACTIVE: 'Ativo',
+  INACTIVE: 'Inativo',
+};
+
+export const FUEL_TANK_MOVEMENT_TYPE_LABELS: Record<FuelTankMovementType, string> = {
+  INITIAL_BALANCE: 'Saldo inicial',
+  RECEIPT: 'Recebimento',
+  INTERNAL_FUELING: 'Abastecimento interno',
+  ADJUSTMENT: 'Ajuste',
 };
 
 export const PAYMENT_TYPE_LABELS: Record<PaymentType, string> = {

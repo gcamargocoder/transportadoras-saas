@@ -28,6 +28,7 @@ import { FiscalModule } from './fiscal/fiscal.module';
 import { FreightModule } from './freight/freight.module';
 import { FuelStationsModule } from './fuel-stations/fuel-stations.module';
 import { FuelSuppliesModule } from './fuel-supplies/fuel-supplies.module';
+import { FuelTanksModule } from './fuel-tanks/fuel-tanks.module';
 import { HealthModule } from './health/health.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
 import { MaintenanceProvidersModule } from './maintenance-providers/maintenance-providers.module';
@@ -94,6 +95,7 @@ import { VehicleIdlePeriodsModule } from './vehicle-idle-periods/vehicle-idle-pe
     TripAdvancesModule,
     FuelStationsModule,
     FuelSuppliesModule,
+    FuelTanksModule,
     DashboardModule,
     BiModule,
     TiresModule,

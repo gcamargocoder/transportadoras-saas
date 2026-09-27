@@ -63,6 +63,20 @@ export const FuelType = {
 } as const;
 export type FuelType = (typeof FuelType)[keyof typeof FuelType];
 
+export const FuelTankStatus = {
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+} as const;
+export type FuelTankStatus = (typeof FuelTankStatus)[keyof typeof FuelTankStatus];
+
+export const FuelTankMovementType = {
+  INITIAL_BALANCE: 'INITIAL_BALANCE',
+  RECEIPT: 'RECEIPT',
+  INTERNAL_FUELING: 'INTERNAL_FUELING',
+  ADJUSTMENT: 'ADJUSTMENT',
+} as const;
+export type FuelTankMovementType = (typeof FuelTankMovementType)[keyof typeof FuelTankMovementType];
+
 export const PaymentType = {
   CASH: 'CASH',
   PIX: 'PIX',

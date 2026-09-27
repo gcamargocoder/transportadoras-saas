@@ -31,6 +31,8 @@ import type {
   FleetType,
   FreightRuleStatus,
   FreightTableStatus,
+  FuelTankMovementType,
+  FuelTankStatus,
   FuelType,
   ImportFileType,
   ImportJobStatus,
@@ -4168,6 +4170,53 @@ export interface PartsDashboardEntity {
   partsWithoutKnownCost: number;
   entriesInPeriod: number;
   exitsInPeriod: number;
+}
+
+// Gestao de Combustivel, Fase 1 -- tanque proprio e ledger de estoque.
+// Espelha apps/api/src/fuel-tanks/entities/*.ts. currentStockLiters/
+// isLowStock sao cache persistido no backend (nunca calculado no frontend).
+export interface FuelTankEntity {
+  id: string;
+  tenantId: string;
+  name: string;
+  fuelType: FuelType;
+  capacityLiters: number;
+  initialStockLiters: number;
+  currentStockLiters: number;
+  minStockLiters: number | null;
+  occupancyPercent: number;
+  isLowStock: boolean;
+  location: string | null;
+  status: FuelTankStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FuelTankMovementEntity {
+  id: string;
+  tankId: string;
+  type: FuelTankMovementType;
+  quantityLiters: number;
+  previousBalanceLiters: number;
+  newBalanceLiters: number;
+  effectiveDate: string;
+  notes: string | null;
+  fuelSupplyId: string | null;
+  vehicleId: string | null;
+  driverId: string | null;
+  tripId: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface FuelTankBalanceEntity {
+  tankId: string;
+  currentStockLiters: number;
+  capacityLiters: number;
+  occupancyPercent: number;
+  minStockLiters: number | null;
+  isLowStock: boolean;
+  status: FuelTankStatus;
 }
 
 // Fase 84 -- oficina/fornecedor de manutencao (MaintenanceProvider,
