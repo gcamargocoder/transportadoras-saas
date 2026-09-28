@@ -1,19 +1,83 @@
 'use client';
 
 import type { ColumnDef } from '@tanstack/react-table';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import { ArrowUpDown } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { DataTable } from '../../components/ui/data-table';
 import { SearchInput } from '../../components/ui/search-input';
 import { useDebounce } from '../../hooks/use-debounce';
 import { getKpiBreakdown } from '../../lib/api/bi.api';
-import type { KpiBreakdownItemEntity } from '../../types/entities';
+import type { KpiBreakdownEntity, KpiUnit } from '../../types/entities';
 import { formatKpiValue } from './kpi-format';
 import type { PeriodRange } from './period';
 
+// Fase 8, secao 4 -- ranking investigativo de veiculos: litros TOTAIS
+// (interno + externo, mesmo where de fuel_cost) e custo sao SEMPRE globais
+// (nunca escopados por tanque -- misturar um total sem filtro de tanque com
+// uma coluna filtrada confundiria o usuario); "abastecido internamente" e
+// sempre a MESMA visao (todos os tanques) pelo mesmo motivo. Para o
+// desempenho de UM tanque especifico, ver "Desempenho por tanque" abaixo.
+// Consumo por km fica de fora de proposito: ainda nao existe no catalogo
+// oficial de KPIs (ver KPI_PENDING_DEPENDENCIES no backend) -- nunca
+// inventado aqui.
 const VEHICLE_TABLE_LIMIT = 500;
+
+interface MetricConfig {
+  kpiId: string;
+  unit: KpiUnit;
+  header: string;
+}
+
+const METRICS: MetricConfig[] = [
+  { kpiId: 'fuel_liters', unit: 'LITERS', header: 'Litros totais' },
+  { kpiId: 'fuel_cost', unit: 'BRL', header: 'Custo de combustível' },
+  { kpiId: 'fuel_internal_liters', unit: 'LITERS', header: 'Abastecido internamente' },
+];
+
+interface Cell {
+  value: number | null;
+  unavailableReason: string | null;
+  recordCount: number;
+}
+
+interface VehicleRow {
+  vehicleId: string | null;
+  label: string;
+  cells: Record<string, Cell>;
+}
+
+const EMPTY_CELL: Cell = { value: null, unavailableReason: null, recordCount: 0 };
+
+function mergeRows(results: (KpiBreakdownEntity | undefined)[]): VehicleRow[] {
+  const byKey = new Map<string, VehicleRow>();
+  const order: string[] = [];
+  METRICS.forEach((metric, index) => {
+    for (const it of results[index]?.items ?? []) {
+      const rowKey = it.key ?? `__unassigned__${it.label}`;
+      if (!byKey.has(rowKey)) {
+        const row: VehicleRow = { vehicleId: it.key, label: it.label, cells: {} };
+        for (const m of METRICS) row.cells[m.kpiId] = EMPTY_CELL;
+        byKey.set(rowKey, row);
+        order.push(rowKey);
+      }
+      byKey.get(rowKey)!.cells[metric.kpiId] = { value: it.value, unavailableReason: it.unavailableReason, recordCount: it.recordCount };
+    }
+  });
+  return order.map((key) => byKey.get(key)!);
+}
+
+function MetricCell({ cell, unit }: { cell: Cell; unit: KpiUnit }): JSX.Element {
+  if (cell.value === null) {
+    return (
+      <span className="text-ink-subtle" title={cell.unavailableReason ?? 'Sem dado suficiente no período.'}>
+        —
+      </span>
+    );
+  }
+  return <span className="tabular-nums">{formatKpiValue(unit, cell.value)}</span>;
+}
 
 function SortableHeader({
   label,
@@ -35,43 +99,47 @@ function SortableHeader({
   );
 }
 
-// Fase 6, secao 6 -- abastecimento interno por veiculo: litros e contagem
-// (mesmo GET /bi/kpis/breakdown?kpiId=fuel_internal_liters&dimension=vehicle
-// -- recordCount ja vem no item, sem uma segunda chamada). Custo nunca
-// aparece aqui -- abastecimento interno nao tem preco/total registrado
-// (litros saem do proprio estoque, sem uma compra associada a ELE).
-export function FuelVehicleTable({ range, tankId }: { range: PeriodRange; tankId: string | null }): JSX.Element {
+// Fase 6/8 -- ranking investigativo de combustível por veículo. Ordenação e
+// busca são ferramentas do usuário, nunca um julgamento automático de
+// "melhor/pior veículo". Célula sem dado mostra "-" + motivo, nunca 0
+// inventado (0 real -- veículo sem abastecimento na categoria -- aparece
+// como "0 L"/"R$ 0,00").
+export function FuelVehicleTable({ range }: { range: PeriodRange }): JSX.Element {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search);
-  const [sortBy, setSortBy] = useState<'label' | 'liters' | 'count'>('liters');
+  const [sortBy, setSortBy] = useState<string>('fuel_liters');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
-  const query = useQuery({
-    queryKey: ['bi', 'kpis', 'breakdown', 'vehicle', 'fuel_internal_liters', range, tankId],
-    queryFn: ({ signal }) =>
-      getKpiBreakdown(
-        { ...range, kpiId: 'fuel_internal_liters', dimension: 'vehicle', limit: VEHICLE_TABLE_LIMIT, tankId: tankId ?? undefined },
-        signal,
-      ),
-    staleTime: 60_000,
+  const queries = useQueries({
+    queries: METRICS.map((metric) => ({
+      queryKey: ['bi', 'kpis', 'breakdown', 'vehicle', 'fuel-ranking', metric.kpiId, range],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getKpiBreakdown({ ...range, kpiId: metric.kpiId, dimension: 'vehicle' as const, limit: VEHICLE_TABLE_LIMIT }, signal),
+      staleTime: 60_000,
+    })),
   });
 
-  const rows = query.data?.items ?? [];
+  const isLoading = queries.some((q) => q.isLoading);
+  const isError = queries.some((q) => q.isError);
+  const rows = useMemo(() => mergeRows(queries.map((q) => q.data)), [queries]);
+
   const filtered = rows.filter((r) => r.label.toLowerCase().includes(debouncedSearch.toLowerCase()));
   const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'label') {
-      const cmp = a.label.localeCompare(b.label);
+    const av = sortBy === 'label' ? a.label : a.cells[sortBy]?.value;
+    const bv = sortBy === 'label' ? b.label : b.cells[sortBy]?.value;
+    if (typeof av === 'string' || typeof bv === 'string') {
+      const cmp = String(av ?? '').localeCompare(String(bv ?? ''));
       return sortDir === 'asc' ? cmp : -cmp;
     }
-    const av = sortBy === 'liters' ? a.value : a.recordCount;
-    const bv = sortBy === 'liters' ? b.value : b.recordCount;
-    if (av === null && bv === null) return 0;
-    if (av === null) return 1;
-    if (bv === null) return -1;
-    return sortDir === 'asc' ? av - bv : bv - av;
+    const an = av ?? null;
+    const bn = bv ?? null;
+    if (an === null && bn === null) return 0;
+    if (an === null) return 1;
+    if (bn === null) return -1;
+    return sortDir === 'asc' ? an - bn : bn - an;
   });
 
-  function toggleSort(key: typeof sortBy) {
+  function toggleSort(key: string) {
     if (sortBy === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setSortBy(key);
@@ -79,28 +147,30 @@ export function FuelVehicleTable({ range, tankId }: { range: PeriodRange; tankId
     }
   }
 
-  const columns: ColumnDef<KpiBreakdownItemEntity, unknown>[] = [
+  const columns: ColumnDef<VehicleRow, unknown>[] = [
     {
       id: 'label',
       header: () => <SortableHeader label="Veículo" active={sortBy === 'label'} direction={sortDir} onClick={() => toggleSort('label')} />,
       cell: ({ row }) =>
-        row.original.key ? (
-          <Link href={`/vehicles/${row.original.key}`} className="font-medium text-brand-700 hover:text-brand-900">
+        row.original.vehicleId ? (
+          <Link href={`/vehicles/${row.original.vehicleId}`} className="font-medium text-brand-700 hover:text-brand-900">
             {row.original.label}
           </Link>
         ) : (
           <span className="text-ink-subtle">{row.original.label}</span>
         ),
     },
+    ...METRICS.map(
+      (metric): ColumnDef<VehicleRow, unknown> => ({
+        id: metric.kpiId,
+        header: () => <SortableHeader label={metric.header} active={sortBy === metric.kpiId} direction={sortDir} onClick={() => toggleSort(metric.kpiId)} />,
+        cell: ({ row }) => <MetricCell cell={row.original.cells[metric.kpiId] ?? EMPTY_CELL} unit={metric.unit} />,
+      }),
+    ),
     {
-      id: 'liters',
-      header: () => <SortableHeader label="Litros abastecidos" active={sortBy === 'liters'} direction={sortDir} onClick={() => toggleSort('liters')} />,
-      cell: ({ row }) => <span className="tabular-nums">{formatKpiValue('LITERS', row.original.value)}</span>,
-    },
-    {
-      id: 'count',
-      header: () => <SortableHeader label="Abastecimentos" active={sortBy === 'count'} direction={sortDir} onClick={() => toggleSort('count')} />,
-      cell: ({ row }) => <span className="tabular-nums">{formatKpiValue('COUNT', row.original.recordCount)}</span>,
+      id: 'fuel_liters_count',
+      header: 'Abastecimentos',
+      cell: ({ row }) => <span className="tabular-nums">{formatKpiValue('COUNT', row.original.cells.fuel_liters?.recordCount ?? 0)}</span>,
     },
   ];
 
@@ -110,13 +180,11 @@ export function FuelVehicleTable({ range, tankId }: { range: PeriodRange; tankId
       <DataTable
         columns={columns}
         data={sorted}
-        isLoading={query.isLoading}
-        isError={query.isError}
-        getRowId={(row) => row.key ?? row.label}
-        emptyTitle="Nenhum abastecimento interno no período"
-        emptyDescription={
-          debouncedSearch ? 'Ajuste a busca por placa.' : 'Quando um motorista abastecer pelo Driver App a partir de um tanque próprio, o registro aparece aqui.'
-        }
+        isLoading={isLoading}
+        isError={isError}
+        getRowId={(row) => row.vehicleId ?? row.label}
+        emptyTitle="Nenhum veículo encontrado"
+        emptyDescription={debouncedSearch ? 'Ajuste a busca por placa.' : 'Nenhum abastecimento no período selecionado.'}
       />
     </div>
   );

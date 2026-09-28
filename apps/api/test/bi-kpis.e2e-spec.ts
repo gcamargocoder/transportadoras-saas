@@ -846,6 +846,21 @@ describe('BI 1 -- camada de KPIs (e2e)', () => {
       expect(breakdown.body.data.items.find((i: { key: string }) => i.key === second.vehicleId)).toBeTruthy();
     });
 
+    // Fase 8 -- fuel_liters ja declarava a dimensao "vehicle" no catalogo
+    // (PERIOD_VEHICLE_FLEET), mas nao tinha breakdown ate agora (so
+    // fuel_internal_liters, limitado ao tanque proprio). Mesmo where de
+    // fuel_cost, so trocando o campo somado (liters em vez de totalAmount).
+    it('fuel_liters: soma dos itens = valor do summary (litros totais, interno + externo)', async () => {
+      const [breakdown, summary] = await Promise.all([
+        getBreakdown(a.auth, { ...JAN, kpiId: 'fuel_liters', dimension: 'vehicle' }).expect(200),
+        getSummary(a.auth, { ...JAN, comparison: 'NONE', kpis: 'fuel_liters' }).expect(200),
+      ]);
+      const itemsSum = breakdown.body.data.items.reduce((sum: number, i: { value: number }) => sum + i.value, 0);
+      expect(itemsSum).toBeCloseTo(kpi(summary.body, 'fuel_liters').value, 2);
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === a.vehicleId)).toBeTruthy();
+      expect(breakdown.body.data.items.find((i: { key: string }) => i.key === second.vehicleId)).toBeTruthy();
+    });
+
     it('operating_cost: soma dos itens (+ others/"Sem veiculo") = valor do summary', async () => {
       const [breakdown, summary] = await Promise.all([
         getBreakdown(a.auth, { ...JAN, kpiId: 'operating_cost', dimension: 'vehicle', limit: '500' }).expect(200),

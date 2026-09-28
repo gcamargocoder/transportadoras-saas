@@ -39,10 +39,13 @@ export const INTELLIGENCE_TAB_CONFIG: IntelligenceTabConfig[] = [
   { value: 'financial', label: 'Financeiro' },
   { value: 'fleet', label: 'Frota' },
   { value: 'costs', label: 'Custos' },
-  // "Tanques" (nao "Combustível") de proposito: evita colidir com o rotulo
-  // "Combustível" ja usado na aba Custos (categoria de fuel_cost/FuelSupply,
-  // consumo do veiculo) -- esta aba e o ledger do tanque proprio.
-  { value: 'fuel', label: 'Tanques' },
+  // Fase 8 -- renomeada de "Tanques" para "Combustível": a aba deixou de
+  // ser so o ledger do tanque fisico (Fase 6) e passou a reunir todo o
+  // ciclo (estoque, compra, consumo, custo, interno x externo, controle).
+  // O rotulo "Combustível" tambem aparece como categoria de custo na aba
+  // Custos (fuel_cost/FuelSupply) -- mesma palavra, escopos diferentes,
+  // nunca ambiguo para o usuario (abas x categoria dentro de um card).
+  { value: 'fuel', label: 'Combustível' },
   { value: 'deadlines', label: 'Prazos' },
   { value: 'comparatives', label: 'Comparativos' },
   { value: 'occurrences', label: 'Ocorrências' },

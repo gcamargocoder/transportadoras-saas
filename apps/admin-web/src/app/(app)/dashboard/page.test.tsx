@@ -369,7 +369,7 @@ describe('Central de Inteligencia (/dashboard)', () => {
   it('todas as abas previstas estao na navegacao', () => {
     renderPage();
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Tanques', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios', 'Alertas']);
+    expect(labels).toEqual(['Visão geral', 'Operação', 'Financeiro', 'Frota', 'Custos', 'Combustível', 'Prazos', 'Comparativos', 'Ocorrências', 'Relatórios', 'Alertas']);
   });
 });
 
@@ -555,7 +555,9 @@ describe('Central -- aba Financeiro (BI 3)', () => {
   it('composicao dos custos a partir das entradas oficiais de operating_cost', async () => {
     renderPage();
     expect(await screen.findByRole('img', { name: /Composição dos custos operacionais/ })).toBeInTheDocument();
-    expect(screen.getByText('Combustível')).toBeInTheDocument();
+    // {selector: 'span'} -- a aba "Combustível" (Fase 8) tambem tem esse
+    // texto exato (num <button>); aqui o alvo e o rotulo da categoria.
+    expect(screen.getByText('Combustível', { selector: 'span' })).toBeInTheDocument();
     expect(screen.getByText('56,5%')).toBeInTheDocument(); // 200000 / 354200
     expect(screen.getByText(/Adiantamentos a motoristas não entram/)).toBeInTheDocument();
   });
@@ -1031,7 +1033,9 @@ describe('Central -- aba Custos (BI 5)', () => {
   it('composicao dos custos mostra as categorias oficiais do operating_cost', async () => {
     renderPage();
     await screen.findByRole('article', { name: 'Despesas operacionais' });
-    expect(await screen.findByText('Combustível')).toBeInTheDocument();
+    // {selector: 'span'} -- a aba "Combustível" (Fase 8) tambem tem esse
+    // texto exato (num <button>); aqui o alvo e o rotulo da categoria.
+    expect(await screen.findByText('Combustível', { selector: 'span' })).toBeInTheDocument();
     expect(screen.getByText(/classificação contábil/)).toBeInTheDocument();
   });
 

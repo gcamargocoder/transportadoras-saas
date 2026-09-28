@@ -561,6 +561,24 @@ export class BiKpiBreakdownService {
     return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.fuel)), limit);
   }
 
+  // Fase 8 -- litros TOTAIS abastecidos por veiculo (interno + externo,
+  // mesmo escopo de fuel_cost acima -- MESMO where de
+  // FleetOperationsMetricsService.buildCostSourceWheres().fuel, so trocando
+  // o campo agregado de totalAmount para liters). Preenche a lacuna: o KPI
+  // fuel_liters ja declarava a dimensao "vehicle" no catalogo, mas nenhum
+  // breakdown existia ainda (so fuel_internal_liters, limitado ao tanque
+  // proprio). Nenhuma query nem formula nova alem da troca do campo somado.
+  async fuelLitersByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
+    const filters = compact({ startDate: period.start, endDate: period.end, ...scope });
+    const where = this.fleetMetrics.buildCostSourceWheres(tenantId, filters).fuel;
+    const [vehicles, groups] = await Promise.all([
+      this.listScopedVehicles(tenantId, scope),
+      this.prisma.fuelSupply.groupBy({ by: ['vehicleId'], where, _sum: { liters: true }, _count: true }),
+    ]);
+    const merged = toCostRows(groups, (g) => g.vehicleId, (g) => toNumberOrNull(g._sum.liters) ?? 0, (g) => g._count);
+    return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(merged)), limit);
+  }
+
   async maintenanceCostByVehicle(tenantId: string, scope: BiScope, period: KpiPeriod, limit: number): Promise<BreakdownResult> {
     const [vehicles, sources] = await Promise.all([this.listScopedVehicles(tenantId, scope), this.loadCostSourceRows(tenantId, scope, period)]);
     return summableVehicleBreakdown(costRawRows(vehicles, mergeCostRows(sources.maintenance)), limit);

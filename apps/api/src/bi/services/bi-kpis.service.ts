@@ -224,6 +224,10 @@ export class BiKpisService {
           return this.breakdown.operatingCostByVehicle(tenantId, scope, period, limit);
         case 'fuel_cost':
           return this.breakdown.fuelCostByVehicle(tenantId, scope, period, limit);
+        // Fase 8 -- litros totais (interno + externo) por veiculo, para o
+        // ranking de veiculos do painel de combustivel.
+        case 'fuel_liters':
+          return this.breakdown.fuelLitersByVehicle(tenantId, scope, period, limit);
         case 'maintenance_cost':
           return this.breakdown.maintenanceCostByVehicle(tenantId, scope, period, limit);
         case 'toll_cost':

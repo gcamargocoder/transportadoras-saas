@@ -191,6 +191,18 @@ describe('BiKpiBreakdownService -- recorte por veiculo (BI 4)', () => {
       expect(result.total).toBeCloseTo(14.2, 5); // 1420 / 100km (valor oficial do catalogo)
     });
 
+    it('fuel_liters (Fase 8): soma litros totais (interno + externo) por veiculo, mesmo where de fuel_cost', async () => {
+      const d = (n: number) => new Prisma.Decimal(n);
+      const service = await buildCostService({
+        prisma: { fuelSupply: { groupBy: jest.fn().mockResolvedValue([{ vehicleId: 'v1', _sum: { liters: d(150) }, _count: 2 }]) } },
+      });
+      const result = await service.fuelLitersByVehicle('t1', {}, period, 10);
+      expect(result.items.find((i) => i.key === 'v1')?.value).toBe(150);
+      expect(result.items.find((i) => i.key === 'v1')?.recordCount).toBe(2);
+      expect(result.items.find((i) => i.key === 'v2')?.value).toBe(0); // veiculo sem abastecimento = 0 real
+      expect(result.total).toBe(150);
+    });
+
     it('isolamento: recorte de custo por veiculo so consulta o escopo do tenant informado', async () => {
       const vehicleFindMany = jest.fn().mockResolvedValue(costVehicles);
       const service = await buildCostService({ prisma: { vehicle: { findMany: vehicleFindMany } } });
